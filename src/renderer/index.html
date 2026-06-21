@@ -297,6 +297,13 @@
           <button id="receipt-close" type="button" class="secondary-button">Close and Start New Sale</button>
         </div>
       </dialog>
+      <dialog id="name-dialog" class="customer-dialog">
+        <form id="name-form" method="dialog">
+          <h3 id="name-dialog-title">Name</h3>
+          <label><span id="name-dialog-label">Name</span><input id="name-dialog-input" type="text" /></label>
+          <div class="form-actions"><button value="ok">OK</button><button id="name-dialog-cancel" value="cancel" type="button" class="secondary-button">Cancel</button></div>
+        </form>
+      </dialog>
     </main>
     <script src="renderer.js"></script>
   </body>

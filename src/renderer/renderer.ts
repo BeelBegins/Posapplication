@@ -776,6 +776,26 @@ async function closeReceiptDialog():Promise<void>{
   await startNewSaleAfterReceipt();
 }
 
+// Electron does not support window.prompt(); use a small modal input instead. Listeners are added per-call and removed on close.
+function promptName(title:string,label:string,defaultValue:string):Promise<string|null>{
+  return new Promise((resolve)=>{
+    const dialog=document.querySelector<HTMLDialogElement>("#name-dialog");
+    const input=document.querySelector<HTMLInputElement>("#name-dialog-input");
+    const form=document.querySelector<HTMLFormElement>("#name-form");
+    const cancel=document.querySelector<HTMLButtonElement>("#name-dialog-cancel");
+    setCartText("#name-dialog-title",title); setCartText("#name-dialog-label",label);
+    if(!dialog||!input||!form){resolve(null);return;}
+    input.value=defaultValue;
+    const cleanup=()=>{form.removeEventListener("submit",onSubmit);cancel?.removeEventListener("click",onCancel);dialog.removeEventListener("cancel",onCancel);};
+    const onSubmit=(e:Event)=>{e.preventDefault();const value=input.value.trim();cleanup();dialog.close();resolve(value||null);};
+    const onCancel=(e?:Event)=>{e?.preventDefault();cleanup();dialog.close();resolve(null);};
+    form.addEventListener("submit",onSubmit);
+    cancel?.addEventListener("click",()=>onCancel());
+    dialog.addEventListener("cancel",onCancel);
+    dialog.showModal();window.setTimeout(()=>{input.focus();input.select();},0);
+  });
+}
+
 // ---------------- Phase 3: Hold / Resume ----------------
 async function holdCurrentSale():Promise<void>{
   if(!cartLines.length){cartMessage("Cart is empty — nothing to hold");return;}
@@ -784,7 +804,9 @@ async function holdCurrentSale():Promise<void>{
   const customerName=selectedCustomer?(selectedCustomer.customer_name||selectedCustomer.name):"Walk-in";
   let count=1; try{count=(await window.posAPI.listHeldSales()).length+1;}catch{/* offline-safe */}
   const defaultName=`Hold ${String(count).padStart(3,"0")} — ${customerName} — ${time}`;
-  const name=(window.prompt("Name this held sale:",defaultName)??"").trim()||defaultName;
+  const entered=await promptName("Hold Sale","Held sale name (optional)",defaultName);
+  if(entered===null){cartMessage("Hold cancelled");return;}
+  const name=entered.trim()||defaultName;
   const heldTerminalId=terminalInvoiceId;
   try{
     await window.posAPI.holdSale({
@@ -828,7 +850,7 @@ async function renderHeldSales():Promise<void>{
     card.append(main,actions);return card;
   }));
 }
-async function renameHeldSaleUi(id:number,current:string):Promise<void>{ const name=(window.prompt("Rename held sale:",current)??"").trim(); if(!name)return; await window.posAPI.renameHeldSale(id,name); await renderHeldSales(); }
+async function renameHeldSaleUi(id:number,current:string):Promise<void>{ const name=await promptName("Rename Held Sale","New name",current); if(!name||!name.trim())return; await window.posAPI.renameHeldSale(id,name.trim()); await renderHeldSales(); }
 async function deleteHeldSaleUi(id:number):Promise<void>{ if(!window.confirm("Delete this held draft? Submitted invoices are never affected."))return; await window.posAPI.deleteHeldSale(id); await renderHeldSales(); }
 
 async function resumeHeldSale(id:number):Promise<void>{
