@@ -1,0 +1,26 @@
+{
+  "name": "erpnext-offline-pos",
+  "version": "0.1.0",
+  "description": "Basic Electron shell for ERPNext Online-First POS",
+  "main": "dist/main.js",
+  "scripts": {
+    "start": "npm run build && set ELECTRON_RUN_AS_NODE=&& electron .",
+    "build": "tsc && copyfiles -u 1 src/renderer/*.html src/renderer/*.css dist",
+    "dev": "concurrently \"tsc --watch\" \"wait-on dist/main.js && set ELECTRON_RUN_AS_NODE=&& electron .\"",
+    "rebuild": "electron-rebuild -f -w better-sqlite3",
+    "postinstall": "npm run rebuild"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^4.0.4",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.10.2",
+    "concurrently": "^9.1.0",
+    "copyfiles": "^2.4.1",
+    "electron": "^33.2.1",
+    "typescript": "^5.7.2",
+    "wait-on": "^8.0.1"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.11.1"
+  }
+}

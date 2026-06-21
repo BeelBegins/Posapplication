@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ERPNext Online-First POS</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section id="settings-screen" class="app-screen">
+      <header>
+        <p class="eyebrow">Desktop POS</p>
+        <h1>ERPNext Online-First POS</h1>
+        <p class="intro">Your point-of-sale workspace is ready for setup.</p>
+      </header>
+
+      <section class="status-grid" aria-label="Application status">
+        <article class="status-card">
+          <span class="status-label">Server Status</span>
+          <strong id="server-status">Not Connected</strong>
+        </article>
+        <article class="status-card">
+          <span class="status-label">Mode</span>
+          <strong>Setup Required</strong>
+        </article>
+        <article class="status-card">
+          <span class="status-label">SQLite</span>
+          <strong id="sqlite-status">Checking...</strong>
+          <small class="database-path">
+            Database Path: <span id="database-path">Database path unavailable</span>
+          </small>
+        </article>
+        <article class="status-card">
+          <span class="status-label">POS Profile Cache</span>
+          <strong id="profile-cache-status">Checking...</strong>
+          <small class="database-path">Last Synced: <span id="profile-cache-synced">Not synced</span></small>
+        </article>
+      </section>
+
+      <section class="setup-card" aria-labelledby="setup-title">
+        <button id="back-to-pos" type="button" class="secondary-button">Back to POS</button>
+        <p id="startup-progress" class="settings-message">Starting…</p>
+        <button id="retry-startup" type="button" class="secondary-button" hidden>Retry</button>
+        <div>
+          <p class="eyebrow">Local setup</p>
+          <h2 id="setup-title">Terminal Settings</h2>
+        </div>
+        <form id="settings-form" class="settings-form" novalidate>
+          <label>
+            ERPNext URL
+            <input id="erpnext-url" name="erpnextUrl" type="text" placeholder="https://erp.example.com" />
+          </label>
+          <label>
+            API Key
+            <input id="api-key" name="apiKey" type="text" autocomplete="off" />
+          </label>
+          <label>
+            API Secret
+            <input id="api-secret" name="apiSecret" type="password" autocomplete="off" placeholder="Enter to save or replace" />
+          </label>
+          <label>
+            Terminal ID
+            <input id="terminal-id" name="terminalId" type="text" />
+          </label>
+          <label>
+            POS Profile
+            <select id="pos-profile" name="posProfile">
+              <option value="">Test Login to load profiles</option>
+            </select>
+          </label>
+          <label>
+            Branch
+            <input id="branch" name="branch" type="text" readonly />
+          </label>
+          <label>
+            Warehouse
+            <input id="warehouse" name="warehouse" type="text" />
+          </label>
+          <div class="form-actions">
+            <button type="submit">Save Settings</button>
+            <button id="load-settings" type="button" class="secondary-button">Load Settings</button>
+            <button id="test-server" type="button" class="secondary-button">Test Server</button>
+            <button id="test-login" type="button" class="secondary-button">Test Login</button>
+            <button id="load-pos-profile" type="button" class="secondary-button">Load POS Profile</button>
+            <button id="sync-pos-configuration" type="button" class="secondary-button">Sync POS Configuration</button>
+            <button id="sync-pos-session" type="button" class="secondary-button">Sync POS Session</button>
+            <button id="sync-item-catalog" type="button" class="secondary-button">Sync Item Catalog</button>
+            <button id="sync-customers" type="button" class="secondary-button">Sync Customers</button>
+            <button id="sync-fbr-config" type="button" class="secondary-button">Sync FBR Configuration</button>
+            <p id="settings-message" class="settings-message" role="status"></p>
+            <p id="login-result" class="login-result" role="status"></p>
+          </div>
+        </form>
+
+        <section id="pos-profile-details" class="profile-details" hidden aria-live="polite">
+          <h3>POS Profile</h3>
+          <dl>
+            <div><dt>Company</dt><dd id="profile-company"></dd></div>
+            <div><dt>Warehouse</dt><dd id="profile-warehouse"></dd></div>
+            <div><dt>Default Customer</dt><dd id="profile-customer"></dd></div>
+            <div><dt>Selling Price List</dt><dd id="profile-price-list"></dd></div>
+            <div><dt>Currency</dt><dd id="profile-currency"></dd></div>
+            <div><dt>Payment Methods count</dt><dd id="profile-payment-count"></dd></div>
+          </dl>
+        </section>
+
+        <section id="pos-configuration-summary" class="profile-details" hidden aria-live="polite">
+          <h3>POS Configuration</h3>
+          <dl>
+            <div><dt>POS Profile</dt><dd id="config-pos-profile"></dd></div>
+            <div><dt>Company</dt><dd id="config-company"></dd></div>
+            <div><dt>Branch</dt><dd id="config-branch"></dd></div>
+            <div><dt>Warehouse</dt><dd id="config-warehouse"></dd></div>
+            <div><dt>Default Customer</dt><dd id="config-customer"></dd></div>
+            <div><dt>Selling Price List</dt><dd id="config-price-list"></dd></div>
+            <div><dt>Currency</dt><dd id="config-currency"></dd></div>
+            <div><dt>Tax Template</dt><dd id="config-tax-template"></dd></div>
+            <div><dt>Tax rows count</dt><dd id="config-tax-count"></dd></div>
+            <div><dt>Payment methods count</dt><dd id="config-payment-count"></dd></div>
+            <div><dt>Last synced time</dt><dd id="config-last-synced"></dd></div>
+            <div><dt>Cache status</dt><dd id="config-cache-status"></dd></div>
+          </dl>
+        </section>
+
+        <section id="pos-session-summary" class="profile-details" aria-live="polite">
+          <h3>POS Session</h3>
+          <dl>
+            <div><dt>Session Status</dt><dd id="session-status">Not Open</dd></div>
+            <div><dt>POS Opening Entry</dt><dd id="session-opening-entry">No active POS Opening Entry</dd></div>
+            <div><dt>Cashier/User</dt><dd id="session-user"></dd></div>
+            <div><dt>Start Date and Time</dt><dd id="session-start"></dd></div>
+            <div><dt>Opening Balance rows count</dt><dd id="session-balance-count">0</dd></div>
+            <div><dt>Last synced time</dt><dd id="session-last-synced">Not synced</dd></div>
+          </dl>
+        </section>
+        <section class="profile-details" aria-live="polite">
+          <h3>POS Session Diagnostics</h3>
+          <p>Authenticated API User: <strong id="session-api-user">—</strong></p>
+          <p>Requested POS Profile: <strong id="session-requested-profile">—</strong></p>
+          <p>Diagnostic Reason: <strong id="session-diagnostic-reason">Not checked</strong></p>
+          <p>Submitted Open Entries: <strong id="session-entry-count">0</strong></p>
+          <div id="session-entry-list"></div>
+        </section>
+
+        <section class="profile-details" aria-live="polite">
+          <h3>Item Catalog</h3>
+          <p id="catalog-progress" class="settings-message"></p>
+          <p id="barcode-sync-status" class="settings-message">Barcode Sync: Not synced</p>
+          <p id="barcode-count" class="settings-message">Barcode count: 0</p>
+          <dl>
+            <div><dt>Items</dt><dd id="catalog-items">0</dd></div>
+            <div><dt>Prices</dt><dd id="catalog-prices">0</dd></div>
+            <div><dt>Barcodes</dt><dd id="catalog-barcodes">0</dd></div>
+            <div><dt>Stock rows</dt><dd id="catalog-stock">0</dd></div>
+            <div><dt>Last synced time</dt><dd id="catalog-synced">Not synced</dd></div>
+          </dl>
+          <label class="catalog-search">Search catalog
+            <input id="catalog-search" type="search" placeholder="Barcode, item code, or item name" />
+          </label>
+          <div id="catalog-results" class="catalog-results"></div>
+        </section>
+      </section>
+      </section>
+
+      <section id="start-shift-screen" class="app-screen" hidden>
+        <section class="setup-card">
+          <h2>Start Shift</h2>
+          <p>POS Profile: <strong id="shift-profile">—</strong></p>
+          <p>Company: <strong id="shift-company">—</strong></p>
+          <p>Terminal ID: <strong id="shift-terminal">—</strong></p>
+          <p>Cashier: <strong id="shift-cashier">—</strong></p>
+          <div id="shift-opening-amounts" class="settings-form"></div>
+          <button id="start-shift" type="button">Start Shift</button>
+          <p id="start-shift-message" class="settings-message"></p>
+        </section>
+      </section>
+
+      <section id="pos-screen" class="app-screen" hidden>
+        <header class="pos-header">
+          <div><strong id="pos-branch">Branch</strong><span id="pos-profile-name">POS Profile</span></div>
+          <div><span>Terminal</span><strong id="pos-terminal">—</strong></div>
+          <div><span>Cashier</span><strong id="pos-cashier">—</strong></div>
+          <div><span>Customer</span><strong id="pos-customer">—</strong></div>
+          <div><span>Opening Entry</span><strong id="pos-opening-entry">—</strong></div>
+          <div><span>Server</span><strong id="pos-server-status">Reconnecting</strong></div>
+          <div><span>Sync</span><strong id="pos-sync-status">Pending</strong></div>
+          <div><span>Shift Age</span><strong id="pos-session-age">—</strong></div>
+          <button id="open-settings" type="button" class="secondary-button icon-button" title="Settings" aria-label="Settings">⚙</button>
+        </header>
+        <div id="pos-session-warning" class="session-warning" hidden></div>
+        <section class="pos-layout" aria-labelledby="cart-title">
+          <div class="pos-cart-pane">
+            <h2 id="cart-title" class="visually-hidden">POS Cart</h2>
+            <input id="cart-search" class="pos-search" type="search" autocomplete="off" placeholder="Scan barcode or search item" />
+            <div id="cart-search-results" class="catalog-results search-popup"></div>
+        <p id="cart-message" class="settings-message" role="status"></p>
+            <div class="cart-table-head"><span>Item Code</span><span>Item Name</span><span>UOM</span><span>Quantity</span><span>Rate</span><span>Discount</span><span>Line Total</span><span>Stock</span><span>Void</span></div>
+            <div id="cart-rows" class="cart-rows"></div>
+          </div>
+          <aside class="pos-summary">
+            <div class="summary-scroll">
+              <p>Item count <strong id="cart-item-count">0</strong></p><p>Total quantity <strong id="cart-quantity">0</strong></p>
+              <p>FBR Sales Tax <strong id="cart-sales-tax">0.00</strong></p>
+              <p>FBR POS Service Fee <strong id="cart-service-fee">0.00</strong></p>
+              <div id="cart-tax-breakdown" class="tax-breakdown"></div>
+              <p class="grand-total">Grand Total <strong id="cart-grand-total">0.00</strong></p>
+              <p id="cart-loyalty-display"></p><p id="cart-coupon-display"></p>
+              <p>Paid <strong id="cart-paid">0.00</strong></p>
+              <p>Change <strong id="cart-change">0.00</strong></p>
+              <p id="cart-validation" class="validation-status">Offline Estimate — Not Server Validated</p><small id="cart-calculating"></small>
+              <button id="open-payment" type="button">Pay (F6)</button><button id="open-benefits" type="button" class="secondary-button">Benefits (F7)</button><button type="button" disabled class="secondary-button">Hold Sale</button><button id="cart-clear" type="button" class="secondary-button">Clear Cart</button>
+            </div>
+            <div class="summary-action">
+              <button id="complete-sale" type="button" class="complete-sale-button">Complete Sale &amp; Print (F9)</button>
+              <p id="complete-sale-reason" class="blocked-reason"></p>
+            </div>
+          </aside>
+        </section>
+        <footer class="shortcut-bar">F2 Search · F3 Customer · F4 Change Qty · F6 Pay · F7 Benefits · F8 Void Item · F10 Clear Cart · ↑/↓ Select Row · +/- Change Qty · Esc Return to Scanner</footer>
+        <button id="cart-qty" type="button" hidden>Edit Quantity</button><button id="cart-remove" type="button" hidden>Remove</button>
+        <dialog id="customer-dialog" class="customer-dialog"><input id="customer-search" type="search" placeholder="Search customer" /><button id="new-customer" type="button" class="secondary-button">New Customer (Ctrl+N)</button><div id="customer-results" class="catalog-results"></div><p id="customer-detail"></p></dialog>
+        <dialog id="new-customer-dialog" class="customer-dialog"><form id="new-customer-form"><h3>New Customer</h3><label>Customer Name<input id="new-customer-name" required /></label><label>Mobile Number<input id="new-customer-mobile" /></label><label>Email<input id="new-customer-email" type="email" /></label><label>Tax ID<input id="new-customer-tax" /></label><label>Customer Group<select id="new-customer-group"></select></label><label>Territory<select id="new-customer-territory"></select></label><p id="new-customer-error" class="settings-message"></p><div class="form-actions"><button type="submit">Create Customer</button><button id="cancel-new-customer" type="button" class="secondary-button">Cancel</button></div></form></dialog>
+        <dialog id="quantity-dialog">
+          <form id="quantity-form" method="dialog">
+            <label>Quantity <input id="quantity-input" type="number" min="0" step="0.001" /></label>
+            <div class="form-actions"><button value="save">Save</button><button value="cancel" class="secondary-button">Cancel</button></div>
+          </form>
+        </dialog>
+        <dialog id="payment-dialog" class="customer-dialog payment-dialog"><h3>Payment</h3><div class="payment-grid"><p>Payable <strong id="payment-payable">0.00</strong></p><p>Tendered <strong id="payment-tendered">0.00</strong></p><p>Paid <strong id="payment-allocated">0.00</strong></p><p>Remaining <strong id="payment-remaining">0.00</strong></p><p class="payment-change-cell">Change <strong id="payment-change">0.00</strong></p></div><div id="payment-methods" class="payment-methods"></div><label>Tendered Amount<input id="payment-amount" type="number" min="0" step="0.001" /></label><div class="form-actions"><button id="payment-exact" type="button" class="secondary-button">Exact Amount</button><button id="payment-add" type="button">Add (Enter)</button><button id="payment-complete" type="button">Complete Payment (F6)</button></div><details class="payment-split"><summary>Split payments</summary><div id="payment-rows" class="payment-rows"></div></details><p id="payment-message" class="settings-message"></p></dialog>
+        <dialog id="benefits-dialog" class="customer-dialog"><h3>Benefits (F7)</h3><p>Customer <strong id="benefits-customer">—</strong></p><p id="benefits-offline-message" class="settings-message" hidden>Online connection required for loyalty or voucher redemption</p><fieldset id="benefits-loyalty-section"><legend>Loyalty</legend><p>Program <strong id="benefits-loyalty-program">—</strong></p><p>Available Points <strong id="benefits-available-points">0</strong></p><p>Conversion Factor <strong id="benefits-conversion-factor">1</strong></p><p>Loyalty Value <strong id="benefits-loyalty-value">0.00</strong></p><label>Points to Redeem<input id="benefits-redeem-points" type="number" min="0" step="1" disabled /></label><button id="benefits-max-points" type="button" class="secondary-button" disabled>Use Maximum Points</button><p id="benefits-redeemed-row" hidden>Redeemed Points <strong id="benefits-redeemed-points">0</strong></p><p id="benefits-loyalty-amount-row" hidden>Loyalty Amount <strong id="benefits-loyalty-amount">0.00</strong></p></fieldset><fieldset id="benefits-voucher-section"><legend>Voucher</legend><label>Coupon / Gift Card Code<input id="benefits-coupon-code" type="text" disabled placeholder="Enter code" /></label></fieldset><div id="benefits-applied" class="settings-message"></div><div class="form-actions"><button id="benefits-apply" type="button" disabled>Apply Benefits</button><button id="benefits-remove" type="button" class="secondary-button" disabled>Remove Benefits</button></div><p id="benefits-message" class="settings-message"></p></dialog>
+        <dialog id="receipt-dialog" class="customer-dialog receipt-dialog">
+          <div class="receipt-head"><h3>Receipt Preview</h3><span id="receipt-fbr-badge" class="fbr-badge"></span></div>
+          <p id="receipt-message" class="settings-message"></p>
+          <iframe id="receipt-frame" class="receipt-frame" title="Receipt" hidden></iframe>
+          <div id="receipt-structured" class="receipt-body">
+            <div class="receipt-meta">
+              <p>POS Invoice <strong id="receipt-invoice">—</strong></p>
+              <p>Posting <strong id="receipt-posting">—</strong></p>
+              <p>Cashier <strong id="receipt-cashier">—</strong></p>
+              <p>Customer <strong id="receipt-customer">—</strong></p>
+            </div>
+            <div class="receipt-items-head"><span>Item</span><span>Qty</span><span>Rate</span><span>Amount</span></div>
+            <div id="receipt-items" class="receipt-items"></div>
+            <div class="receipt-totals">
+              <p>Sale Before Tax <strong id="receipt-before-tax">0.00</strong></p>
+              <p>FBR Sales Tax <strong id="receipt-sales-tax">0.00</strong></p>
+              <p>FBR POS Service Fee <strong id="receipt-service-fee">0.00</strong></p>
+              <p class="grand-total">Grand Total <strong id="receipt-grand-total">0.00</strong></p>
+            </div>
+            <div id="receipt-payments" class="receipt-payments"></div>
+            <p>Change <strong id="receipt-change">0.00</strong></p>
+            <div class="receipt-fbr">
+              <p>FBR Status <strong id="receipt-fbr-status">—</strong></p>
+              <p>FBR Invoice Number <strong id="receipt-fbr-number">—</strong></p>
+              <div id="receipt-qr" class="receipt-qr"></div>
+            </div>
+          </div>
+          <div class="form-actions">
+            <button id="receipt-print" type="button" disabled>Print</button>
+            <button id="receipt-reprint" type="button" class="secondary-button" hidden>Reprint Receipt</button>
+            <button id="receipt-close" type="button" class="secondary-button">Close and Start New Sale</button>
+          </div>
+        </dialog>
+        <div id="session-invalid-overlay" class="session-overlay" hidden>
+          <div class="session-overlay-card">
+            <h2>POS session is no longer active</h2>
+            <p id="session-invalid-reason" class="session-overlay-reason">—</p>
+            <p class="session-overlay-note">Your cart, customer and payment are preserved.</p>
+            <div class="session-overlay-actions">
+              <button id="session-refresh" type="button">Refresh Session</button>
+              <button id="session-switch" type="button" hidden>Switch to Active Shift</button>
+              <button id="session-go-shift" type="button" class="secondary-button">Go to Start Shift</button>
+              <button id="session-open-settings" type="button" class="secondary-button">Open Settings</button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+    <script src="renderer.js"></script>
+  </body>
+</html>
