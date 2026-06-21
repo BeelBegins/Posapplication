@@ -305,8 +305,8 @@ let paymentRows: PaymentRow[] = [];
 let paymentsOutdated = false;
 let prevServerConnected = false;
 // --- POS session health ---
-interface SessionState { openingEntry: string; status: string; user: string; posProfile: string; periodStart: string; lastChecked: number; valid: boolean; reason: string; }
-let sessionState: SessionState = { openingEntry: "", status: "", user: "", posProfile: "", periodStart: "", lastChecked: 0, valid: false, reason: "Not checked" };
+interface SessionState { openingEntry: string; status: string; user: string; posProfile: string; company: string; postingDate: string; periodStart: string; lastChecked: number; lastError: string; valid: boolean; reason: string; }
+let sessionState: SessionState = { openingEntry: "", status: "", user: "", posProfile: "", company: "", postingDate: "", periodStart: "", lastChecked: 0, lastError: "", valid: false, reason: "Not checked" };
 let authenticatedUser = "";
 let sessionHasEntry = false;        // an opening entry was returned (even if invalid) — distinguishes "closed/mismatch" from "no shift"
 let pendingSwitchEntry = "";        // a different active opening entry awaiting explicit confirmation to switch
@@ -1045,7 +1045,7 @@ function clearSessionInvalid(): void {
   const overlay = document.querySelector<HTMLElement>("#session-invalid-overlay"); if (overlay) overlay.hidden = true;
 }
 function failSession(reason: string, switchEntry = ""): boolean {
-  sessionState.valid = false; sessionState.reason = reason; pendingSwitchEntry = switchEntry;
+  sessionState.valid = false; sessionState.reason = reason; sessionState.lastError = reason; pendingSwitchEntry = switchEntry;
   applySessionToHeader(); renderSessionInfo(); updateCompleteSaleState();
   return false;
 }
@@ -1070,18 +1070,22 @@ async function runSessionValidation(_trigger: string): Promise<boolean> {
   const docstatus = previewNumber(session, "docstatus");
   const profile = sessionStr(session, "pos_profile") || result.requestedPosProfile;
   const user = sessionStr(session, "user") || authenticatedUser;
+  const company = sessionStr(session, "company");
+  const postingDate = sessionStr(session, "posting_date");
   const periodStart = sessionStr(session, "period_start_date", "posting_date", "creation");
+  const selectedCompany = document.querySelector<HTMLElement>("#config-company")?.textContent || sessionState.company;
   if (!name) return failSession("Opening Entry name is missing");
   if (docstatus !== null && docstatus !== 1) return failSession("Opening Entry is not submitted (docstatus ≠ 1)");
   if (status !== "Open") return failSession(`Shift status is ${status}`);
   if (selectedProfile && profile && profile !== selectedProfile) return failSession(`Active shift uses POS Profile ${profile}, not ${selectedProfile}`);
   if (authenticatedUser && user && user !== authenticatedUser) return failSession(`Active shift belongs to ${user}`);
+  if (selectedCompany && company && company !== selectedCompany) return failSession(`Active shift company ${company} does not match ${selectedCompany}`);
   if (sessionState.openingEntry && name !== sessionState.openingEntry) {
     // A different open entry is returned — never switch silently.
     if (cartLines.length) return failSession(`A different shift (${name}) is active. Confirm to switch.`, name);
     if (!confirm(`A different shift (${name}) is active. Switch to it?`)) return failSession(`A different shift (${name}) is active`, name);
   }
-  sessionState = { openingEntry: name, status, user, posProfile: profile || selectedProfile, periodStart, lastChecked: Date.now(), valid: true, reason: "" };
+  sessionState = { openingEntry: name, status, user, posProfile: profile || selectedProfile, company: company || selectedCompany, postingDate, periodStart, lastChecked: Date.now(), lastError: "", valid: true, reason: "" };
   pendingSwitchEntry = "";
   clearSessionInvalid(); applySessionToHeader(); renderSessionInfo(); updateCompleteSaleState();
   return true;
@@ -1097,7 +1101,13 @@ async function switchToActiveShift(): Promise<void> {
   if (cartLines.length && !confirm("Switching shifts keeps the current cart, customer and payment. Continue?")) return;
   sessionState.openingEntry = ""; // drop cached entry so the returned one is adopted
   const ok = await validateSession("switch");
-  if (ok) { clearSessionInvalid(); showScreen("pos"); }
+  if (ok) {
+    clearSessionInvalid(); showScreen("pos");
+    // Changing the opening entry invalidates any prepared payment and requires re-validating the cart.
+    if (paymentRows.length) paymentsOutdated = true;
+    paymentPreparedVersion = -1;
+    if (cartLines.length) scheduleCartPreview();
+  }
 }
 async function goToPos(): Promise<void> {
   const ok = await validateSession("back-to-pos");
