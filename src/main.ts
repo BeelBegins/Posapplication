@@ -35,7 +35,17 @@ import {
   ,cacheCustomer
   ,saveSaleHistory
   ,upsertFbrItemConfig
+  ,holdSale
+  ,listHeldSales
+  ,getHeldSale
+  ,deleteHeldSale
+  ,renameHeldSale
+  ,listSalesHistory
+  ,getSaleHistory
+  ,recordReprint
+  ,setSaleHistoryStatus
 } from "./db/database";
+import type { HeldSaleInput, SalesHistoryFilter } from "./db/database";
 
 async function testServerReachability(): Promise<{ connected: boolean }> {
   const { erpnextUrl } = loadSettings();
@@ -371,6 +381,29 @@ async function printReceiptHtml(html: string): Promise<{ success: boolean; error
     printWindow.webContents.once("did-fail-load", (_event, _code, description) => finish({ success: false, error: description || "Receipt failed to load for printing." }));
     void printWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
   });
+}
+
+// Duplicate receipt: same authoritative receipt HTML with a DUPLICATE COPY banner. Never re-submits anything.
+async function getDuplicateReceipt(posInvoice: string): Promise<{ html: string | null; error: string | null }> {
+  const base = await getPosReceipt(posInvoice);
+  if (!base.html) return base;
+  const banner = `<div style="text-align:center;font:700 14px Arial,sans-serif;border:2px dashed #b91c1c;color:#b91c1c;padding:6px;margin:6px;letter-spacing:2px;">DUPLICATE COPY — Invoice ${posInvoice} — Reprinted ${new Date().toLocaleString()}</div>`;
+  const html = /<body[^>]*>/i.test(base.html) ? base.html.replace(/(<body[^>]*>)/i, `$1${banner}`) : banner + base.html;
+  return { html, error: null };
+}
+
+function toHeldInput(raw: Record<string, unknown>): HeldSaleInput {
+  return {
+    terminalInvoiceId: String(raw.terminalInvoiceId ?? ""), displayName: String(raw.displayName ?? ""),
+    customer: String(raw.customer ?? ""), customerName: String(raw.customerName ?? ""),
+    posProfile: String(raw.posProfile ?? ""), company: String(raw.company ?? ""), branch: String(raw.branch ?? ""), openingEntry: String(raw.openingEntry ?? ""),
+    cart: Array.isArray(raw.cart) ? raw.cart : [], payments: Array.isArray(raw.payments) ? raw.payments : [],
+    benefits: asRecord(raw.benefits) ?? {}, totals: asRecord(raw.totals) ?? {}, validationSnapshot: asRecord(raw.validationSnapshot) ?? {},
+    itemCount: Number(raw.itemCount) || 0, estimatedTotal: Number(raw.estimatedTotal) || 0
+  };
+}
+function toHistoryFilter(raw: Record<string, unknown>): SalesHistoryFilter {
+  return { search: String(raw.search ?? ""), dateFrom: String(raw.dateFrom ?? ""), dateTo: String(raw.dateTo ?? ""), limit: Number(raw.limit) || 50, offset: Number(raw.offset) || 0 };
 }
 
 function getPaymentMethods(): string[] { const profile=asRecord(getPosBootstrap(loadSettings().posProfile)?.pos_profile); const rows=Array.isArray(profile?.payments)?profile.payments:[]; return [...new Set(rows.map(asRecord).map((row)=>textValue(row,"mode_of_payment")).filter(Boolean))]; }
@@ -835,7 +868,17 @@ app.whenReady().then(() => {
   ipcMain.handle("sale:terminal-id", () => getTerminalInvoiceId());
   ipcMain.handle("sale:submit", (_event,input) => submitOnlineSale(asRecord(input)??{}));
   ipcMain.handle("receipt:get", (_event,invoice) => getPosReceipt(String(invoice)));
+  ipcMain.handle("receipt:get-duplicate", (_event, invoice) => getDuplicateReceipt(String(invoice)));
   ipcMain.handle("receipt:print", (_event, html) => printReceiptHtml(String(html ?? "")));
+  ipcMain.handle("held:save", (_event, input) => holdSale(toHeldInput(asRecord(input) ?? {})));
+  ipcMain.handle("held:list", () => listHeldSales());
+  ipcMain.handle("held:get", (_event, id) => getHeldSale(Number(id)));
+  ipcMain.handle("held:delete", (_event, id) => deleteHeldSale(Number(id)));
+  ipcMain.handle("held:rename", (_event, id, name) => renameHeldSale(Number(id), String(name ?? "")));
+  ipcMain.handle("history:list", (_event, filter) => listSalesHistory(toHistoryFilter(asRecord(filter) ?? {})));
+  ipcMain.handle("history:get", (_event, id) => getSaleHistory(String(id)));
+  ipcMain.handle("history:reprint", (_event, id) => recordReprint(String(id)));
+  ipcMain.handle("sale:set-status", (_event, id, status) => setSaleHistoryStatus(String(id), String(status)));
   createMainWindow();
 
   app.on("activate", () => {

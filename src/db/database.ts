@@ -59,6 +59,15 @@ const settingKeys = ["erpnextUrl", "apiKey", "apiSecret", "terminalId", "posProf
 let database: Database.Database | null = null;
 let databasePath = "";
 
+// Adds a column only when missing (SQLite has no ADD COLUMN IF NOT EXISTS).
+function ensureColumn(table: string, column: string, definition: string): void {
+  if (!database) return;
+  const columns = database.pragma(`table_info(${table})`) as { name: string }[];
+  if (!columns.some((c) => c.name === column)) {
+    database.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+}
+
 export function initDatabase(): void {
   if (database) {
     return;
@@ -150,7 +159,24 @@ export function initDatabase(): void {
     );
     CREATE TABLE IF NOT EXISTS customer_sync_state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS pos_customer_cache (name TEXT PRIMARY KEY, json_data TEXT NOT NULL, synced_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS held_sales (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      terminal_invoice_id TEXT NOT NULL,
+      display_name TEXT,
+      customer TEXT, customer_name TEXT,
+      pos_profile TEXT, company TEXT, branch TEXT, opening_entry TEXT,
+      cart_json TEXT NOT NULL, payment_json TEXT, benefits_json TEXT, totals_json TEXT,
+      validation_snapshot_json TEXT,
+      item_count INTEGER NOT NULL DEFAULT 0, estimated_total REAL NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'Held'
+    );
+    CREATE INDEX IF NOT EXISTS idx_held_sales_status ON held_sales(status);
+    CREATE INDEX IF NOT EXISTS idx_sales_history_created ON pos_sales_history(created_at);
   `);
+
+  // Non-destructive column migrations for reprint tracking on the existing sales-history table.
+  ensureColumn("pos_sales_history", "reprint_count", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn("pos_sales_history", "last_reprinted_at", "TEXT");
 
   const insertMeta = database.prepare(
     "INSERT INTO app_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING"
@@ -164,6 +190,111 @@ export function upsertFbrItemConfig(rows: Record<string, unknown>[], serviceFee:
 ON CONFLICT(item_code) DO UPDATE SET custom_fbr_tax_category=excluded.custom_fbr_tax_category,custom_fbr_hs_code=excluded.custom_fbr_hs_code,custom_mrp=excluded.custom_mrp,custom_is_3rd_schedule=excluded.custom_is_3rd_schedule,tax_rate=excluded.tax_rate,is_third_schedule=excluded.is_third_schedule,is_exempt=excluded.is_exempt,is_zero_rated=excluded.is_zero_rated,fbr_sale_type=excluded.fbr_sale_type,enabled=excluded.enabled,modified=excluded.modified`);database.transaction(()=>{for(const r of rows)stmt.run(text(r,"item_code"),text(r,"custom_fbr_tax_category"),text(r,"custom_fbr_hs_code"),num(r,"custom_mrp"),bool(r,"custom_is_3rd_schedule"),num(r,"tax_rate"),bool(r,"is_third_schedule"),bool(r,"is_exempt"),bool(r,"is_zero_rated"),text(r,"fbr_sale_type"),r.enabled===false?0:1,text(r,"modified"));const state=database!.prepare("INSERT INTO fbr_sync_state VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value");state.run("item_count",String(rows.length));state.run("service_fee",String(serviceFee));state.run("last_synced",new Date().toISOString());})(); }
 export function getFbrSyncState():{itemCount:number;serviceFee:number;lastSynced:string|null;ready:boolean}{if(!database)return{itemCount:0,serviceFee:0,lastSynced:null,ready:false};const v=(k:string)=>(database!.prepare("SELECT value FROM fbr_sync_state WHERE key=?").get(k) as {value:string}|undefined)?.value??"";return{itemCount:Number(v("item_count"))||0,serviceFee:Number(v("service_fee"))||0,lastSynced:v("last_synced")||null,ready:true};}
 export function getFbrItemConfigs(itemCodes:string[]):Record<string,Record<string,unknown>>{if(!database||!itemCodes.length)return{};const marks=itemCodes.map(()=>"?").join(",");const rows=database.prepare(`SELECT * FROM pos_fbr_item_config WHERE item_code IN (${marks})`).all(...itemCodes) as Record<string,unknown>[];return Object.fromEntries(rows.map(row=>[String(row.item_code),row]));}
+
+// ----- Held sales (Phase 3) -----
+export interface HeldSaleInput {
+  terminalInvoiceId: string; displayName: string; customer: string; customerName: string;
+  posProfile: string; company: string; branch: string; openingEntry: string;
+  cart: unknown[]; payments: unknown[]; benefits: Record<string, unknown>; totals: Record<string, unknown>;
+  validationSnapshot: Record<string, unknown>; itemCount: number; estimatedTotal: number;
+}
+export interface HeldSaleSummary {
+  id: number; terminalInvoiceId: string; displayName: string; customer: string; customerName: string;
+  posProfile: string; openingEntry: string; itemCount: number; estimatedTotal: number; createdAt: string; updatedAt: string; status: string;
+}
+export interface HeldSaleDetail extends HeldSaleSummary {
+  company: string; branch: string; cart: unknown[]; payments: unknown[]; benefits: Record<string, unknown> | null; totals: Record<string, unknown> | null; validationSnapshot: Record<string, unknown> | null;
+}
+function parseObject(value: string | null): Record<string, unknown> | null { try { const data = value ? JSON.parse(value) : null; return typeof data === "object" && data && !Array.isArray(data) ? data as Record<string, unknown> : null; } catch { return null; } }
+function parseArray(value: string | null): unknown[] { try { const data = value ? JSON.parse(value) : []; return Array.isArray(data) ? data : []; } catch { return []; } }
+
+export function holdSale(input: HeldSaleInput): { id: number; displayName: string } {
+  if (!database) throw new Error("Database is not initialized.");
+  const now = new Date().toISOString();
+  const result = database.prepare(`INSERT INTO held_sales
+    (terminal_invoice_id, display_name, customer, customer_name, pos_profile, company, branch, opening_entry,
+     cart_json, payment_json, benefits_json, totals_json, validation_snapshot_json, item_count, estimated_total, created_at, updated_at, status)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Held')`).run(
+    input.terminalInvoiceId, input.displayName, input.customer, input.customerName, input.posProfile, input.company, input.branch, input.openingEntry,
+    JSON.stringify(input.cart), JSON.stringify(input.payments), JSON.stringify(input.benefits), JSON.stringify(input.totals), JSON.stringify(input.validationSnapshot),
+    input.itemCount, input.estimatedTotal, now, now);
+  return { id: Number(result.lastInsertRowid), displayName: input.displayName };
+}
+export function listHeldSales(): HeldSaleSummary[] {
+  if (!database) return [];
+  const rows = database.prepare("SELECT * FROM held_sales WHERE status='Held' ORDER BY created_at DESC").all() as Record<string, unknown>[];
+  return rows.map((r) => ({
+    id: Number(r.id), terminalInvoiceId: String(r.terminal_invoice_id ?? ""), displayName: String(r.display_name ?? ""),
+    customer: String(r.customer ?? ""), customerName: String(r.customer_name ?? ""), posProfile: String(r.pos_profile ?? ""),
+    openingEntry: String(r.opening_entry ?? ""), itemCount: Number(r.item_count ?? 0), estimatedTotal: Number(r.estimated_total ?? 0),
+    createdAt: String(r.created_at ?? ""), updatedAt: String(r.updated_at ?? ""), status: String(r.status ?? "Held")
+  }));
+}
+export function getHeldSale(id: number): HeldSaleDetail | null {
+  if (!database) return null;
+  const r = database.prepare("SELECT * FROM held_sales WHERE id=?").get(id) as Record<string, unknown> | undefined;
+  if (!r) return null;
+  return {
+    id: Number(r.id), terminalInvoiceId: String(r.terminal_invoice_id ?? ""), displayName: String(r.display_name ?? ""),
+    customer: String(r.customer ?? ""), customerName: String(r.customer_name ?? ""), posProfile: String(r.pos_profile ?? ""),
+    company: String(r.company ?? ""), branch: String(r.branch ?? ""), openingEntry: String(r.opening_entry ?? ""),
+    itemCount: Number(r.item_count ?? 0), estimatedTotal: Number(r.estimated_total ?? 0), createdAt: String(r.created_at ?? ""), updatedAt: String(r.updated_at ?? ""), status: String(r.status ?? "Held"),
+    cart: parseArray(r.cart_json as string ?? null), payments: parseArray(r.payment_json as string ?? null),
+    benefits: parseObject(r.benefits_json as string ?? null), totals: parseObject(r.totals_json as string ?? null), validationSnapshot: parseObject(r.validation_snapshot_json as string ?? null)
+  };
+}
+export function deleteHeldSale(id: number): void { if (!database) return; database.prepare("DELETE FROM held_sales WHERE id=?").run(id); }
+export function renameHeldSale(id: number, name: string): void { if (!database) return; database.prepare("UPDATE held_sales SET display_name=?, updated_at=? WHERE id=?").run(name, new Date().toISOString(), id); }
+
+// ----- Sales history queries + reprint tracking (Phase 4) -----
+export interface SalesHistoryFilter { search?: string; dateFrom?: string; dateTo?: string; limit?: number; offset?: number; }
+export interface SalesHistoryRow {
+  terminalInvoiceId: string; posInvoice: string | null; status: string; createdAt: string; submittedAt: string | null;
+  reprintCount: number; lastReprintedAt: string | null; payload: Record<string, unknown> | null; response: Record<string, unknown> | null;
+}
+function mapSalesHistory(r: Record<string, unknown>): SalesHistoryRow {
+  return {
+    terminalInvoiceId: String(r.terminal_invoice_id ?? ""), posInvoice: r.pos_invoice ? String(r.pos_invoice) : null, status: String(r.status ?? ""),
+    createdAt: String(r.created_at ?? ""), submittedAt: r.submitted_at ? String(r.submitted_at) : null,
+    reprintCount: Number(r.reprint_count ?? 0), lastReprintedAt: r.last_reprinted_at ? String(r.last_reprinted_at) : null,
+    payload: parseObject(r.payload_json as string ?? null), response: parseObject(r.response_json as string ?? null)
+  };
+}
+export function listSalesHistory(filter: SalesHistoryFilter): SalesHistoryRow[] {
+  if (!database) return [];
+  const limit = Math.min(Math.max(Number(filter.limit) || 50, 1), 200);
+  const offset = Math.max(Number(filter.offset) || 0, 0);
+  const clauses: string[] = ["status IN ('Submitted','Failed')"];
+  const params: unknown[] = [];
+  if (filter.search && filter.search.trim()) {
+    const q = `%${filter.search.trim()}%`;
+    clauses.push("(pos_invoice LIKE ? OR terminal_invoice_id LIKE ? OR payload_json LIKE ? OR response_json LIKE ?)");
+    params.push(q, q, q, q);
+  }
+  if (filter.dateFrom) { clauses.push("created_at >= ?"); params.push(filter.dateFrom); }
+  if (filter.dateTo) { clauses.push("created_at <= ?"); params.push(filter.dateTo); }
+  const sql = `SELECT * FROM pos_sales_history WHERE ${clauses.join(" AND ")} ORDER BY created_at DESC LIMIT ? OFFSET ?`;
+  params.push(limit, offset);
+  const rows = database.prepare(sql).all(...params) as Record<string, unknown>[];
+  return rows.map(mapSalesHistory);
+}
+// Used when holding (mark the open terminal-invoice row 'Held' so a fresh UUID is issued) and on resume (back to 'Open').
+export function setSaleHistoryStatus(terminalInvoiceId: string, status: string): void {
+  if (!database) return;
+  database.prepare("UPDATE pos_sales_history SET status=? WHERE terminal_invoice_id=?").run(status, terminalInvoiceId);
+}
+export function getSaleHistory(terminalInvoiceId: string): SalesHistoryRow | null {
+  if (!database) return null;
+  const r = database.prepare("SELECT * FROM pos_sales_history WHERE terminal_invoice_id=?").get(terminalInvoiceId) as Record<string, unknown> | undefined;
+  return r ? mapSalesHistory(r) : null;
+}
+export function recordReprint(terminalInvoiceId: string): { reprintCount: number; lastReprintedAt: string } {
+  if (!database) throw new Error("Database is not initialized.");
+  const now = new Date().toISOString();
+  database.prepare("UPDATE pos_sales_history SET reprint_count = COALESCE(reprint_count,0) + 1, last_reprinted_at = ? WHERE terminal_invoice_id = ?").run(now, terminalInvoiceId);
+  const row = database.prepare("SELECT reprint_count FROM pos_sales_history WHERE terminal_invoice_id=?").get(terminalInvoiceId) as { reprint_count: number } | undefined;
+  return { reprintCount: Number(row?.reprint_count ?? 0), lastReprintedAt: now };
+}
 
 export function saveSaleHistory(id:string,status:string,payload:Record<string,unknown>,response:Record<string,unknown>|null=null):void{if(!database)throw new Error("Database is not initialized.");const now=new Date().toISOString();database.prepare("INSERT INTO pos_sales_history VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(terminal_invoice_id) DO UPDATE SET pos_invoice=excluded.pos_invoice,status=excluded.status,payload_json=excluded.payload_json,response_json=excluded.response_json,submitted_at=excluded.submitted_at").run(id,typeof response?.pos_invoice==="string"?response.pos_invoice:null,status,JSON.stringify(payload),response?JSON.stringify(response):null,now,status==="Submitted"?now:null);}
 export function getOpenTerminalInvoice(terminalId:string,createId:()=>string):string{if(!database)throw new Error("Database is not initialized.");const row=database.prepare("SELECT terminal_invoice_id FROM pos_sales_history WHERE status='Open' AND json_extract(payload_json, '$.terminal_id')=? ORDER BY created_at DESC LIMIT 1").get(terminalId) as {terminal_invoice_id:string}|undefined;if(row)return row.terminal_invoice_id;const id=createId();saveSaleHistory(id,"Open",{terminal_id:terminalId});return id;}

@@ -46,8 +46,22 @@ interface PosAPI {
   loadBenefitsDraft: () => Promise<AppliedBenefits | null>;
   saveBenefitsDraft: (benefits: AppliedBenefits) => Promise<void>;
   getReceipt: (posInvoice: string) => Promise<{ html: string | null; error: string | null }>;
+  getDuplicateReceipt: (posInvoice: string) => Promise<{ html: string | null; error: string | null }>;
   printReceipt: (html: string) => Promise<{ success: boolean; error: string | null }>;
+  holdSale: (input: Record<string, unknown>) => Promise<{ id: number; displayName: string }>;
+  listHeldSales: () => Promise<HeldSaleSummary[]>;
+  getHeldSale: (id: number) => Promise<HeldSaleDetail | null>;
+  deleteHeldSale: (id: number) => Promise<void>;
+  renameHeldSale: (id: number, name: string) => Promise<void>;
+  listSalesHistory: (filter: Record<string, unknown>) => Promise<SalesHistoryRow[]>;
+  getSaleHistory: (id: string) => Promise<SalesHistoryRow | null>;
+  recordReprint: (id: string) => Promise<{ reprintCount: number; lastReprintedAt: string }>;
+  setSaleStatus: (id: string, status: string) => Promise<void>;
 }
+
+interface HeldSaleSummary { id: number; terminalInvoiceId: string; displayName: string; customer: string; customerName: string; posProfile: string; openingEntry: string; itemCount: number; estimatedTotal: number; createdAt: string; updatedAt: string; status: string; }
+interface HeldSaleDetail extends HeldSaleSummary { company: string; branch: string; cart: unknown[]; payments: unknown[]; benefits: Record<string, unknown> | null; totals: Record<string, unknown> | null; validationSnapshot: Record<string, unknown> | null; }
+interface SalesHistoryRow { terminalInvoiceId: string; posInvoice: string | null; status: string; createdAt: string; submittedAt: string | null; reprintCount: number; lastReprintedAt: string | null; payload: Record<string, unknown> | null; response: Record<string, unknown> | null; }
 
 interface AppliedBenefits {
   loyaltyPoints: number;
@@ -283,6 +297,8 @@ let lastSaleResponse: Record<string, unknown> | null = null; // authoritative su
 let lastReceiptHtml: string | null = null;                   // server-rendered receipt HTML for printing
 let receiptInvoice = "";                                     // POS Invoice name for (re)printing
 let changeDue = 0;                                           // cash tendered above the bill, to be returned (never recorded as payment)
+let resumedHeldId: number | null = null;                     // id of the held sale currently resumed (removed after successful submit)
+let receiptMode: "sale" | "history" = "sale";                // sale = just submitted (close starts new sale); history = duplicate view
 let paymentMethods: string[] = [];
 let selectedPaymentMethodIndex = 0;
 let paymentRows: PaymentRow[] = [];
@@ -306,7 +322,13 @@ function cartInput(): HTMLInputElement | null { return document.querySelector<HT
 function focusCart(): void { window.setTimeout(() => cartInput()?.focus(), 0); }
 function cartMessage(message: string): void { const e = document.querySelector<HTMLElement>("#cart-message"); if (e) e.textContent = message; }
 function clearCartSearch(): void { cartSearchResults = []; selectedSearchIndex = 0; const input = cartInput(); if (input) input.value = ""; document.querySelector<HTMLElement>("#cart-search-results")?.replaceChildren(); }
-function showScreen(screen: "pos" | "settings" | "start-shift"): void { const pos = document.querySelector<HTMLElement>("#pos-screen"); const settings = document.querySelector<HTMLElement>("#settings-screen"); const shift=document.querySelector<HTMLElement>("#start-shift-screen"); if (pos) pos.hidden = screen !== "pos"; if (settings) settings.hidden = screen !== "settings"; if(shift)shift.hidden=screen!=="start-shift"; if (screen === "pos") focusCart(); }
+type PosScreen = "pos" | "settings" | "start-shift" | "held-sales" | "sales-history";
+const screenIds: Record<PosScreen, string> = { pos: "#pos-screen", settings: "#settings-screen", "start-shift": "#start-shift-screen", "held-sales": "#held-sales-screen", "sales-history": "#sales-history-screen" };
+// Switches the visible view without touching cart/customer/payment state.
+function showScreen(screen: PosScreen): void {
+  for (const [key, selector] of Object.entries(screenIds)) { const el = document.querySelector<HTMLElement>(selector); if (el) el.hidden = key !== screen; }
+  if (screen === "pos") focusCart();
+}
 function updatePosHeader(): void { const set = (id: string, value: string) => { const e = document.querySelector<HTMLElement>(id); if (e) e.textContent = value || "—"; }; set("#pos-branch", (document.querySelector<HTMLInputElement>("#branch")?.value ?? "")); set("#pos-profile-name", document.querySelector<HTMLSelectElement>("#pos-profile")?.value ?? ""); set("#pos-terminal", document.querySelector<HTMLInputElement>("#terminal-id")?.value ?? ""); const user = document.querySelector<HTMLElement>("#session-user")?.textContent ?? ""; set("#pos-cashier", user); set("#pos-opening-entry", document.querySelector<HTMLElement>("#session-opening-entry")?.textContent ?? ""); }
 function showCustomer(): void { const e=document.querySelector<HTMLElement>("#pos-customer"); if(e)e.textContent=selectedCustomer?`${selectedCustomer.customer_name || selectedCustomer.name}${navigator.onLine?"":" (Cached)"}`:"—"; }
 function customerInput(): HTMLInputElement | null { return document.querySelector<HTMLInputElement>("#customer-search"); }
@@ -628,6 +650,8 @@ async function submitCurrentSale():Promise<void>{
   if(!result.success||!result.response?.pos_invoice){cartMessage(`Submission Failed: ${result.error??"Missing POS Invoice"}`);updateCompleteSaleState();return;}
   // Success: store authoritative response first, keep the cart, then open the receipt preview.
   lastSaleResponse=result.response;
+  // Only after a confirmed successful submission: remove the resumed held draft so it can't be resumed again.
+  if(resumedHeldId!==null){try{await window.posAPI.deleteHeldSale(resumedHeldId);}catch{/* non-fatal: held draft cleanup */}resumedHeldId=null;}
   cartMessage("Sale Submitted");
   updateCompleteSaleState();
   await openReceiptPreview(result.response);
@@ -653,6 +677,11 @@ function interpretFbr(response:Record<string,unknown>):{accepted:boolean;statusT
 }
 
 async function openReceiptPreview(response:Record<string,unknown>):Promise<void>{
+  receiptMode="sale";
+  setCartText("#receipt-title","Receipt Preview");
+  document.querySelector<HTMLButtonElement>("#receipt-print")?.removeAttribute("hidden");
+  const dupBtn=document.querySelector<HTMLButtonElement>("#receipt-duplicate"); if(dupBtn)dupBtn.hidden=true;
+  const closeBtn=document.querySelector<HTMLButtonElement>("#receipt-close"); if(closeBtn)closeBtn.textContent="Close and Start New Sale";
   const totals=fbrTotalsView();
   const posInvoice=String(response.pos_invoice??response.name??"");
   receiptInvoice=posInvoice;
@@ -727,15 +756,187 @@ async function printReceiptNow():Promise<void>{
   if(msg)msg.textContent=result.success?"Sent to printer.":`Print failed: ${result.error??"Unknown error"}`;
 }
 
-async function startNewSaleAfterReceipt():Promise<void>{
-  document.querySelector<HTMLDialogElement>("#receipt-dialog")?.close();
+// Clears the active sale UI/state and issues a fresh terminal_invoice_id for the next sale.
+async function clearActiveSale(message:string):Promise<void>{
   cartLines=[];selectedCartIndex=-1;paymentRows=[];appliedBenefits={loyaltyPoints:0,couponCode:""};changeDue=0;
   await persistCart();await persistPayments();await saveBenefitsDraft();
   serverTotals=null;localFbrTotals=null;serverTaxRows=null;
   validatedCartVersion=-1;paymentPreparedVersion=-1;previewStatus="idle";previewError="";
-  lastSaleResponse=null;lastReceiptHtml=null;receiptInvoice="";
+  lastSaleResponse=null;lastReceiptHtml=null;receiptInvoice="";resumedHeldId=null;
   terminalInvoiceId=await window.posAPI.getTerminalInvoiceId();
-  renderServerTaxRows();renderCart();cartMessage("Ready for next sale");focusCart();
+  renderServerTaxRows();renderCart();cartMessage(message);focusCart();
+}
+async function startNewSaleAfterReceipt():Promise<void>{
+  document.querySelector<HTMLDialogElement>("#receipt-dialog")?.close();
+  await clearActiveSale("Ready for next sale");
+}
+// Receipt close behaves differently for a just-completed sale vs. a duplicate viewed from history.
+async function closeReceiptDialog():Promise<void>{
+  if(receiptMode==="history"){document.querySelector<HTMLDialogElement>("#receipt-dialog")?.close();focusCart();return;}
+  await startNewSaleAfterReceipt();
+}
+
+// ---------------- Phase 3: Hold / Resume ----------------
+async function holdCurrentSale():Promise<void>{
+  if(!cartLines.length){cartMessage("Cart is empty — nothing to hold");return;}
+  const totals=fbrTotalsView();
+  const time=new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});
+  const customerName=selectedCustomer?(selectedCustomer.customer_name||selectedCustomer.name):"Walk-in";
+  let count=1; try{count=(await window.posAPI.listHeldSales()).length+1;}catch{/* offline-safe */}
+  const defaultName=`Hold ${String(count).padStart(3,"0")} — ${customerName} — ${time}`;
+  const name=(window.prompt("Name this held sale:",defaultName)??"").trim()||defaultName;
+  const heldTerminalId=terminalInvoiceId;
+  try{
+    await window.posAPI.holdSale({
+      terminalInvoiceId:heldTerminalId,displayName:name,
+      customer:selectedCustomer?.name??"",customerName,
+      posProfile:document.querySelector<HTMLSelectElement>("#pos-profile")?.value??"",
+      company:document.querySelector<HTMLElement>("#config-company")?.textContent??"",
+      branch:document.querySelector<HTMLInputElement>("#branch")?.value??"",
+      openingEntry:sessionState.openingEntry,
+      cart:cartLines,payments:paymentRows,benefits:{...appliedBenefits},
+      totals:{grandTotal:totals.grandTotal,salesTax:totals.salesTax,serviceFee:totals.serviceFee,payable:totals.payable},
+      validationSnapshot:{currentCartVersion,validatedCartVersion,paymentPreparedVersion,previewStatus},
+      itemCount:cartLines.length,estimatedTotal:totals.payable
+    });
+    // Free the held terminal id so the next sale gets a fresh UUID; the held record keeps the original.
+    await window.posAPI.setSaleStatus(heldTerminalId,"Held");
+    clearSessionInvalid();
+    await clearActiveSale(`Held: ${name}`);
+    showScreen("pos");
+  }catch(error){cartMessage(error instanceof Error?`Hold failed: ${error.message}`:"Hold failed");}
+}
+
+async function openHeldSales():Promise<void>{ showScreen("held-sales"); await renderHeldSales(); }
+async function renderHeldSales():Promise<void>{
+  const list=document.querySelector<HTMLElement>("#held-list"); const msg=document.querySelector<HTMLElement>("#held-message"); if(!list)return;
+  let rows:HeldSaleSummary[]=[]; try{rows=await window.posAPI.listHeldSales();}catch{if(msg)msg.textContent="Unable to load held sales.";}
+  if(msg)msg.textContent=rows.length?"":"";
+  if(!rows.length){list.replaceChildren(Object.assign(document.createElement("div"),{className:"op-empty",textContent:"No held sales."}));return;}
+  list.replaceChildren(...rows.map((row)=>{
+    const card=document.createElement("div");card.className="op-card";
+    const main=document.createElement("div");main.className="op-card-main";
+    const title=document.createElement("div");title.className="op-card-title";title.textContent=row.displayName||`Hold #${row.id}`;
+    const meta=document.createElement("div");meta.className="op-card-meta";
+    meta.textContent=`${new Date(row.createdAt).toLocaleString()} · ${row.customerName||"Walk-in"} · ${row.itemCount} item(s) · Est ${row.estimatedTotal.toFixed(2)} · ${row.posProfile} · Entry ${row.openingEntry||"—"}`;
+    main.append(title,meta);
+    const actions=document.createElement("div");actions.className="op-card-actions";
+    const resume=document.createElement("button");resume.type="button";resume.textContent="Resume";resume.onclick=()=>void resumeHeldSale(row.id);
+    const rename=document.createElement("button");rename.type="button";rename.className="secondary-button";rename.textContent="Rename";rename.onclick=()=>void renameHeldSaleUi(row.id,row.displayName);
+    const del=document.createElement("button");del.type="button";del.className="secondary-button";del.textContent="Delete";del.onclick=()=>void deleteHeldSaleUi(row.id);
+    actions.append(resume,rename,del);
+    card.append(main,actions);return card;
+  }));
+}
+async function renameHeldSaleUi(id:number,current:string):Promise<void>{ const name=(window.prompt("Rename held sale:",current)??"").trim(); if(!name)return; await window.posAPI.renameHeldSale(id,name); await renderHeldSales(); }
+async function deleteHeldSaleUi(id:number):Promise<void>{ if(!window.confirm("Delete this held draft? Submitted invoices are never affected."))return; await window.posAPI.deleteHeldSale(id); await renderHeldSales(); }
+
+async function resumeHeldSale(id:number):Promise<void>{
+  if(cartLines.length&&!window.confirm("Replace the current cart with the held sale?"))return;
+  const held=await window.posAPI.getHeldSale(id); if(!held){cartMessage("Held sale not found");await renderHeldSales();return;}
+  // Restore exact cart, customer, benefits and the ORIGINAL terminal_invoice_id.
+  cartLines=Array.isArray(held.cart)?held.cart as CartLine[]:[];
+  selectedCartIndex=cartLines.length?0:-1;
+  paymentRows=Array.isArray(held.payments)?held.payments as PaymentRow[]:[];
+  const benefits=held.benefits??{};
+  appliedBenefits={loyaltyPoints:Number(benefits.loyaltyPoints)||0,couponCode:String(benefits.couponCode??"")};
+  terminalInvoiceId=held.terminalInvoiceId;
+  if(held.customer){selectedCustomer={name:held.customer,customer_name:held.customerName||held.customer,customer_group:"",mobile_no:"",email_id:"",tax_id:""};showCustomer();}
+  // Reset validation; saved payments are outdated until re-prepared.
+  serverTotals=null;localFbrTotals=null;serverTaxRows=null;
+  currentCartVersion++;validatedCartVersion=-1;paymentPreparedVersion=-1;previewStatus="idle";previewError="";activePreviewPromise=null;
+  paymentsOutdated=paymentRows.length>0;changeDue=0;
+  resumedHeldId=id;
+  // Re-open the held terminal id for idempotency, persist, and recompute.
+  try{await window.posAPI.setSaleStatus(terminalInvoiceId,"Open");}catch{/* non-fatal */}
+  await persistCart();await persistPayments();await saveBenefitsDraft();
+  showScreen("pos");
+  renderCart();
+  scheduleCartPreview();        // immediate local FBR + automatic server preview when online
+  void validateSession("resume");
+  cartMessage(`Resumed: ${held.displayName||`Hold #${id}`} — prepare payment again`);
+}
+
+// ---------------- Phase 4: Sales History + Duplicate Print ----------------
+async function openSalesHistory():Promise<void>{ showScreen("sales-history"); await renderSalesHistory(); }
+async function renderSalesHistory():Promise<void>{
+  const list=document.querySelector<HTMLElement>("#history-list"); const msg=document.querySelector<HTMLElement>("#history-message"); if(!list)return;
+  const search=document.querySelector<HTMLInputElement>("#history-search")?.value??"";
+  const from=document.querySelector<HTMLInputElement>("#history-from")?.value??"";
+  const to=document.querySelector<HTMLInputElement>("#history-to")?.value??"";
+  if(msg)msg.textContent="Loading…";
+  let rows:SalesHistoryRow[]=[];
+  try{rows=await window.posAPI.listSalesHistory({search,dateFrom:from?`${from}T00:00:00.000Z`:"",dateTo:to?`${to}T23:59:59.999Z`:"",limit:50,offset:0});}
+  catch{if(msg)msg.textContent="Unable to load sales history.";return;}
+  if(msg)msg.textContent="";
+  if(!rows.length){list.replaceChildren(Object.assign(document.createElement("div"),{className:"op-empty",textContent:"No matching sales."}));return;}
+  list.replaceChildren(...rows.map((row)=>{
+    const response=row.response??{}; const payload=row.payload??{};
+    const fbr=interpretFbr(response);
+    const grand=previewNumber(response,"grand_total","rounded_total")??previewNumber(asTotalsRecord(payload),"grand_total")??0;
+    const card=document.createElement("div");card.className="op-card";
+    const main=document.createElement("div");main.className="op-card-main";
+    const title=document.createElement("div");title.className="op-card-title";title.textContent=row.posInvoice||"(no invoice)";
+    const meta=document.createElement("div");meta.className="op-card-meta";
+    meta.textContent=`${new Date(row.submittedAt||row.createdAt).toLocaleString()} · ${String(payload.customer??"—")} · ${grand?`Total ${grand.toFixed(2)}`:row.status} · Term ${row.terminalInvoiceId.slice(0,12)}… · Reprints ${row.reprintCount}`;
+    const fbrTag=document.createElement("span");fbrTag.className=`fbr-tag ${fbr.accepted?"ok":"warn"}`;fbrTag.textContent=`FBR ${fbr.accepted?"Accepted":fbr.statusText}${fbr.invoiceNumber?` · ${fbr.invoiceNumber}`:""}`;
+    main.append(title,meta,fbrTag);
+    const actions=document.createElement("div");actions.className="op-card-actions";
+    const view=document.createElement("button");view.type="button";view.className="secondary-button";view.textContent="View Receipt";view.onclick=()=>void viewHistoryReceipt(row);
+    const dup=document.createElement("button");dup.type="button";dup.textContent="Print Duplicate";dup.disabled=!row.posInvoice;dup.onclick=()=>void printDuplicate(row);
+    actions.append(view,dup);
+    card.append(main,actions);return card;
+  }));
+}
+
+async function viewHistoryReceipt(row:SalesHistoryRow):Promise<void>{
+  receiptMode="history";
+  const response=row.response??{}; const payload=row.payload??{};
+  const posInvoice=row.posInvoice??"";
+  receiptInvoice=posInvoice;
+  setCartText("#receipt-title",`Receipt — ${posInvoice||"Unknown"}`);
+  const printBtn=document.querySelector<HTMLButtonElement>("#receipt-print"); if(printBtn)printBtn.hidden=true;
+  const dupBtn=document.querySelector<HTMLButtonElement>("#receipt-duplicate"); if(dupBtn){dupBtn.hidden=false;dupBtn.disabled=!posInvoice;dupBtn.onclick=()=>void printDuplicate(row);}
+  const closeBtn=document.querySelector<HTMLButtonElement>("#receipt-close"); if(closeBtn)closeBtn.textContent="Close";
+  // Structured fallback from stored payload/response (the iframe shows the authoritative receipt when retrieved).
+  setCartText("#receipt-invoice",posInvoice||"—");
+  setCartText("#receipt-posting",pickString(response,["posting_datetime","posting_date","creation"])||new Date(row.submittedAt||row.createdAt).toLocaleString());
+  setCartText("#receipt-cashier",pickString(response,["owner","cashier","user"])||"—");
+  setCartText("#receipt-customer",String(payload.customer??"—"));
+  const items=Array.isArray(payload.items)?payload.items:[];
+  const itemsBox=document.querySelector<HTMLElement>("#receipt-items");
+  if(itemsBox)itemsBox.replaceChildren(...items.map((it)=>{const r=asTotalsRecord(it)??{};const div=document.createElement("div");div.className="receipt-item";[String(r.item_code??""),String(r.qty??r.quantity??""),"—","—"].forEach(t=>{const s=document.createElement("span");s.textContent=t;div.append(s);});return div;}));
+  const fbrTotals={salesTax:previewNumber(response,"total_sales_tax")??0,serviceFee:previewNumber(response,"fbr_pos_service_fee")??0,grand:previewNumber(response,"grand_total","rounded_total")??0};
+  setCartText("#receipt-before-tax",(fbrTotals.grand-fbrTotals.salesTax-fbrTotals.serviceFee>0?fbrTotals.grand-fbrTotals.salesTax-fbrTotals.serviceFee:0).toFixed(2));
+  setCartText("#receipt-sales-tax",fbrTotals.salesTax.toFixed(2));
+  setCartText("#receipt-service-fee",fbrTotals.serviceFee.toFixed(2));
+  setCartText("#receipt-grand-total",fbrTotals.grand.toFixed(2));
+  const payments=Array.isArray(payload.payments)?payload.payments:[];
+  const payBox=document.querySelector<HTMLElement>("#receipt-payments");
+  if(payBox)payBox.replaceChildren(...payments.map((p)=>{const r=asTotalsRecord(p)??{};const el=document.createElement("p");const a=document.createElement("span");a.textContent=String(r.mode_of_payment??"");const b=document.createElement("strong");b.textContent=(previewNumber(r,"amount")??0).toFixed(2);el.append(a,b);return el;}));
+  setCartText("#receipt-change","0.00");
+  const fbr=interpretFbr(response);
+  setCartText("#receipt-fbr-status",fbr.statusText);setCartText("#receipt-fbr-number",fbr.invoiceNumber||"—");
+  const badge=document.querySelector<HTMLElement>("#receipt-fbr-badge");if(badge){badge.textContent=fbr.accepted?"FBR Accepted":fbr.statusText;badge.className=`fbr-badge ${fbr.accepted?"ok":"warn"}`;}
+  const qrBox=document.querySelector<HTMLElement>("#receipt-qr");if(qrBox)qrBox.replaceChildren();
+  lastReceiptHtml=null;
+  const frame=document.querySelector<HTMLIFrameElement>("#receipt-frame");if(frame){frame.removeAttribute("srcdoc");frame.hidden=true;}
+  const structured=document.querySelector<HTMLElement>("#receipt-structured");if(structured)structured.hidden=false;
+  document.querySelector<HTMLDialogElement>("#receipt-dialog")?.showModal();
+  if(posInvoice)await retrieveReceipt(posInvoice); else { const msg=document.querySelector<HTMLElement>("#receipt-message"); if(msg)msg.textContent="No POS Invoice recorded for this sale."; }
+}
+
+// Duplicate print: never creates an invoice, never calls submit/FBR; just re-renders with a DUPLICATE COPY banner.
+async function printDuplicate(row:SalesHistoryRow):Promise<void>{
+  const msg=document.querySelector<HTMLElement>("#receipt-message");
+  if(!row.posInvoice){if(msg)msg.textContent="No POS Invoice to reprint.";return;}
+  try{
+    const result=await window.posAPI.getDuplicateReceipt(row.posInvoice);
+    if(!result.html){if(msg)msg.textContent=`Receipt retrieval failed: ${result.error??"Unknown error"}`;return;}
+    const printResult=await window.posAPI.printReceipt(result.html);
+    if(printResult.success){const rec=await window.posAPI.recordReprint(row.terminalInvoiceId);if(msg)msg.textContent=`Duplicate sent to printer (reprint #${rec.reprintCount}).`;}
+    else if(msg)msg.textContent=`Print failed: ${printResult.error??"Unknown error"}`;
+  }catch(error){if(msg)msg.textContent=error instanceof Error?`Reprint failed: ${error.message}`:"Reprint failed";}
 }
 
 async function loadCustomerBenefits():Promise<void>{if(!selectedCustomer)return;if(!isOnline()){customerBenefits={loyaltyProgram:"",availablePoints:0,conversionFactor:1};return;}try{const result=await window.posAPI.getCustomerBenefits(selectedCustomer.name);customerBenefits={loyaltyProgram:result.loyaltyProgram??"",availablePoints:result.availablePoints,conversionFactor:result.conversionFactor};}catch{customerBenefits={loyaltyProgram:"",availablePoints:0,conversionFactor:1};}}
@@ -1277,7 +1478,16 @@ window.addEventListener("DOMContentLoaded", () => {
   // Receipt preview controls
   document.querySelector<HTMLButtonElement>('#receipt-print')?.addEventListener('click', () => void printReceiptNow());
   document.querySelector<HTMLButtonElement>('#receipt-reprint')?.addEventListener('click', () => void retrieveReceipt(receiptInvoice));
-  document.querySelector<HTMLButtonElement>('#receipt-close')?.addEventListener('click', () => void startNewSaleAfterReceipt());
+  document.querySelector<HTMLButtonElement>('#receipt-close')?.addEventListener('click', () => void closeReceiptDialog());
+  // Hold / Held Sales / Sales History navigation (registered once).
+  document.querySelector<HTMLButtonElement>('#hold-sale')?.addEventListener('click', () => void holdCurrentSale());
+  document.querySelector<HTMLButtonElement>('#open-held-sales')?.addEventListener('click', () => void openHeldSales());
+  document.querySelector<HTMLButtonElement>('#open-sales-history')?.addEventListener('click', () => void openSalesHistory());
+  document.querySelector<HTMLButtonElement>('#held-back')?.addEventListener('click', () => void goToPos());
+  document.querySelector<HTMLButtonElement>('#history-back')?.addEventListener('click', () => void goToPos());
+  document.querySelector<HTMLButtonElement>('#history-refresh')?.addEventListener('click', () => void renderSalesHistory());
+  document.querySelector<HTMLInputElement>('#history-search')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); void renderSalesHistory(); } });
+  document.querySelector<HTMLButtonElement>('#session-hold')?.addEventListener('click', () => void holdCurrentSale());
   // Escape must not silently discard a submitted-but-unclosed receipt; require the explicit button.
   document.querySelector<HTMLDialogElement>('#receipt-dialog')?.addEventListener('cancel', (e) => e.preventDefault());
   // Benefits dialog controls
@@ -1317,7 +1527,8 @@ window.addEventListener("DOMContentLoaded", () => {
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closePaymentDialog(); return; }
       if (event.key === 'F6') { event.preventDefault(); event.stopPropagation(); void completePaymentAllocation(); return; }
     }
-    if (event.key === "F2") { event.preventDefault(); event.stopPropagation(); focusCart(); }
+    if (event.ctrlKey && event.key.toLowerCase() === "h") { event.preventDefault(); event.stopPropagation(); void holdCurrentSale(); }
+    else if (event.key === "F2") { event.preventDefault(); event.stopPropagation(); focusCart(); }
     else if (event.key === "F3") { event.preventDefault(); event.stopPropagation(); openCustomerSearch(); }
     else if (customerDialog?.open && event.ctrlKey && event.key.toLowerCase() === "n") { event.preventDefault(); event.stopPropagation(); void openNewCustomer(); }
     else if (customerDialog?.open && event.key === "ArrowUp") { event.preventDefault(); event.stopPropagation(); selectedCustomerIndex=Math.max(0,selectedCustomerIndex-1); void searchCustomer(true); }

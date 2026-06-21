@@ -209,7 +209,7 @@
               <p>Paid <strong id="cart-paid">0.00</strong></p>
               <p>Change <strong id="cart-change">0.00</strong></p>
               <p id="cart-validation" class="validation-status">Offline Estimate — Not Server Validated</p><small id="cart-calculating"></small>
-              <button id="open-payment" type="button">Pay (F6)</button><button id="open-benefits" type="button" class="secondary-button">Benefits (F7)</button><button type="button" disabled class="secondary-button">Hold Sale</button><button id="cart-clear" type="button" class="secondary-button">Clear Cart</button>
+              <button id="open-payment" type="button">Pay (F6)</button><button id="open-benefits" type="button" class="secondary-button">Benefits (F7)</button><button id="hold-sale" type="button" class="secondary-button">Hold Sale</button><button id="open-held-sales" type="button" class="secondary-button">Held Sales</button><button id="open-sales-history" type="button" class="secondary-button">Sales History</button><button id="cart-clear" type="button" class="secondary-button">Clear Cart</button>
             </div>
             <div class="summary-action">
               <button id="complete-sale" type="button" class="complete-sale-button">Complete Sale &amp; Print (F9)</button>
@@ -229,39 +229,6 @@
         </dialog>
         <dialog id="payment-dialog" class="customer-dialog payment-dialog"><h3>Payment</h3><div class="payment-grid"><p>Payable <strong id="payment-payable">0.00</strong></p><p>Tendered <strong id="payment-tendered">0.00</strong></p><p>Paid <strong id="payment-allocated">0.00</strong></p><p>Remaining <strong id="payment-remaining">0.00</strong></p><p class="payment-change-cell">Change <strong id="payment-change">0.00</strong></p></div><div id="payment-methods" class="payment-methods"></div><label>Tendered Amount<input id="payment-amount" type="number" min="0" step="0.001" /></label><div class="form-actions"><button id="payment-exact" type="button" class="secondary-button">Exact Amount</button><button id="payment-add" type="button">Add (Enter)</button><button id="payment-complete" type="button">Complete Payment (F6)</button></div><details class="payment-split"><summary>Split payments</summary><div id="payment-rows" class="payment-rows"></div></details><p id="payment-message" class="settings-message"></p></dialog>
         <dialog id="benefits-dialog" class="customer-dialog"><h3>Benefits (F7)</h3><p>Customer <strong id="benefits-customer">—</strong></p><p id="benefits-offline-message" class="settings-message" hidden>Online connection required for loyalty or voucher redemption</p><fieldset id="benefits-loyalty-section"><legend>Loyalty</legend><p>Program <strong id="benefits-loyalty-program">—</strong></p><p>Available Points <strong id="benefits-available-points">0</strong></p><p>Conversion Factor <strong id="benefits-conversion-factor">1</strong></p><p>Loyalty Value <strong id="benefits-loyalty-value">0.00</strong></p><label>Points to Redeem<input id="benefits-redeem-points" type="number" min="0" step="1" disabled /></label><button id="benefits-max-points" type="button" class="secondary-button" disabled>Use Maximum Points</button><p id="benefits-redeemed-row" hidden>Redeemed Points <strong id="benefits-redeemed-points">0</strong></p><p id="benefits-loyalty-amount-row" hidden>Loyalty Amount <strong id="benefits-loyalty-amount">0.00</strong></p></fieldset><fieldset id="benefits-voucher-section"><legend>Voucher</legend><label>Coupon / Gift Card Code<input id="benefits-coupon-code" type="text" disabled placeholder="Enter code" /></label></fieldset><div id="benefits-applied" class="settings-message"></div><div class="form-actions"><button id="benefits-apply" type="button" disabled>Apply Benefits</button><button id="benefits-remove" type="button" class="secondary-button" disabled>Remove Benefits</button></div><p id="benefits-message" class="settings-message"></p></dialog>
-        <dialog id="receipt-dialog" class="customer-dialog receipt-dialog">
-          <div class="receipt-head"><h3>Receipt Preview</h3><span id="receipt-fbr-badge" class="fbr-badge"></span></div>
-          <p id="receipt-message" class="settings-message"></p>
-          <iframe id="receipt-frame" class="receipt-frame" title="Receipt" hidden></iframe>
-          <div id="receipt-structured" class="receipt-body">
-            <div class="receipt-meta">
-              <p>POS Invoice <strong id="receipt-invoice">—</strong></p>
-              <p>Posting <strong id="receipt-posting">—</strong></p>
-              <p>Cashier <strong id="receipt-cashier">—</strong></p>
-              <p>Customer <strong id="receipt-customer">—</strong></p>
-            </div>
-            <div class="receipt-items-head"><span>Item</span><span>Qty</span><span>Rate</span><span>Amount</span></div>
-            <div id="receipt-items" class="receipt-items"></div>
-            <div class="receipt-totals">
-              <p>Sale Before Tax <strong id="receipt-before-tax">0.00</strong></p>
-              <p>FBR Sales Tax <strong id="receipt-sales-tax">0.00</strong></p>
-              <p>FBR POS Service Fee <strong id="receipt-service-fee">0.00</strong></p>
-              <p class="grand-total">Grand Total <strong id="receipt-grand-total">0.00</strong></p>
-            </div>
-            <div id="receipt-payments" class="receipt-payments"></div>
-            <p>Change <strong id="receipt-change">0.00</strong></p>
-            <div class="receipt-fbr">
-              <p>FBR Status <strong id="receipt-fbr-status">—</strong></p>
-              <p>FBR Invoice Number <strong id="receipt-fbr-number">—</strong></p>
-              <div id="receipt-qr" class="receipt-qr"></div>
-            </div>
-          </div>
-          <div class="form-actions">
-            <button id="receipt-print" type="button" disabled>Print</button>
-            <button id="receipt-reprint" type="button" class="secondary-button" hidden>Reprint Receipt</button>
-            <button id="receipt-close" type="button" class="secondary-button">Close and Start New Sale</button>
-          </div>
-        </dialog>
         <div id="session-invalid-overlay" class="session-overlay" hidden>
           <div class="session-overlay-card">
             <h2>POS session is no longer active</h2>
@@ -270,12 +237,66 @@
             <div class="session-overlay-actions">
               <button id="session-refresh" type="button">Refresh Session</button>
               <button id="session-switch" type="button" hidden>Switch to Active Shift</button>
+              <button id="session-hold" type="button" class="secondary-button">Hold Current Sale</button>
               <button id="session-go-shift" type="button" class="secondary-button">Go to Start Shift</button>
               <button id="session-open-settings" type="button" class="secondary-button">Open Settings</button>
             </div>
           </div>
         </div>
       </section>
+
+      <section id="held-sales-screen" class="app-screen op-screen" hidden>
+        <header class="op-header"><h2>Held Sales</h2><button id="held-back" type="button" class="secondary-button">Back to POS</button></header>
+        <p id="held-message" class="settings-message"></p>
+        <div id="held-list" class="op-list"></div>
+      </section>
+
+      <section id="sales-history-screen" class="app-screen op-screen" hidden>
+        <header class="op-header"><h2>Sales History</h2><button id="history-back" type="button" class="secondary-button">Back to POS</button></header>
+        <div class="op-filters">
+          <input id="history-search" type="search" placeholder="Invoice / terminal / customer / FBR #" />
+          <input id="history-from" type="date" aria-label="From date" />
+          <input id="history-to" type="date" aria-label="To date" />
+          <button id="history-refresh" type="button">Search</button>
+        </div>
+        <p id="history-message" class="settings-message"></p>
+        <div id="history-list" class="op-list"></div>
+      </section>
+
+      <dialog id="receipt-dialog" class="customer-dialog receipt-dialog">
+        <div class="receipt-head"><h3 id="receipt-title">Receipt Preview</h3><span id="receipt-fbr-badge" class="fbr-badge"></span></div>
+        <p id="receipt-message" class="settings-message"></p>
+        <iframe id="receipt-frame" class="receipt-frame" title="Receipt" hidden></iframe>
+        <div id="receipt-structured" class="receipt-body">
+          <div class="receipt-meta">
+            <p>POS Invoice <strong id="receipt-invoice">—</strong></p>
+            <p>Posting <strong id="receipt-posting">—</strong></p>
+            <p>Cashier <strong id="receipt-cashier">—</strong></p>
+            <p>Customer <strong id="receipt-customer">—</strong></p>
+          </div>
+          <div class="receipt-items-head"><span>Item</span><span>Qty</span><span>Rate</span><span>Amount</span></div>
+          <div id="receipt-items" class="receipt-items"></div>
+          <div class="receipt-totals">
+            <p>Sale Before Tax <strong id="receipt-before-tax">0.00</strong></p>
+            <p>FBR Sales Tax <strong id="receipt-sales-tax">0.00</strong></p>
+            <p>FBR POS Service Fee <strong id="receipt-service-fee">0.00</strong></p>
+            <p class="grand-total">Grand Total <strong id="receipt-grand-total">0.00</strong></p>
+          </div>
+          <div id="receipt-payments" class="receipt-payments"></div>
+          <p>Change <strong id="receipt-change">0.00</strong></p>
+          <div class="receipt-fbr">
+            <p>FBR Status <strong id="receipt-fbr-status">—</strong></p>
+            <p>FBR Invoice Number <strong id="receipt-fbr-number">—</strong></p>
+            <div id="receipt-qr" class="receipt-qr"></div>
+          </div>
+        </div>
+        <div class="form-actions">
+          <button id="receipt-print" type="button" disabled>Print</button>
+          <button id="receipt-duplicate" type="button" hidden>Print Duplicate</button>
+          <button id="receipt-reprint" type="button" class="secondary-button" hidden>Reprint Receipt</button>
+          <button id="receipt-close" type="button" class="secondary-button">Close and Start New Sale</button>
+        </div>
+      </dialog>
     </main>
     <script src="renderer.js"></script>
   </body>
