@@ -406,6 +406,46 @@ function toHistoryFilter(raw: Record<string, unknown>): SalesHistoryFilter {
   return { search: String(raw.search ?? ""), dateFrom: String(raw.dateFrom ?? ""), dateTo: String(raw.dateTo ?? ""), limit: Number(raw.limit) || 50, offset: Number(raw.offset) || 0 };
 }
 
+// Online refund: read original invoice + refundable quantities from the server (authoritative).
+async function getInvoiceForRefund(invoiceName: string): Promise<{ data: Record<string, unknown> | null; error: string | null }> {
+  const s = loadSettings();
+  if (!s.erpnextUrl || !s.apiKey || !s.apiSecret) return { data: null, error: "Online connection required to load the invoice." };
+  try {
+    const base = new URL(s.erpnextUrl).toString().replace(/\/+$/, "");
+    const response = await fetch(`${base}/api/method/aimatic.offline_pos.api.get_pos_invoice_for_refund?invoice_name=${encodeURIComponent(invoiceName)}`, {
+      headers: { Authorization: `token ${s.apiKey}:${s.apiSecret}` }
+    });
+    if (!response.ok) return { data: null, error: await getResponseError(response) };
+    const body = await response.json() as { message?: unknown };
+    const data = asRecord(body.message);
+    return data ? { data, error: null } : { data: null, error: "Invoice data was not returned." };
+  } catch (error) {
+    return { data: null, error: error instanceof Error ? error.message : "Unable to load invoice." };
+  }
+}
+
+// Online refund submission. Electron never calls FBR — the server return hook handles FBR once.
+async function submitPosRefund(input: Record<string, unknown>): Promise<{ result: Record<string, unknown> | null; error: string | null }> {
+  const s = loadSettings();
+  if (!s.erpnextUrl || !s.apiKey || !s.apiSecret) return { result: null, error: "Online connection required to submit a refund." };
+  try {
+    const base = new URL(s.erpnextUrl).toString().replace(/\/+$/, "");
+    const response = await fetch(`${base}/api/method/aimatic.offline_pos.api.submit_pos_refund`, {
+      method: "POST",
+      headers: { Authorization: `token ${s.apiKey}:${s.apiSecret}`, "Content-Type": "application/json" },
+      body: JSON.stringify(input)
+    });
+    const rawBody = await response.text();
+    let parsed: { message?: unknown } = {};
+    try { parsed = JSON.parse(rawBody) as { message?: unknown }; } catch { /* non-JSON */ }
+    const result = asRecord(parsed.message);
+    if (!response.ok) return { result: result ?? null, error: formatResponseError(response.status, response.statusText, rawBody) };
+    return result ? { result, error: null } : { result: null, error: "Refund response was empty." };
+  } catch (error) {
+    return { result: null, error: error instanceof Error ? error.message : "Refund submission failed." };
+  }
+}
+
 function getPaymentMethods(): string[] { const profile=asRecord(getPosBootstrap(loadSettings().posProfile)?.pos_profile); const rows=Array.isArray(profile?.payments)?profile.payments:[]; return [...new Set(rows.map(asRecord).map((row)=>textValue(row,"mode_of_payment")).filter(Boolean))]; }
 
 async function fetchPagedList(baseUrl: string, apiKey: string, apiSecret: string, doctype: string, fields: string[], filters?: unknown): Promise<Record<string, unknown>[]> {
@@ -879,6 +919,8 @@ app.whenReady().then(() => {
   ipcMain.handle("history:get", (_event, id) => getSaleHistory(String(id)));
   ipcMain.handle("history:reprint", (_event, id) => recordReprint(String(id)));
   ipcMain.handle("sale:set-status", (_event, id, status) => setSaleHistoryStatus(String(id), String(status)));
+  ipcMain.handle("refund:get-invoice", (_event, invoiceName) => getInvoiceForRefund(String(invoiceName)));
+  ipcMain.handle("refund:submit", (_event, input) => submitPosRefund(asRecord(input) ?? {}));
   createMainWindow();
 
   app.on("activate", () => {

@@ -15,7 +15,7 @@ body { margin: 0; min-width: 320px; }
 #settings-screen { max-width: 1120px; margin: 0 auto; padding: 48px; }
 #pos-screen { height: 100vh; background: #eef3fa; display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; overflow: hidden; position: relative; }
 /* The hidden attribute must beat the ID-level display rules so only one screen shows at a time. */
-#pos-screen[hidden], #settings-screen[hidden], #start-shift-screen[hidden], #held-sales-screen[hidden], #sales-history-screen[hidden] { display: none !important; }
+#pos-screen[hidden], #settings-screen[hidden], #start-shift-screen[hidden], #held-sales-screen[hidden], #sales-history-screen[hidden], #refund-screen[hidden] { display: none !important; }
 .icon-button { font-size: 1.2rem; line-height: 1; padding: 8px 12px; }
 .session-warning { padding: 8px 16px; background: #fef3c7; color: #92400e; font-size: 0.85rem; font-weight: 700; }
 .session-overlay { position: absolute; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; background: rgb(15 23 42 / 78%); }
@@ -43,6 +43,17 @@ body { margin: 0; min-width: 320px; }
 .fbr-tag { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 0.72rem; font-weight: 700; }
 .fbr-tag.ok { background: #dcfce7; color: #15803d; }
 .fbr-tag.warn { background: #fef3c7; color: #b45309; }
+.fbr-tag.return { background: #fee2e2; color: #b91c1c; }
+
+/* --- Refund screen --- */
+.refund-original { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 4px 16px; margin-bottom: 14px; }
+.refund-original p { display: flex; justify-content: space-between; gap: 8px; margin: 2px 0; font-size: 0.86rem; }
+.refund-items-head, .refund-row { display: grid; grid-template-columns: 2.2fr .7fr .9fr .9fr .9fr 1fr 1fr; gap: 8px; align-items: center; }
+.refund-items-head { padding: 6px 12px; color: #64748b; font-size: 0.72rem; font-weight: 700; }
+.refund-row { padding: 10px 12px; border: 1px solid #dce3ee; border-radius: 8px; background: #fff; }
+.refund-row input { margin: 0; }
+.refund-row span:not(:first-child) { text-align: right; }
+#refund-total { color: #b91c1c; font-size: 1.2rem; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 
 header { margin-bottom: 42px; }

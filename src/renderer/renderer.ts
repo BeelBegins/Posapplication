@@ -57,6 +57,8 @@ interface PosAPI {
   getSaleHistory: (id: string) => Promise<SalesHistoryRow | null>;
   recordReprint: (id: string) => Promise<{ reprintCount: number; lastReprintedAt: string }>;
   setSaleStatus: (id: string, status: string) => Promise<void>;
+  getInvoiceForRefund: (invoiceName: string) => Promise<{ data: Record<string, unknown> | null; error: string | null }>;
+  submitPosRefund: (input: Record<string, unknown>) => Promise<{ result: Record<string, unknown> | null; error: string | null }>;
 }
 
 interface HeldSaleSummary { id: number; terminalInvoiceId: string; displayName: string; customer: string; customerName: string; posProfile: string; openingEntry: string; itemCount: number; estimatedTotal: number; createdAt: string; updatedAt: string; status: string; }
@@ -299,6 +301,10 @@ let receiptInvoice = "";                                     // POS Invoice name
 let changeDue = 0;                                           // cash tendered above the bill, to be returned (never recorded as payment)
 let resumedHeldId: number | null = null;                     // id of the held sale currently resumed (removed after successful submit)
 let receiptMode: "sale" | "history" = "sale";                // sale = just submitted (close starts new sale); history = duplicate view
+// --- Refund state ---
+let refundData: Record<string, unknown> | null = null;       // server get_pos_invoice_for_refund payload
+let refundTerminalId = "";                                   // persistent terminal_refund_id for the current refund operation
+let refundSubmitting = false;
 let paymentMethods: string[] = [];
 let selectedPaymentMethodIndex = 0;
 let paymentRows: PaymentRow[] = [];
@@ -322,8 +328,8 @@ function cartInput(): HTMLInputElement | null { return document.querySelector<HT
 function focusCart(): void { window.setTimeout(() => cartInput()?.focus(), 0); }
 function cartMessage(message: string): void { const e = document.querySelector<HTMLElement>("#cart-message"); if (e) e.textContent = message; }
 function clearCartSearch(): void { cartSearchResults = []; selectedSearchIndex = 0; const input = cartInput(); if (input) input.value = ""; document.querySelector<HTMLElement>("#cart-search-results")?.replaceChildren(); }
-type PosScreen = "pos" | "settings" | "start-shift" | "held-sales" | "sales-history";
-const screenIds: Record<PosScreen, string> = { pos: "#pos-screen", settings: "#settings-screen", "start-shift": "#start-shift-screen", "held-sales": "#held-sales-screen", "sales-history": "#sales-history-screen" };
+type PosScreen = "pos" | "settings" | "start-shift" | "held-sales" | "sales-history" | "refund";
+const screenIds: Record<PosScreen, string> = { pos: "#pos-screen", settings: "#settings-screen", "start-shift": "#start-shift-screen", "held-sales": "#held-sales-screen", "sales-history": "#sales-history-screen", refund: "#refund-screen" };
 // Switches the visible view without touching cart/customer/payment state.
 function showScreen(screen: PosScreen): void {
   for (const [key, selector] of Object.entries(screenIds)) { const el = document.querySelector<HTMLElement>(selector); if (el) el.hidden = key !== screen; }
@@ -906,7 +912,8 @@ async function renderSalesHistory():Promise<void>{
     const actions=document.createElement("div");actions.className="op-card-actions";
     const view=document.createElement("button");view.type="button";view.className="secondary-button";view.textContent="View Receipt";view.onclick=()=>void viewHistoryReceipt(row);
     const dup=document.createElement("button");dup.type="button";dup.textContent="Print Duplicate";dup.disabled=!row.posInvoice;dup.onclick=()=>void printDuplicate(row);
-    actions.append(view,dup);
+    const refund=document.createElement("button");refund.type="button";refund.className="secondary-button";refund.textContent="Refund";refund.disabled=!row.posInvoice||row.status!=="Submitted";refund.onclick=()=>void openRefund(row.posInvoice??"");
+    actions.append(view,dup,refund);
     card.append(main,actions);return card;
   }));
 }
@@ -959,6 +966,140 @@ async function printDuplicate(row:SalesHistoryRow):Promise<void>{
     if(printResult.success){const rec=await window.posAPI.recordReprint(row.terminalInvoiceId);if(msg)msg.textContent=`Duplicate sent to printer (reprint #${rec.reprintCount}).`;}
     else if(msg)msg.textContent=`Print failed: ${printResult.error??"Unknown error"}`;
   }catch(error){if(msg)msg.textContent=error instanceof Error?`Reprint failed: ${error.message}`:"Reprint failed";}
+}
+
+// ---------------- Phase F: Online Refund / Return ----------------
+function refundItemRows():Record<string,unknown>[]{ return Array.isArray(refundData?.items)?(refundData!.items as Record<string,unknown>[]):[]; }
+
+// Entry point from Sales History (an original submitted sale). Loads authoritative data from the server.
+async function openRefund(posInvoice:string):Promise<void>{
+  if(!posInvoice){cartMessage("No invoice selected");return;}
+  if(!isOnline()){const hm=document.querySelector<HTMLElement>("#history-message");if(hm)hm.textContent="Online connection required for refunds.";return;}
+  const hm=document.querySelector<HTMLElement>("#history-message");if(hm)hm.textContent="Loading invoice…";
+  const result=await window.posAPI.getInvoiceForRefund(posInvoice);
+  if(!result.data){if(hm)hm.textContent=`Cannot open refund: ${result.error??"Unknown error"}`;return;}
+  if(hm)hm.textContent="";
+  refundData=result.data;
+  refundTerminalId=crypto.randomUUID();  // one persistent id per refund operation (kept across retries)
+  await renderRefundScreen();
+  showScreen("refund");
+}
+
+async function renderRefundScreen():Promise<void>{
+  if(!refundData)return;
+  const d=refundData;
+  const orig=document.querySelector<HTMLElement>("#refund-original");
+  if(orig){const pair=(label:string,value:string)=>{const p=document.createElement("p");const a=document.createElement("span");a.textContent=label;const b=document.createElement("strong");b.textContent=value;p.append(a,b);return p;};
+    orig.replaceChildren(
+      pair("Original Invoice",String(d.original_invoice??"—")),
+      pair("Posting",`${String(d.posting_date??"")} ${String(d.posting_time??"")}`),
+      pair("Customer",String(d.customer_name??d.customer??"—")),
+      pair("Original FBR #",String(d.fbr_invoice_number??"—")),
+      pair("Original Grand Total",(previewNumber(d,"grand_total")??0).toFixed(2)),
+      pair("Company",String(d.company??"—")));
+  }
+  const box=document.querySelector<HTMLElement>("#refund-items");
+  if(box)box.replaceChildren(...refundItemRows().map((it)=>buildRefundRow(it)));
+  const reason=document.querySelector<HTMLInputElement>("#refund-reason"); if(reason)reason.value="";
+  const msg=document.querySelector<HTMLElement>("#refund-message"); if(msg)msg.textContent="";
+  // Populate refund payment modes from the active POS Profile.
+  const select=document.querySelector<HTMLSelectElement>("#refund-mode");
+  if(select){const modes=await window.posAPI.getPaymentMethods();select.replaceChildren(...modes.map(m=>new Option(m,m)));const original=Array.isArray(d.payments)?d.payments:[];const firstMode=original.length?String((asTotalsRecord(original[0])??{}).mode_of_payment??""):"";if(firstMode&&modes.includes(firstMode))select.value=firstMode;}
+  computeRefundTotal();
+}
+
+function buildRefundRow(it:Record<string,unknown>):HTMLElement{
+  const remaining=previewNumber(it,"remaining_qty")??0;
+  const rate=previewNumber(it,"rate")??0;
+  const row=document.createElement("div");row.className="refund-row";
+  const cells:(string|HTMLElement)[]=[
+    `${String(it.item_code??"")} — ${String(it.item_name??"")}`,
+    String(previewNumber(it,"sold_qty")??0),
+    String(previewNumber(it,"already_returned_qty")??0),
+    remaining.toFixed(3),
+    rate.toFixed(2)
+  ];
+  const input=document.createElement("input");input.type="number";input.min="0";input.step="0.001";input.value="0";
+  input.dataset.rowName=String(it.row_name??"");input.dataset.remaining=String(remaining);input.dataset.rate=String(rate);
+  input.max=String(remaining);
+  input.addEventListener("input",()=>{let v=Number(input.value)||0;if(v<0)v=0;if(v>remaining){v=remaining;input.value=String(remaining);}computeRefundTotal();});
+  const est=document.createElement("span");est.className="refund-est";est.textContent="0.00";
+  const container=document.createElement("div");container.className="refund-row";
+  cells.forEach((c)=>{const s=document.createElement("span");if(typeof c==="string")s.textContent=c;else s.append(c);container.append(s);});
+  const qtyCell=document.createElement("span");qtyCell.append(input);container.append(qtyCell);
+  container.append(est);
+  return container;
+}
+
+function computeRefundTotal():void{
+  let total=0;
+  document.querySelectorAll<HTMLInputElement>("#refund-items input[type=number]").forEach((input)=>{
+    const qty=Number(input.value)||0;const rate=Number(input.dataset.rate)||0;const est=qty*rate;
+    const estSpan=input.closest(".refund-row")?.querySelector<HTMLElement>(".refund-est");
+    if(estSpan)estSpan.textContent=est.toFixed(2);
+    total+=est;
+  });
+  setCartText("#refund-total",total.toFixed(2));
+}
+
+function setRefundFull():void{ document.querySelectorAll<HTMLInputElement>("#refund-items input[type=number]").forEach((input)=>{input.value=String(Number(input.dataset.remaining)||0);});computeRefundTotal(); }
+function clearRefundQty():void{ document.querySelectorAll<HTMLInputElement>("#refund-items input[type=number]").forEach((input)=>{input.value="0";});computeRefundTotal(); }
+
+async function submitRefund():Promise<void>{
+  if(refundSubmitting||!refundData)return;
+  const msg=document.querySelector<HTMLElement>("#refund-message");
+  if(!isOnline()){if(msg)msg.textContent="Online connection required to submit a refund.";return;}
+  if(!(await validateSession("refund"))){if(msg)msg.textContent=sessionState.reason||"POS session is not active.";return;}
+  const items:{original_row_name:string;qty:number}[]=[];
+  document.querySelectorAll<HTMLInputElement>("#refund-items input[type=number]").forEach((input)=>{const qty=Number(input.value)||0;if(qty>0)items.push({original_row_name:input.dataset.rowName??"",qty});});
+  if(!items.length){if(msg)msg.textContent="Enter at least one refund quantity.";return;}
+  const mode=document.querySelector<HTMLSelectElement>("#refund-mode")?.value??"";
+  if(!mode){if(msg)msg.textContent="Select a refund mode of payment.";return;}
+  const reason=document.querySelector<HTMLInputElement>("#refund-reason")?.value??"";
+  refundSubmitting=true;const btn=document.querySelector<HTMLButtonElement>("#refund-submit");if(btn)btn.disabled=true;if(msg)msg.textContent="Submitting Refund…";
+  // terminal_refund_id is NOT regenerated on retry — idempotency is server-enforced.
+  const payload={terminal_refund_id:refundTerminalId,original_invoice:refundData.original_invoice,pos_opening_entry:sessionState.openingEntry,reason,items,payments:[{mode_of_payment:mode,amount:0}]};
+  const result=await window.posAPI.submitPosRefund(payload);
+  refundSubmitting=false;if(btn)btn.disabled=false;
+  const res=result.result;
+  if(!res||res.success!==true){if(msg)msg.textContent=`Refund failed: ${result.error??"Unknown error"}`;return;}
+  if(msg)msg.textContent=res.duplicate?"Refund already existed (idempotent) — showing existing return.":"Refund submitted.";
+  await showRefundReceipt(res);
+}
+
+async function showRefundReceipt(res:Record<string,unknown>):Promise<void>{
+  receiptMode="history"; // close just closes; never starts a new sale
+  const invoice=asTotalsRecord(res.invoice)??{};
+  const returnName=String(invoice.name??"");
+  receiptInvoice=returnName;
+  setCartText("#receipt-title",`REFUND / RETURN — ${returnName||"Unknown"}`);
+  const printBtn=document.querySelector<HTMLButtonElement>("#receipt-print"); if(printBtn)printBtn.hidden=false;
+  const dupBtn=document.querySelector<HTMLButtonElement>("#receipt-duplicate"); if(dupBtn)dupBtn.hidden=true;
+  const closeBtn=document.querySelector<HTMLButtonElement>("#receipt-close"); if(closeBtn)closeBtn.textContent="Close";
+  setCartText("#receipt-invoice",returnName||"—");
+  setCartText("#receipt-posting",`${String(invoice.posting_date??"")} ${String(invoice.posting_time??"")}`);
+  setCartText("#receipt-cashier",document.querySelector<HTMLElement>("#pos-cashier")?.textContent??"—");
+  setCartText("#receipt-customer",String(invoice.customer??"—"));
+  const items=Array.isArray(res.items)?res.items:[];
+  const itemsBox=document.querySelector<HTMLElement>("#receipt-items");
+  if(itemsBox)itemsBox.replaceChildren(...items.map((it)=>{const r=asTotalsRecord(it)??{};const div=document.createElement("div");div.className="receipt-item";[String(r.item_code??""),(previewNumber(r,"qty")??0).toFixed(3),(previewNumber(r,"rate")??0).toFixed(2),(previewNumber(r,"amount")??0).toFixed(2)].forEach(t=>{const s=document.createElement("span");s.textContent=t;div.append(s);});return div;}));
+  const grand=previewNumber(invoice,"grand_total")??0;
+  setCartText("#receipt-before-tax","");setCartText("#receipt-sales-tax","");setCartText("#receipt-service-fee","0.00");
+  setCartText("#receipt-grand-total",grand.toFixed(2));
+  const payments=Array.isArray(res.payments)?res.payments:[];
+  const payBox=document.querySelector<HTMLElement>("#receipt-payments");
+  if(payBox)payBox.replaceChildren(...payments.map((p)=>{const r=asTotalsRecord(p)??{};const el=document.createElement("p");const a=document.createElement("span");a.textContent=String(r.mode_of_payment??"");const b=document.createElement("strong");b.textContent=(previewNumber(r,"amount")??0).toFixed(2);el.append(a,b);return el;}));
+  setCartText("#receipt-change","0.00");
+  const fbr=asTotalsRecord(res.fbr)??{};
+  const fbrStatus=String(fbr.status??"Pending");const fbrNumber=String(fbr.invoice_number??"");
+  setCartText("#receipt-fbr-status",fbrStatus);setCartText("#receipt-fbr-number",fbrNumber||"—");
+  const badge=document.querySelector<HTMLElement>("#receipt-fbr-badge");if(badge){const ok=fbrStatus==="Accepted";badge.textContent=`FBR ${fbrStatus}`;badge.className=`fbr-badge ${ok?"ok":"warn"}`;}
+  const qrBox=document.querySelector<HTMLElement>("#receipt-qr");if(qrBox)qrBox.replaceChildren();
+  lastReceiptHtml=null;
+  const frame=document.querySelector<HTMLIFrameElement>("#receipt-frame");if(frame){frame.removeAttribute("srcdoc");frame.hidden=true;}
+  const structured=document.querySelector<HTMLElement>("#receipt-structured");if(structured)structured.hidden=false;
+  document.querySelector<HTMLDialogElement>("#receipt-dialog")?.showModal();
+  if(returnName)await retrieveReceipt(returnName);
 }
 
 async function loadCustomerBenefits():Promise<void>{if(!selectedCustomer)return;if(!isOnline()){customerBenefits={loyaltyProgram:"",availablePoints:0,conversionFactor:1};return;}try{const result=await window.posAPI.getCustomerBenefits(selectedCustomer.name);customerBenefits={loyaltyProgram:result.loyaltyProgram??"",availablePoints:result.availablePoints,conversionFactor:result.conversionFactor};}catch{customerBenefits={loyaltyProgram:"",availablePoints:0,conversionFactor:1};}}
@@ -1520,6 +1661,11 @@ window.addEventListener("DOMContentLoaded", () => {
   document.querySelector<HTMLButtonElement>('#history-refresh')?.addEventListener('click', () => void renderSalesHistory());
   document.querySelector<HTMLInputElement>('#history-search')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); void renderSalesHistory(); } });
   document.querySelector<HTMLButtonElement>('#session-hold')?.addEventListener('click', () => void holdCurrentSale());
+  // Refund controls (registered once).
+  document.querySelector<HTMLButtonElement>('#refund-back')?.addEventListener('click', () => void openSalesHistory());
+  document.querySelector<HTMLButtonElement>('#refund-full')?.addEventListener('click', () => setRefundFull());
+  document.querySelector<HTMLButtonElement>('#refund-clear')?.addEventListener('click', () => clearRefundQty());
+  document.querySelector<HTMLButtonElement>('#refund-submit')?.addEventListener('click', () => void submitRefund());
   // Escape must not silently discard a submitted-but-unclosed receipt; require the explicit button.
   document.querySelector<HTMLDialogElement>('#receipt-dialog')?.addEventListener('cancel', (e) => e.preventDefault());
   // Benefits dialog controls

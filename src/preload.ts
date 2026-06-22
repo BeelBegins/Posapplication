@@ -74,4 +74,6 @@ contextBridge.exposeInMainWorld("posAPI", {
   ,getSaleHistory: (id: string) => ipcRenderer.invoke("history:get", id)
   ,recordReprint: (id: string) => ipcRenderer.invoke("history:reprint", id)
   ,setSaleStatus: (id: string, status: string) => ipcRenderer.invoke("sale:set-status", id, status)
+  ,getInvoiceForRefund: (invoiceName: string) => ipcRenderer.invoke("refund:get-invoice", invoiceName)
+  ,submitPosRefund: (input: Record<string, unknown>) => ipcRenderer.invoke("refund:submit", input)
 });

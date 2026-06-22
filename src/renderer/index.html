@@ -263,6 +263,24 @@
         <div id="history-list" class="op-list"></div>
       </section>
 
+      <section id="refund-screen" class="app-screen op-screen" hidden>
+        <header class="op-header"><h2>Refund / Return</h2><button id="refund-back" type="button" class="secondary-button">Back</button></header>
+        <div id="refund-original" class="refund-original"></div>
+        <div class="refund-items-head"><span>Item</span><span>Sold</span><span>Returned</span><span>Remaining</span><span>Rate</span><span>Refund Qty</span><span>Est. Refund</span></div>
+        <div id="refund-items" class="op-list"></div>
+        <div class="op-filters">
+          <label>Reason<input id="refund-reason" type="text" placeholder="Reason for return" /></label>
+          <label>Refund Mode of Payment<select id="refund-mode"></select></label>
+        </div>
+        <p>Estimated Refund Total <strong id="refund-total">0.00</strong></p>
+        <div class="form-actions">
+          <button id="refund-full" type="button" class="secondary-button">Full Refund</button>
+          <button id="refund-clear" type="button" class="secondary-button">Clear Quantities</button>
+          <button id="refund-submit" type="button">Submit Refund</button>
+        </div>
+        <p id="refund-message" class="settings-message"></p>
+      </section>
+
       <dialog id="receipt-dialog" class="customer-dialog receipt-dialog">
         <div class="receipt-head"><h3 id="receipt-title">Receipt Preview</h3><span id="receipt-fbr-badge" class="fbr-badge"></span></div>
         <p id="receipt-message" class="settings-message"></p>
