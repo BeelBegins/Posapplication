@@ -15,28 +15,22 @@
         <p class="intro">Your point-of-sale workspace is ready for setup.</p>
       </header>
 
-      <section class="status-grid" aria-label="Application status">
-        <article class="status-card">
-          <span class="status-label">Server Status</span>
-          <strong id="server-status">Not Connected</strong>
-        </article>
-        <article class="status-card">
-          <span class="status-label">Mode</span>
-          <strong>Setup Required</strong>
-        </article>
-        <article class="status-card">
-          <span class="status-label">SQLite</span>
-          <strong id="sqlite-status">Checking...</strong>
-          <small class="database-path">
-            Database Path: <span id="database-path">Database path unavailable</span>
-          </small>
-        </article>
-        <article class="status-card">
-          <span class="status-label">POS Profile Cache</span>
-          <strong id="profile-cache-status">Checking...</strong>
-          <small class="database-path">Last Synced: <span id="profile-cache-synced">Not synced</span></small>
-        </article>
-      </section>
+      <div class="settings-topbar">
+        <span id="setup-overall-badge" class="status-badge warn">Setup Required</span>
+        <span class="topbar-user">User <strong id="setup-logged-user">—</strong></span>
+        <span id="setup-online-indicator" class="online-dot offline">Offline</span>
+      </div>
+      <ol id="setup-progress" class="setup-progress">
+        <li data-step="settings"><span class="step-dot"></span>Settings loaded</li>
+        <li data-step="server"><span class="step-dot"></span>Server connected</li>
+        <li data-step="auth"><span class="step-dot"></span>Authenticated</li>
+        <li data-step="profile"><span class="step-dot"></span>POS Profile loaded</li>
+        <li data-step="config"><span class="step-dot"></span>Configuration ready</li>
+        <li data-step="session"><span class="step-dot"></span>Session active</li>
+        <li data-step="catalogue"><span class="step-dot"></span>Catalogue available</li>
+        <li data-step="customers"><span class="step-dot"></span>Customers available</li>
+        <li data-step="fbr"><span class="step-dot"></span>FBR configuration available</li>
+      </ol>
 
       <section class="setup-card" aria-labelledby="setup-title">
         <button id="back-to-pos" type="button" class="secondary-button">Back to POS</button>
@@ -77,21 +71,41 @@
             Warehouse
             <input id="warehouse" name="warehouse" type="text" />
           </label>
-          <div class="form-actions">
-            <button type="submit">Save Settings</button>
-            <button id="load-settings" type="button" class="secondary-button">Load Settings</button>
-            <button id="test-server" type="button" class="secondary-button">Test Server</button>
-            <button id="test-login" type="button" class="secondary-button">Test Login</button>
-            <button id="load-pos-profile" type="button" class="secondary-button">Load POS Profile</button>
-            <button id="sync-pos-configuration" type="button" class="secondary-button">Sync POS Configuration</button>
-            <button id="sync-pos-session" type="button" class="secondary-button">Sync POS Session</button>
-            <button id="sync-item-catalog" type="button" class="secondary-button">Sync Item Catalog</button>
-            <button id="sync-customers" type="button" class="secondary-button">Sync Customers</button>
-            <button id="sync-fbr-config" type="button" class="secondary-button">Sync FBR Configuration</button>
+          <div class="form-actions primary-row">
+            <button id="complete-setup" type="submit" class="primary-action">Save and Complete Setup</button>
+            <button id="refresh-config" type="button" class="secondary-button">Refresh Configuration</button>
             <p id="settings-message" class="settings-message" role="status"></p>
             <p id="login-result" class="login-result" role="status"></p>
           </div>
         </form>
+
+        <section class="sync-card" aria-label="Synchronization">
+          <h3>Synchronization</h3>
+          <div id="sync-rows" class="sync-rows"></div>
+        </section>
+
+        <details class="diagnostics-block">
+          <summary>Advanced Diagnostics</summary>
+          <div class="diagnostics-body">
+            <div class="diag-status">
+              <span>Server: <strong id="server-status">Not Connected</strong></span>
+              <span>SQLite: <strong id="sqlite-status">Checking…</strong></span>
+              <span class="database-path">DB: <span id="database-path">—</span></span>
+              <span>POS Profile Cache: <strong id="profile-cache-status">—</strong> (<span id="profile-cache-synced">—</span>)</span>
+            </div>
+            <div class="form-actions">
+              <button id="load-settings" type="button" class="secondary-button">Load Settings</button>
+              <button id="test-server" type="button" class="secondary-button">Test Server</button>
+              <button id="test-login" type="button" class="secondary-button">Test Authentication</button>
+              <button id="load-pos-profile" type="button" class="secondary-button">Force Reload POS Profiles</button>
+              <button id="sync-pos-configuration" type="button" class="secondary-button">Force Full POS Configuration Sync</button>
+              <button id="sync-pos-session" type="button" class="secondary-button">Refresh POS Session</button>
+              <button id="sync-item-catalog" type="button" class="secondary-button">Force Full Item Catalogue Sync</button>
+              <button id="sync-customers" type="button" class="secondary-button">Force Full Customer Sync</button>
+              <button id="sync-fbr-config" type="button" class="secondary-button">Force Full FBR Configuration Sync</button>
+            </div>
+          </div>
+        </details>
 
         <section id="pos-profile-details" class="profile-details" hidden aria-live="polite">
           <h3>POS Profile</h3>

@@ -19,6 +19,7 @@ interface PosAPI {
   getCachedPosSession: () => Promise<PosSessionSummary>;
   syncItemCatalog: () => Promise<{ success: boolean; totals: CatalogTotals; barcodeError: string | null; error: string | null }>;
   syncFbrConfig: () => Promise<{ success: boolean; state: { serviceFee: number }; error: string | null }>;
+  getFbrSyncState: () => Promise<{ itemCount: number; serviceFee: number; lastSynced: string | null; ready: boolean }>;
   getCatalogTotals: () => Promise<CatalogTotals>;
   searchCatalog: (query: string) => Promise<CatalogSearchResult[]>;
   onCatalogProgress: (callback: (message: string) => void) => void;
@@ -653,7 +654,18 @@ async function submitCurrentSale():Promise<void>{
   // Submission payload unchanged; terminal_invoice_id is preserved across retries (only regenerated after Close & Start New Sale).
   const result=await window.posAPI.submitSale({terminal_invoice_id:terminalInvoiceId,terminal_id:terminal,pos_profile:profile,opening_entry:opening,customer:customer.name,items:cartLines.map(x=>({item_code:x.itemCode,qty:x.quantity,uom:x.uom,barcode:x.barcode??undefined})),payments:paymentRows.map(x=>({mode_of_payment:x.method,amount:x.amount})),coupon_code:appliedBenefits.couponCode,redeem_loyalty_points:appliedBenefits.loyaltyPoints>0,loyalty_points:appliedBenefits.loyaltyPoints});
   submissionInProgress=false;
-  if(!result.success||!result.response?.pos_invoice){cartMessage(`Submission Failed: ${result.error??"Missing POS Invoice"}`);updateCompleteSaleState();return;}
+  if(!result.success||!result.response?.pos_invoice){
+    const submitError=result.error??"Missing POS Invoice";
+    cartMessage(`Submission Failed: ${submitError}`);
+    // The server can reject a still-"Open" entry as outdated/closed at submit time, even though
+    // get_active_pos_session reported it active. Surface the Start Shift / refresh path (cart preserved).
+    if(/outdated|opening entry|create a new pos opening|no open pos opening|opening shift|pos closing/i.test(submitError)){
+      failSession(submitError);
+      showSessionInvalid(submitError);
+    }
+    updateCompleteSaleState();
+    return;
+  }
   // Success: store authoritative response first, keep the cart, then open the receipt preview.
   lastSaleResponse=result.response;
   // Only after a confirmed successful submission: remove the resumed held draft so it can't be resumed again.
@@ -1279,35 +1291,150 @@ async function goToPos(): Promise<void> {
   else { showScreen("pos"); showSessionInvalid(sessionState.reason); }
 }
 
-async function runStartup(): Promise<void> {
+// ===================== Startup bootstrap + background sync orchestration =====================
+type SetupStepState = "pending" | "running" | "complete" | "warning" | "failed";
+type SetupStep = "settings" | "server" | "auth" | "profile" | "config" | "session" | "catalogue" | "customers" | "fbr";
+const ALL_STEPS: SetupStep[] = ["settings", "server", "auth", "profile", "config", "session", "catalogue", "customers", "fbr"];
+let setupCompleted = false;             // becomes true after the first successful bootstrap (renames the primary button)
+let bootstrapPromise: Promise<void> | null = null;
+
+// Freshness windows (ms) — drive both startup refresh and the background scheduler.
+const SYNC_FRESH = { items: 15 * 60_000, customers: 30 * 60_000, fbr: 12 * 3_600_000, config: 12 * 3_600_000 } as const;
+type SyncKey = "items" | "customers" | "fbr" | "config";
+const syncLocks: Record<SyncKey, boolean> = { items: false, customers: false, fbr: false, config: false };
+let backgroundSyncStarted = false;
+
+function setStep(step: SetupStep, state: SetupStepState): void { const li = document.querySelector<HTMLElement>(`#setup-progress li[data-step="${step}"]`); if (li) li.dataset.state = state; }
+function setOverallBadge(text: string, kind: "ok" | "warn" | "err" | "info"): void { const badge = document.querySelector<HTMLElement>("#setup-overall-badge"); if (badge) { badge.textContent = text; badge.className = `status-badge ${kind}`; } }
+function setOnlineIndicator(online: boolean): void { const el = document.querySelector<HTMLElement>("#setup-online-indicator"); if (el) { el.textContent = online ? "Online" : "Offline"; el.className = `online-dot ${online ? "online" : "offline"}`; } const primary = document.querySelector<HTMLButtonElement>("#complete-setup"); if (primary) primary.textContent = setupCompleted ? "Refresh Setup" : "Save and Complete Setup"; }
+function setLoggedUser(user: string): void { setCartText("#setup-logged-user", user || "—"); }
+function ageMs(iso: string | null | undefined): number { if (!iso) return Number.POSITIVE_INFINITY; const t = new Date(iso).getTime(); return Number.isNaN(t) ? Number.POSITIVE_INFINITY : Date.now() - t; }
+function relativeTime(iso: string | null | undefined): string { if (!iso) return "never"; const ms = ageMs(iso); if (!Number.isFinite(ms)) return "never"; const min = Math.floor(ms / 60000); if (min < 1) return "just now"; if (min < 60) return `${min}m ago`; const h = Math.floor(min / 60); if (h < 24) return `${h}h ago`; return new Date(iso).toLocaleDateString(); }
+
+// True while a sale/refund/payment is being finalised — background full-syncs must not run then.
+function txnInProgress(): boolean { return submissionInProgress || refundSubmitting || Boolean(document.querySelector<HTMLDialogElement>("#payment-dialog")?.open); }
+
+// One lock per dataset so a manual click and the scheduler never run the same sync twice.
+async function runGuardedSync(key: SyncKey, run: () => Promise<void>): Promise<void> {
+  if (syncLocks[key] || !isOnline()) return;
+  syncLocks[key] = true; void renderSyncStatus();
+  try { await run(); } catch { /* keep existing cache; row will show the stale/error state */ } finally { syncLocks[key] = false; void renderSyncStatus(); }
+}
+async function syncConfigNow(): Promise<void> { await runGuardedSync("config", async () => { const r = await window.posAPI.syncPosConfiguration(); if (r.summary) showPosConfigurationSummary(r.summary); }); }
+async function syncItemsNow(): Promise<void> { await runGuardedSync("items", async () => { const r = await window.posAPI.syncItemCatalog(); showCatalogTotals(r.totals); }); }
+async function syncCustomersNow(): Promise<void> { await runGuardedSync("customers", async () => { await window.posAPI.syncCustomers(); }); }
+async function syncFbrNow(): Promise<void> { await runGuardedSync("fbr", async () => { await window.posAPI.syncFbrConfig(); }); }
+
+// Single background scheduler: triggers only datasets that are actually stale, never during a transaction.
+async function backgroundSyncTick(): Promise<void> {
+  if (!isOnline() || txnInProgress()) return;
+  try {
+    const totals = await window.posAPI.getCatalogTotals(); if (ageMs(totals.lastSynced) > SYNC_FRESH.items) void syncItemsNow();
+    const cust = await window.posAPI.getCustomerSyncState(); if (ageMs(cust.lastSynced) > SYNC_FRESH.customers) void syncCustomersNow();
+    const fbr = await window.posAPI.getFbrSyncState(); if (ageMs(fbr.lastSynced) > SYNC_FRESH.fbr) void syncFbrNow();
+    const cfg = await window.posAPI.getCachedPosConfiguration(); if (!cfg || ageMs(cfg.lastSynced) > SYNC_FRESH.config) void syncConfigNow();
+  } catch { /* ignore — next tick retries */ }
+  void renderSyncStatus();
+}
+function startBackgroundSync(): void { if (backgroundSyncStarted) return; backgroundSyncStarted = true; void backgroundSyncTick(); window.setInterval(() => { void backgroundSyncTick(); }, 60_000); }
+
+function buildSyncRow(key: SyncKey, name: string, detail: string, lastSynced: string | null, retry: () => void): HTMLElement {
+  const has = lastSynced != null;
+  const state: SetupStepState = syncLocks[key] ? "running" : !has ? "pending" : ageMs(lastSynced) > SYNC_FRESH[key] ? "warning" : "complete";
+  const icon = state === "running" ? "⟳" : state === "complete" ? "✓" : state === "warning" ? "!" : "•";
+  const row = document.createElement("div"); row.className = "sync-row"; row.dataset.state = state;
+  const main = document.createElement("div"); main.className = "sync-row-main";
+  const title = document.createElement("div"); title.className = "sync-row-title"; title.textContent = `${icon} ${name}`;
+  const meta = document.createElement("div"); meta.className = "sync-row-meta"; meta.textContent = `${detail || "—"} · ${syncLocks[key] ? "Syncing…" : has ? `Last synced ${relativeTime(lastSynced)}` : "Not synced"}`;
+  main.append(title, meta);
+  const btn = document.createElement("button"); btn.type = "button"; btn.className = "secondary-button"; btn.textContent = state === "warning" ? "Refresh" : "Sync"; btn.disabled = syncLocks[key]; btn.onclick = retry;
+  row.append(main, btn);
+  return row;
+}
+async function renderSyncStatus(): Promise<void> {
+  const box = document.querySelector<HTMLElement>("#sync-rows"); if (!box) return;
+  const [totals, cust, fbr, cfg] = await Promise.all([
+    window.posAPI.getCatalogTotals(), window.posAPI.getCustomerSyncState(), window.posAPI.getFbrSyncState(), window.posAPI.getCachedPosConfiguration()
+  ]);
+  box.replaceChildren(
+    buildSyncRow("config", "POS Configuration", cfg ? `${cfg.taxRowsCount} tax rows · ${cfg.paymentMethodsCount} modes` : "no cache", cfg ? cfg.lastSynced : null, () => void syncConfigNow()),
+    buildSyncRow("items", "Item Catalogue", `${totals.items} items · ${totals.barcodes} barcodes`, totals.lastSynced, () => void syncItemsNow()),
+    buildSyncRow("customers", "Customers", `${cust.count} customers`, cust.lastSynced, () => void syncCustomersNow()),
+    buildSyncRow("fbr", "FBR Configuration", `${fbr.itemCount} items · fee ${fbr.serviceFee}`, fbr.lastSynced, () => void syncFbrNow())
+  );
+}
+async function markDataAvailabilityFromCache(): Promise<void> {
+  const totals = await window.posAPI.getCatalogTotals(); setStep("catalogue", totals.items > 0 ? (ageMs(totals.lastSynced) > SYNC_FRESH.items ? "warning" : "complete") : "pending");
+  const cust = await window.posAPI.getCustomerSyncState(); setStep("customers", cust.count > 0 ? (ageMs(cust.lastSynced) > SYNC_FRESH.customers ? "warning" : "complete") : "pending");
+  const fbr = await window.posAPI.getFbrSyncState(); setStep("fbr", fbr.itemCount > 0 ? (ageMs(fbr.lastSynced) > SYNC_FRESH.fbr ? "warning" : "complete") : "pending");
+}
+
+// Single entry point for all startup/refresh flows. Reuses the in-flight promise to prevent duplicate chains.
+function runPosBootstrap(reason: string): Promise<void> {
+  if (bootstrapPromise) return bootstrapPromise;
+  bootstrapPromise = runStartup(reason).finally(() => { bootstrapPromise = null; });
+  return bootstrapPromise;
+}
+
+async function runStartup(reason: string = "startup"): Promise<void> {
+  void reason;
   const progress = document.querySelector<HTMLElement>("#startup-progress"); const retry = document.querySelector<HTMLButtonElement>("#retry-startup");
   const serverStatus = document.querySelector<HTMLElement>("#pos-server-status");
+  ALL_STEPS.forEach((s) => setStep(s, "pending"));
   try {
-    if (retry) retry.hidden = true; if (progress) progress.textContent = "Connecting";
+    if (retry) retry.hidden = true;
+    // 1) Settings
+    setStep("settings", "running"); if (progress) progress.textContent = "Loading settings…";
     await loadSettingsIntoForm();
-    // Settings / authentication missing -> Settings.
     const saved = await window.posAPI.loadSettings();
-    if (!saved.erpnextUrl || !saved.apiKey || !saved.hasApiSecret || !saved.posProfile) { if (progress) progress.textContent = "Terminal settings required"; showSettingsMessage("Complete terminal settings to begin."); showScreen("settings"); return; }
-    const server = await window.posAPI.testServer();
-    if (!server.connected) { if (serverStatus) serverStatus.textContent = "Offline"; prevServerConnected = false; if (progress) progress.textContent = "Server not connected"; showSettingsMessage("Server not reachable. Check ERPNext URL / connection."); showScreen("settings"); return; }
-    if (serverStatus) serverStatus.textContent = "Online"; prevServerConnected = true;
+    if (!saved.erpnextUrl || !saved.apiKey || !saved.hasApiSecret || !saved.terminalId) {
+      setStep("settings", "failed"); setOverallBadge("Setup Required", "warn");
+      if (progress) progress.textContent = "Terminal settings required"; showSettingsMessage("Enter ERPNext URL, API Key/Secret and Terminal ID, then Save and Complete Setup."); showScreen("settings"); return;
+    }
+    setStep("settings", "complete");
+    // 2) Server (silent)
+    setStep("server", "running"); if (progress) progress.textContent = "Testing server…";
+    const server = await window.posAPI.testServer(); setOnlineIndicator(server.connected);
+    if (!server.connected) {
+      setStep("server", "warning"); if (serverStatus) serverStatus.textContent = "Offline"; prevServerConnected = false; showServerStatus(false);
+      // Offline but cached config exists -> open POS on cached data instead of forcing Settings.
+      const cachedCfg = await window.posAPI.getCachedPosConfiguration();
+      if (cachedCfg) {
+        showPosConfigurationSummary(cachedCfg); await loadCachedPosSession(); updatePosHeader();
+        ["config", "catalogue", "customers", "fbr"].forEach((s) => setStep(s as SetupStep, "warning"));
+        setOverallBadge("Ready Using Cached Data", "warn"); if (progress) progress.textContent = "Offline — using cached data";
+        setupCompleted = true; void renderSyncStatus(); showScreen("pos"); return;
+      }
+      setOverallBadge("Setup Required", "warn"); if (progress) progress.textContent = "Server not reachable"; showSettingsMessage("Server not reachable and no cached configuration. Check ERPNext URL / connection."); showScreen("settings"); return;
+    }
+    setStep("server", "complete"); if (serverStatus) serverStatus.textContent = "Online"; prevServerConnected = true; showServerStatus(true);
+    // 3) Authenticate
+    setStep("auth", "running"); if (progress) progress.textContent = "Authenticating…";
     const login = await window.posAPI.testLogin();
-    if (!login.success) { if (progress) progress.textContent = "Login Failed"; showSettingsMessage("Authentication failed. Check API Key and Secret."); showScreen("settings"); return; }
-    authenticatedUser = login.loggedUser ?? "";
-    if (progress) progress.textContent = "Authenticated";
+    if (!login.success) { setStep("auth", "failed"); setOverallBadge("Action Required", "err"); if (progress) progress.textContent = "Authentication failed"; showSettingsMessage("Authentication failed. The API key or secret is invalid."); showLoginResult("Authentication failed — check API Key/Secret."); showScreen("settings"); return; }
+    authenticatedUser = login.loggedUser ?? ""; setStep("auth", "complete"); setLoggedUser(authenticatedUser); showLoginResult(`Logged in as ${authenticatedUser}`);
+    // 4) Profiles + selected profile
+    setStep("profile", "running"); if (progress) progress.textContent = "Loading POS Profile…";
     await populatePosProfileDropdown();
     const profile = await window.posAPI.loadPosProfile();
-    if (!profile.success) { if (progress) progress.textContent = profile.error ?? "POS Profile Load Failed"; showSettingsMessage(profile.error ?? "POS Profile load failed."); showScreen("settings"); return; }
-    showPosProfile(profile.profile, profile.error); if (progress) progress.textContent = "POS Profile Loaded";
+    if (!profile.success) { setStep("profile", "failed"); setOverallBadge("Action Required", "err"); if (progress) progress.textContent = profile.error ?? "POS Profile load failed"; showSettingsMessage(profile.error ?? "POS Profile load failed."); showScreen("settings"); return; }
+    showPosProfile(profile.profile, profile.error); setStep("profile", "complete");
     if (profile.profile?.customer) { const defaultCustomer={ name: profile.profile.customer, customer_name: profile.profile.customer, customer_group: "", mobile_no: "", email_id: "", tax_id: "" }; selectedCustomer=defaultCustomer; const customer=await window.posAPI.loadCustomer(defaultCustomer.name); if(customer.customer) selectedCustomer={...defaultCustomer,customer_name:String(customer.customer.customer_name??defaultCustomer.customer_name),customer_group:String(customer.customer.customer_group??""),mobile_no:String(customer.customer.mobile_no??""),email_id:String(customer.customer.email_id??""),tax_id:String(customer.customer.tax_id??"")}; showCustomer(); }
-    await loadCachedPosConfiguration();
-    // Validate the active POS Opening Entry and route accordingly.
+    // 5) POS configuration — refresh only when missing or stale (>12h)
+    setStep("config", "running"); if (progress) progress.textContent = "Loading configuration…";
+    let cfg = await window.posAPI.getCachedPosConfiguration();
+    if (!cfg || ageMs(cfg.lastSynced) > SYNC_FRESH.config) { await syncConfigNow(); cfg = await window.posAPI.getCachedPosConfiguration(); }
+    if (cfg) showPosConfigurationSummary(cfg);
+    setStep("config", cfg ? "complete" : "warning");
+    // 6) Session
+    setStep("session", "running"); if (progress) progress.textContent = "Validating session…";
     const ok = await validateSession("startup");
-    updatePosHeader();
-    if (ok) { if (progress) progress.textContent = "Ready"; showScreen("pos"); }
-    else if (!sessionHasEntry) { if (progress) progress.textContent = "No active POS Opening Entry"; void showStartShift(); }
-    else { if (progress) progress.textContent = sessionState.reason; showScreen("pos"); showSessionInvalid(sessionState.reason); }
-  } catch (error) { if (progress) progress.textContent = error instanceof Error ? error.message : "Startup failed"; if (retry) retry.hidden = false; showScreen("settings"); }
+    updatePosHeader(); setupCompleted = true;
+    void markDataAvailabilityFromCache(); startBackgroundSync(); void renderSyncStatus();
+    if (ok) { setStep("session", "complete"); setOverallBadge("POS Ready", "ok"); if (progress) progress.textContent = "Ready"; showScreen("pos"); }
+    else if (!sessionHasEntry) { setStep("session", "warning"); setOverallBadge("Start Shift Required", "info"); if (progress) progress.textContent = "No active POS Opening Entry"; void showStartShift(); }
+    else { setStep("session", "failed"); setOverallBadge("Action Required", "err"); if (progress) progress.textContent = sessionState.reason; showScreen("pos"); showSessionInvalid(sessionState.reason); }
+  } catch (error) { setOverallBadge("Action Required", "err"); if (progress) progress.textContent = error instanceof Error ? error.message : "Startup failed"; if (retry) retry.hidden = false; showScreen("settings"); }
 }
 
 function getSettingsFromForm(): AppSettings {
@@ -1445,9 +1572,12 @@ window.addEventListener("DOMContentLoaded", () => {
   void window.posAPI.getCatalogTotals().then(showCatalogTotals);
   window.posAPI.onCatalogProgress(showCatalogProgress);
   void window.posAPI.loadCart().then((state) => { cartLines = state.lines; selectedCartIndex = cartLines.length ? 0 : -1; renderCart(); focusCart(); }); void window.posAPI.loadBenefitsDraft().then((draft) => { if(draft) appliedBenefits = draft; }); void window.posAPI.getTerminalInvoiceId().then((id)=>{terminalInvoiceId=id;}); window.posAPI.onCompleteSaleShortcut(()=>void submitCurrentSale());
-  void runStartup();
-  window.addEventListener("online", () => scheduleCartPreview());
-  document.querySelector<HTMLButtonElement>("#retry-startup")?.addEventListener("click", () => void runStartup());
+  void renderSyncStatus();
+  void runPosBootstrap("startup");
+  window.addEventListener("online", () => { scheduleCartPreview(); void backgroundSyncTick(); });
+  document.querySelector<HTMLButtonElement>("#retry-startup")?.addEventListener("click", () => void runPosBootstrap("retry"));
+  document.querySelector<HTMLButtonElement>("#complete-setup")?.addEventListener("click", (e) => { /* form submit handles save + bootstrap */ void e; });
+  document.querySelector<HTMLButtonElement>("#refresh-config")?.addEventListener("click", () => void syncConfigNow());
   document.querySelector<HTMLButtonElement>("#start-shift")?.addEventListener("click", () => void startShift());
   document.querySelector<HTMLButtonElement>("#open-settings")?.addEventListener("click", () => showScreen("settings"));
   document.querySelector<HTMLButtonElement>("#back-to-pos")?.addEventListener("click", () => void goToPos());
@@ -1459,20 +1589,26 @@ window.addEventListener("DOMContentLoaded", () => {
   // Revalidate the POS session whenever the window regains focus.
   window.addEventListener("focus", () => { if (isOnline()) void revalidateLive("focus"); });
   // Server-health poll (online/offline + reconnect-driven session revalidation).
-  window.setInterval(async () => { try { const online = await window.posAPI.testServer(); const status = document.querySelector<HTMLElement>("#pos-server-status"); const connected = Boolean(online.connected); if (status) status.textContent = connected ? "Online" : "Offline";
-      if (connected && !prevServerConnected) { scheduleCartPreview(); void revalidateLive("reconnect"); } // after reconnect, re-check the session
+  window.setInterval(async () => { try { const online = await window.posAPI.testServer(); const status = document.querySelector<HTMLElement>("#pos-server-status"); const connected = Boolean(online.connected); if (status) status.textContent = connected ? "Online" : "Offline"; setOnlineIndicator(connected);
+      if (connected && !prevServerConnected) { scheduleCartPreview(); void revalidateLive("reconnect"); void backgroundSyncTick(); } // after reconnect: re-check session + sync stale data
       prevServerConnected = connected;
     } catch { const status = document.querySelector<HTMLElement>("#pos-server-status"); if (status) status.textContent = "Reconnecting"; prevServerConnected = false; } }, 30_000);
   // Revalidate the POS session every 60 seconds while online.
   window.setInterval(() => { if (isOnline()) void revalidateLive("interval"); }, 60_000);
 
+  // Primary action: Save and Complete Setup -> save settings, then run the one bootstrap chain.
   document.querySelector<HTMLFormElement>("#settings-form")?.addEventListener("submit", async (event) => {
     event.preventDefault();
+    const button = document.querySelector<HTMLButtonElement>("#complete-setup");
+    if (button) button.disabled = true;
     try {
       await window.posAPI.saveSettings(getSettingsFromForm());
-      showSettingsMessage("Settings Saved");
+      showSettingsMessage("Settings saved — completing setup…");
+      await runPosBootstrap("complete-setup");
     } catch {
       showSettingsMessage("Unable to save settings");
+    } finally {
+      if (button) button.disabled = false;
     }
   });
 
@@ -1558,28 +1694,10 @@ window.addEventListener("DOMContentLoaded", () => {
 
   document.querySelector<HTMLButtonElement>("#sync-pos-configuration")?.addEventListener("click", async () => {
     const button = document.querySelector<HTMLButtonElement>("#sync-pos-configuration");
-    if (button) {
-      button.disabled = true;
-      button.textContent = "Syncing...";
-    }
-
-    try {
-      await window.posAPI.saveSettings(getSettingsFromForm());
-      const result = await window.posAPI.syncPosConfiguration();
-      if (result.success) {
-        showPosConfigurationSummary(result.summary);
-        showSettingsMessage("POS Configuration Synced");
-      } else {
-        showSettingsMessage(`POS Configuration Sync Failed: ${result.error ?? "Unknown error"}`);
-      }
-    } catch {
-      showSettingsMessage("POS Configuration Sync Failed");
-    } finally {
-      if (button) {
-        button.disabled = false;
-        button.textContent = "Sync POS Configuration";
-      }
-    }
+    if (button) { button.disabled = true; button.textContent = "Syncing…"; }
+    try { await window.posAPI.saveSettings(getSettingsFromForm()); await syncConfigNow(); showSettingsMessage("POS Configuration synced"); }
+    catch { showSettingsMessage("POS Configuration Sync Failed"); }
+    finally { if (button) { button.disabled = false; button.textContent = "Force Full POS Configuration Sync"; } }
   });
 
   document.querySelector<HTMLButtonElement>("#sync-pos-session")?.addEventListener("click", async () => {
@@ -1607,19 +1725,14 @@ window.addEventListener("DOMContentLoaded", () => {
 
   document.querySelector<HTMLButtonElement>("#sync-item-catalog")?.addEventListener("click", async () => {
     const button = document.querySelector<HTMLButtonElement>("#sync-item-catalog");
-    if (button) { button.disabled = true; button.textContent = "Syncing..."; }
-    try {
-      const result = await window.posAPI.syncItemCatalog();
-      showCatalogTotals(result.totals);
-      const barcodeStatus = document.querySelector<HTMLElement>("#barcode-sync-status");
-      if (barcodeStatus) barcodeStatus.textContent = result.barcodeError ? `Barcode Sync: Failed — ${result.barcodeError}` : "Barcode Sync: Ready";
-      showCatalogProgress(result.success ? (result.barcodeError ? `Catalog synced. Item Barcode error: ${result.barcodeError}` : "Catalog sync complete.") : `Catalog sync failed: ${result.error ?? "Unknown error"}`);
-    } catch { showCatalogProgress("Catalog sync failed."); }
-    finally { if (button) { button.disabled = false; button.textContent = "Sync Item Catalog"; } }
+    if (button) { button.disabled = true; button.textContent = "Syncing…"; }
+    try { showCatalogProgress("Catalog sync started…"); await syncItemsNow(); showCatalogProgress("Catalog sync complete."); showSettingsMessage("Item catalogue synced"); }
+    catch { showCatalogProgress("Catalog sync failed."); }
+    finally { if (button) { button.disabled = false; button.textContent = "Force Full Item Catalogue Sync"; } }
   });
 
-  document.querySelector<HTMLButtonElement>("#sync-customers")?.addEventListener("click", async () => { const result=await window.posAPI.syncCustomers(); showSettingsMessage(result.success?`Customers synced: ${result.state.count}`:`Customer sync failed: ${result.error}`); });
-  document.querySelector<HTMLButtonElement>("#sync-fbr-config")?.addEventListener("click", async () => { const button=document.querySelector<HTMLButtonElement>("#sync-fbr-config"); if(button){button.disabled=true;button.textContent="Syncing...";} try { const result=await window.posAPI.syncFbrConfig(); showSettingsMessage(result.success?"FBR configuration synced":`FBR sync failed: ${result.error??"Unknown error"}`); } catch { showSettingsMessage("FBR sync failed"); } finally { if(button){button.disabled=false;button.textContent="Sync FBR Configuration";} } });
+  document.querySelector<HTMLButtonElement>("#sync-customers")?.addEventListener("click", async () => { await syncCustomersNow(); const state = await window.posAPI.getCustomerSyncState(); showSettingsMessage(`Customers synced: ${state.count}`); });
+  document.querySelector<HTMLButtonElement>("#sync-fbr-config")?.addEventListener("click", async () => { const button=document.querySelector<HTMLButtonElement>("#sync-fbr-config"); if(button){button.disabled=true;button.textContent="Syncing…";} try { await syncFbrNow(); showSettingsMessage("FBR configuration synced"); } catch { showSettingsMessage("FBR sync failed"); } finally { if(button){button.disabled=false;button.textContent="Force Full FBR Configuration Sync";} } });
   customerInput()?.addEventListener("input", () => void searchCustomer());
   document.querySelector<HTMLButtonElement>("#new-customer")?.addEventListener("click", () => void openNewCustomer());
   document.querySelector<HTMLButtonElement>("#cancel-new-customer")?.addEventListener("click", () => { document.querySelector<HTMLDialogElement>("#new-customer-dialog")?.close(); focusCart(); });
