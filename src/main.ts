@@ -1,4 +1,5 @@
 import { app, BrowserWindow, ipcMain } from "electron";
+import { autoUpdater } from "electron-updater";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { calculateFbrInvoice, calculateFbrItem } from "./domain/fbr-calculation";
@@ -44,8 +45,19 @@ import {
   ,getSaleHistory
   ,recordReprint
   ,setSaleHistoryStatus
+  ,saveShiftHistory
+  ,listShiftHistory
+  ,getShiftHistory
+  ,getQueuedSales
+  ,getQueueCounts
+  ,cacheReceiptHtml
+  ,getCachedReceiptHtml
+  ,getMeta
+  ,setMeta
 } from "./db/database";
-import type { HeldSaleInput, SalesHistoryFilter } from "./db/database";
+import type { HeldSaleInput, SalesHistoryFilter, ShiftHistoryRow } from "./db/database";
+
+let mainWindowRef: BrowserWindow | null = null;
 
 async function testServerReachability(): Promise<{ connected: boolean }> {
   const { erpnextUrl } = loadSettings();
@@ -311,8 +323,110 @@ async function syncPosSession(): Promise<{ success: boolean; summary: PosSession
   }
 }
 
-async function getActivePosSession(): Promise<{ success:boolean; session:Record<string,unknown>|null; error:string|null; diagnosticReason:string; apiUser:string; requestedPosProfile:string; entries:Record<string,unknown>[] }>{const s=loadSettings();if(!s.erpnextUrl||!s.apiKey||!s.apiSecret)return {success:false,session:null,error:"Online connection required to load POS session.",diagnosticReason:"Missing ERPNext URL or API credentials",apiUser:"",requestedPosProfile:s.posProfile,entries:[]};try{const base=new URL(s.erpnextUrl).toString().replace(/\/+$/,"");const r=await fetch(`${base}/api/method/aimatic.offline_pos.api.get_active_pos_session?pos_profile=${encodeURIComponent(s.posProfile)}`,{headers:{Authorization:`token ${s.apiKey}:${s.apiSecret}`}});if(!r.ok){const error=await getResponseError(r);return {success:false,session:null,error,diagnosticReason:error,apiUser:"",requestedPosProfile:s.posProfile,entries:[]};}const b=await r.json() as {message?:unknown};const outer=asRecord(b.message);const payload=asRecord(outer?.message)??outer??{};const session=asRecord(payload.session);const entries=(Array.isArray(payload.submitted_open_entries)?payload.submitted_open_entries:Array.isArray(payload.open_entries)?payload.open_entries:[]).map(asRecord).filter((x):x is Record<string,unknown>=>Boolean(x));const diagnosticReason=textValue(payload,"diagnostic_reason")||textValue(payload,"reason")||(session?"Active session returned":"No active POS Opening Entry returned by server");const apiUser=textValue(payload,"api_user")||textValue(payload,"user");if(session){const entry=textValue(session,"opening_entry")||textValue(session,"name");if(entry)cachePosSession(entry,s.posProfile,textValue(session,"user"),session,new Date().toISOString());}return {success:true,session,error:null,diagnosticReason,apiUser,requestedPosProfile:textValue(payload,"pos_profile")||s.posProfile,entries};}catch(e){const error=e instanceof Error?e.message:"Unable to load POS session.";return {success:false,session:null,error,diagnosticReason:error,apiUser:"",requestedPosProfile:s.posProfile,entries:[]};}}
+async function getActivePosSession(): Promise<{ success:boolean; session:Record<string,unknown>|null; error:string|null; diagnosticReason:string; apiUser:string; requestedPosProfile:string; entries:Record<string,unknown>[] }>{const s=loadSettings();if(!s.erpnextUrl||!s.apiKey||!s.apiSecret)return {success:false,session:null,error:"Online connection required to load POS session.",diagnosticReason:"Missing ERPNext URL or API credentials",apiUser:"",requestedPosProfile:s.posProfile,entries:[]};try{const base=new URL(s.erpnextUrl).toString().replace(/\/+$/,"");const r=await fetch(`${base}/api/method/aimatic.offline_pos.api.get_active_pos_session?pos_profile=${encodeURIComponent(s.posProfile)}`,{headers:{Authorization:`token ${s.apiKey}:${s.apiSecret}`}});if(!r.ok){const error=await getResponseError(r);return {success:false,session:null,error,diagnosticReason:error,apiUser:"",requestedPosProfile:s.posProfile,entries:[]};}const b=await r.json() as {message?:unknown};const outer=asRecord(b.message);const payload=asRecord(outer?.message)??outer??{};const session=asRecord(payload.session);const entries=(Array.isArray(payload.submitted_open_entries)?payload.submitted_open_entries:Array.isArray(payload.open_entries)?payload.open_entries:[]).map(asRecord).filter((x):x is Record<string,unknown>=>Boolean(x));const diagnosticReason=textValue(payload,"diagnostic_reason")||textValue(payload,"reason")||(session?"Active session returned":"No active POS Opening Entry returned by server");const apiUser=textValue(payload,"authenticated_user")||textValue(payload,"api_user");if(session){const entry=textValue(session,"opening_entry")||textValue(session,"name");if(entry)cachePosSession(entry,s.posProfile,textValue(session,"user"),session,new Date().toISOString());}return {success:true,session,error:null,diagnosticReason,apiUser,requestedPosProfile:textValue(payload,"requested_pos_profile")||textValue(payload,"pos_profile")||s.posProfile,entries};}catch(e){const error=e instanceof Error?e.message:"Unable to load POS session.";return {success:false,session:null,error,diagnosticReason:error,apiUser:"",requestedPosProfile:s.posProfile,entries:[]};}}
 async function startPosSession(input:Record<string,unknown>):Promise<{success:boolean;session:Record<string,unknown>|null;error:string|null}>{const s=loadSettings();if(!s.erpnextUrl||!s.apiKey||!s.apiSecret)return {success:false,session:null,error:"Online connection required to start shift"};try{const base=new URL(s.erpnextUrl).toString().replace(/\/+$/,"");const r=await fetch(`${base}/api/method/aimatic.offline_pos.api.start_pos_session`,{method:"POST",headers:{Authorization:`token ${s.apiKey}:${s.apiSecret}`,"Content-Type":"application/json"},body:JSON.stringify({pos_profile:s.posProfile,opening_balances:JSON.stringify(Array.isArray(input.opening_balances)?input.opening_balances:[])})});if(!r.ok)return {success:false,session:null,error:await getResponseError(r)};const b=await r.json() as {message?:unknown};const raw=asRecord(b.message);const session=asRecord(raw?.message)??raw;const entry=textValue(session,"opening_entry")||textValue(session,"name");if(!session||!entry)return {success:false,session:null,error:"Server returned no Opening Entry."};cachePosSession(entry,s.posProfile,textValue(session,"user"),session,new Date().toISOString());return {success:true,session,error:null};}catch(e){return {success:false,session:null,error:e instanceof Error?e.message:"Unable to start shift."};}}
+
+interface ShiftPaymentRow { mode_of_payment: string; opening_amount: number; collected_amount: number; expected_amount: number; }
+interface ShiftSummary {
+  openingEntry: string; posProfile: string; user: string; company: string; periodStart: string; postingDate: string; status: string;
+  payments: ShiftPaymentRow[]; invoiceCount: number; netSales: number; totalOpening: number; totalExpected: number; isEstimate: boolean;
+}
+
+function numValue(record: Record<string, unknown> | null, ...keys: string[]): number {
+  for (const key of keys) { const v = record?.[key]; if (typeof v === "number") return v; if (typeof v === "string" && v.trim() && !Number.isNaN(Number(v))) return Number(v); }
+  return 0;
+}
+
+// Build a Close Shift summary from local data only (cached Opening Entry balances + submitted sales for this shift).
+// Authoritative reconciliation happens server-side on close; these figures are the cashier's local estimate.
+function getShiftSummary(openingEntry?: string): { success: boolean; summary: ShiftSummary | null; error: string | null } {
+  const settings = loadSettings();
+  const session = getCachedPosSession(settings.posProfile);
+  if (!session) return { success: false, summary: null, error: "No cached POS Opening Entry — refresh the session first." };
+  const entry = textValue(session, "name") || textValue(session, "opening_entry");
+  if (openingEntry && entry && openingEntry !== entry) {
+    return { success: false, summary: null, error: `Cached shift is ${entry}, not ${openingEntry}. Refresh the session.` };
+  }
+  const openingByMode = new Map<string, number>();
+  const balances = Array.isArray(session.balance_details) ? session.balance_details : [];
+  for (const row of balances) { const r = asRecord(row); const mode = textValue(r, "mode_of_payment"); if (mode) openingByMode.set(mode, numValue(r, "opening_amount")); }
+  // Ensure every POS Profile payment method is present even with a zero opening balance.
+  for (const mode of getPaymentMethods()) if (!openingByMode.has(mode)) openingByMode.set(mode, 0);
+
+  const collectedByMode = new Map<string, number>();
+  let invoiceCount = 0; let netSales = 0;
+  const history = listSalesHistory({ limit: 200 });
+  for (const sale of history) {
+    if (sale.status !== "Submitted") continue;
+    const payload = sale.payload;
+    if (!payload || textValue(payload, "opening_entry") !== entry) continue;
+    invoiceCount += 1;
+    const payments = Array.isArray(payload.payments) ? payload.payments : [];
+    for (const p of payments) { const pr = asRecord(p); const mode = textValue(pr, "mode_of_payment"); if (!mode) continue; const amount = numValue(pr, "amount"); collectedByMode.set(mode, (collectedByMode.get(mode) ?? 0) + amount); netSales += amount; if (!openingByMode.has(mode)) openingByMode.set(mode, 0); }
+  }
+
+  const payments: ShiftPaymentRow[] = [...openingByMode.keys()].sort().map((mode) => {
+    const opening_amount = openingByMode.get(mode) ?? 0;
+    const collected_amount = collectedByMode.get(mode) ?? 0;
+    return { mode_of_payment: mode, opening_amount, collected_amount, expected_amount: opening_amount + collected_amount };
+  });
+  const summary: ShiftSummary = {
+    openingEntry: entry, posProfile: textValue(session, "pos_profile") || settings.posProfile, user: textValue(session, "user"),
+    company: textValue(session, "company"), periodStart: textValue(session, "period_start_date") || textValue(session, "posting_date") || textValue(session, "creation"),
+    postingDate: textValue(session, "posting_date"), status: textValue(session, "status") || "Open",
+    payments, invoiceCount, netSales, totalOpening: payments.reduce((s, p) => s + p.opening_amount, 0), totalExpected: payments.reduce((s, p) => s + p.expected_amount, 0), isEstimate: true
+  };
+  return { success: true, summary, error: null };
+}
+
+// Submit the POS Closing Entry via the server (aimatic.offline_pos.api.close_pos_session). Online-only.
+async function closeShift(input: Record<string, unknown>): Promise<{ success: boolean; closingEntry: string; response: Record<string, unknown> | null; error: string | null }> {
+  const s = loadSettings();
+  if (!s.erpnextUrl || !s.apiKey || !s.apiSecret) return { success: false, closingEntry: "", response: null, error: "Online connection required to close shift." };
+  const openingEntry = textValue(input, "opening_entry");
+  if (!openingEntry) return { success: false, closingEntry: "", response: null, error: "Opening Entry is required to close the shift." };
+  const closingBalances = Array.isArray(input.closing_balances) ? input.closing_balances : [];
+  const notes = textValue(input, "notes");
+  // Snapshot the local expected/opening figures before the close so we can persist shift history on success.
+  const pre = getShiftSummary(openingEntry);
+  try {
+    const base = new URL(s.erpnextUrl).toString().replace(/\/+$/, "");
+    const r = await fetch(`${base}/api/method/aimatic.offline_pos.api.close_pos_session`, {
+      method: "POST",
+      headers: { Authorization: `token ${s.apiKey}:${s.apiSecret}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ opening_entry: openingEntry, closing_balances: JSON.stringify(closingBalances), notes })
+    });
+    if (!r.ok) return { success: false, closingEntry: "", response: null, error: await getResponseError(r) };
+    const b = await r.json() as { message?: unknown };
+    const raw = asRecord(b.message);
+    const response = asRecord(raw?.message) ?? raw ?? {};
+    const closingEntry = textValue(response, "closing_entry") || textValue(response, "name") || textValue(asRecord(response.pos_closing_entry), "name");
+    persistClosedShift(openingEntry, closingEntry, closingBalances, pre.summary, response);
+    return { success: true, closingEntry, response, error: null };
+  } catch (e) {
+    return { success: false, closingEntry: "", response: null, error: e instanceof Error ? e.message : "Unable to close shift." };
+  }
+}
+
+function persistClosedShift(openingEntry: string, closingEntry: string, closingBalances: unknown[], summary: ShiftSummary | null, response: Record<string, unknown>): void {
+  try {
+    const actualByMode = new Map<string, number>();
+    for (const row of closingBalances) { const r = asRecord(row); const mode = textValue(r, "mode_of_payment"); if (mode) actualByMode.set(mode, numValue(r, "closing_amount")); }
+    const isCash = (mode: string) => mode.toLowerCase().includes("cash");
+    const cashRow = summary?.payments.find((p) => isCash(p.mode_of_payment));
+    const openingCash = cashRow?.opening_amount ?? summary?.totalOpening ?? 0;
+    const expectedCash = cashRow?.expected_amount ?? summary?.totalExpected ?? 0;
+    const actualCash = cashRow ? (actualByMode.get(cashRow.mode_of_payment) ?? 0) : [...actualByMode.values()].reduce((a, b) => a + b, 0);
+    saveShiftHistory({
+      openingEntry, closingEntry: closingEntry || null, posProfile: summary?.posProfile ?? loadSettings().posProfile,
+      cashier: summary?.user ?? "", company: summary?.company ?? "", openedAt: summary?.periodStart ?? null, closedAt: new Date().toISOString(),
+      openingCash, expectedCash, actualCash, difference: actualCash - expectedCash, netSales: summary?.netSales ?? 0, status: "Closed",
+      summary: { summary, closing_balances: closingBalances, response }
+    });
+  } catch { /* shift-history persistence is best-effort; never block a successful close */ }
+}
+
+function getShiftHistoryList(): ShiftHistoryRow[] { return listShiftHistory(100); }
 
 function getCachedSessionSummary(): PosSessionSummary {
   return summarizePosSession(getCachedPosSession(loadSettings().posProfile));
@@ -324,7 +438,50 @@ function getCartIdentity(): { terminalId: string; openingEntry: string } {
   return { terminalId: settings.terminalId || "default-terminal", openingEntry: session.openingEntry || "no-opening-entry" };
 }
 function getTerminalInvoiceId():string{const id=getCartIdentity();return getOpenTerminalInvoice(id.terminalId,()=>`${id.terminalId}-${randomUUID()}`);}
-async function submitOnlineSale(input:Record<string,unknown>):Promise<{success:boolean;response:Record<string,unknown>|null;error:string|null}>{const settings=loadSettings();const id=String(input.terminal_invoice_id||getTerminalInvoiceId());const identity=getCartIdentity();const payload={terminal_invoice_id:id,terminal_id:identity.terminalId,pos_profile:settings.posProfile,opening_entry:identity.openingEntry,customer:String(input.customer??""),items:Array.isArray(input.items)?input.items:[],payments:Array.isArray(input.payments)?input.payments:[],coupon_code:String(input.coupon_code??""),redeem_loyalty_points:Boolean(input.redeem_loyalty_points),loyalty_points:Number(input.loyalty_points??0)};saveSaleHistory(id,"Submitting",payload);if(!settings.erpnextUrl||!settings.apiKey||!settings.apiSecret){saveSaleHistory(id,"Failed",payload);return {success:false,response:null,error:"Offline sale queue is not implemented yet. Sale remains open."};}try{const base=new URL(settings.erpnextUrl).toString().replace(/\/+$/,"");const response=await fetch(`${base}/api/method/aimatic.offline_pos.api.submit_online_sale`,{method:"POST",headers:{Authorization:`token ${settings.apiKey}:${settings.apiSecret}`,"Content-Type":"application/json"},body:JSON.stringify(payload)});const rawBody=await response.text();let parsed:{message?:unknown;data?:unknown}={};try{parsed=JSON.parse(rawBody) as {message?:unknown;data?:unknown};}catch{/* non-JSON response */}const result=asRecord(parsed.message)??asRecord(parsed.data)??{};if(!response.ok){saveSaleHistory(id,"Failed",payload,result);return {success:false,response:result,error:formatResponseError(response.status,response.statusText,rawBody)};}saveSaleHistory(id,"Submitted",payload,result);return {success:true,response:result,error:null};}catch(error){saveSaleHistory(id,"Failed",payload);return {success:false,response:null,error:error instanceof Error?error.message:"Sale submission failed."};}}
+// Build the canonical sale submission payload (shared by online submit and offline queue).
+function buildSalePayload(input: Record<string, unknown>): Record<string, unknown> {
+  const settings = loadSettings();
+  const id = String(input.terminal_invoice_id || getTerminalInvoiceId());
+  const identity = getCartIdentity();
+  return { terminal_invoice_id: id, terminal_id: identity.terminalId, pos_profile: settings.posProfile, opening_entry: identity.openingEntry, customer: String(input.customer ?? ""), items: Array.isArray(input.items) ? input.items : [], payments: Array.isArray(input.payments) ? input.payments : [], coupon_code: String(input.coupon_code ?? ""), redeem_loyalty_points: Boolean(input.redeem_loyalty_points), loyalty_points: Number(input.loyalty_points ?? 0), estimated_total: Number(input.estimated_total ?? 0) };
+}
+// A local stand-in for the server response so the receipt + history have coherent data until the sale syncs.
+function buildProvisionalResponse(id: string, payload: Record<string, unknown>): Record<string, unknown> {
+  return { provisional: true, offline: true, queued: true, terminal_invoice_id: id, pos_invoice: "", posting_datetime: new Date().toISOString(), fbr_status: "Offline — FBR pending", estimated_total: numValue(payload, "estimated_total") };
+}
+// Persist a completed-offline sale to the queue (status "Queued"); it replays to the server on reconnect.
+function queueSale(input: Record<string, unknown>): { success: boolean; response: Record<string, unknown> | null; error: string | null; queued: boolean } {
+  const payload = buildSalePayload(input);
+  const id = String(payload.terminal_invoice_id);
+  const response = buildProvisionalResponse(id, payload);
+  saveSaleHistory(id, "Queued", payload, response);
+  return { success: true, response, error: null, queued: true };
+}
+
+async function submitOnlineSale(input:Record<string,unknown>):Promise<{success:boolean;response:Record<string,unknown>|null;error:string|null;queued?:boolean}>{const settings=loadSettings();const payload=buildSalePayload(input);const id=String(payload.terminal_invoice_id);saveSaleHistory(id,"Submitting",payload);if(!settings.erpnextUrl||!settings.apiKey||!settings.apiSecret){saveSaleHistory(id,"Failed",payload);return {success:false,response:null,error:"ERPNext URL and API credentials are required."};}try{const base=new URL(settings.erpnextUrl).toString().replace(/\/+$/,"");const response=await fetch(`${base}/api/method/aimatic.offline_pos.api.submit_online_sale`,{method:"POST",headers:{Authorization:`token ${settings.apiKey}:${settings.apiSecret}`,"Content-Type":"application/json"},body:JSON.stringify(payload)});const rawBody=await response.text();let parsed:{message?:unknown;data?:unknown}={};try{parsed=JSON.parse(rawBody) as {message?:unknown;data?:unknown};}catch{/* non-JSON response */}const result=asRecord(parsed.message)??asRecord(parsed.data)??{};if(!response.ok){saveSaleHistory(id,"Failed",payload,result);return {success:false,response:result,error:formatResponseError(response.status,response.statusText,rawBody)};}saveSaleHistory(id,"Submitted",payload,result);return {success:true,response:result,error:null};}catch(error){/* Network failure mid-submit: auto-fall back to the offline queue rather than failing the sale. */const response=buildProvisionalResponse(id,payload);saveSaleHistory(id,"Queued",payload,response);return {success:true,response,error:null,queued:true};}}
+
+// Replay queued offline sales to the server in order. Idempotent via terminal_invoice_id (server dedups).
+async function syncSaleQueue(): Promise<{ synced: number; failed: number; remaining: number; error: string | null }> {
+  const settings = loadSettings();
+  const counts0 = getQueueCounts();
+  if (!settings.erpnextUrl || !settings.apiKey || !settings.apiSecret) return { synced: 0, failed: 0, remaining: counts0.queued, error: "ERPNext URL and API credentials are required." };
+  let base: string;
+  try { base = new URL(settings.erpnextUrl).toString().replace(/\/+$/, ""); } catch { return { synced: 0, failed: 0, remaining: counts0.queued, error: "Invalid ERPNext URL." }; }
+  let synced = 0; let failed = 0;
+  for (const sale of getQueuedSales()) {
+    const payload = sale.payload;
+    try {
+      const response = await fetch(`${base}/api/method/aimatic.offline_pos.api.submit_online_sale`, { method: "POST", headers: { Authorization: `token ${settings.apiKey}:${settings.apiSecret}`, "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      const rawBody = await response.text();
+      let parsed: { message?: unknown; data?: unknown } = {};
+      try { parsed = JSON.parse(rawBody) as { message?: unknown; data?: unknown }; } catch { /* non-JSON */ }
+      const result = asRecord(parsed.message) ?? asRecord(parsed.data) ?? {};
+      if (!response.ok) { saveSaleHistory(sale.terminalInvoiceId, "Failed", payload, result); failed += 1; continue; } // real server rejection — flag, keep replaying the rest
+      saveSaleHistory(sale.terminalInvoiceId, "Submitted", payload, result); synced += 1;
+    } catch { break; /* still offline — stop and leave the remainder queued */ }
+  }
+  return { synced, failed, remaining: getQueueCounts().queued, error: null };
+}
 async function findPosInvoicePrintFormat(base: string, apiKey: string, apiSecret: string): Promise<string> {
   try {
     const query = new URLSearchParams({ filters: JSON.stringify([["doc_type", "=", "POS Invoice"], ["disabled", "=", 0]]), fields: JSON.stringify(["name", "standard"]), limit_page_length: "50" });
@@ -342,8 +499,9 @@ async function findPosInvoicePrintFormat(base: string, apiKey: string, apiSecret
 // The receipt is an ERPNext Print Format (POS Invoice), not a custom API method — render it via the standard print view.
 async function getPosReceipt(posInvoice: string): Promise<{ html: string | null; error: string | null }> {
   const s = loadSettings();
-  if (!s.erpnextUrl || !s.apiKey || !s.apiSecret) return { html: null, error: "Online connection required to load receipt." };
   if (!posInvoice.trim()) return { html: null, error: "Missing POS Invoice name." };
+  const cached = getCachedReceiptHtml(posInvoice);
+  if (!s.erpnextUrl || !s.apiKey || !s.apiSecret) return cached ? { html: cached, error: null } : { html: null, error: "Online connection required to load receipt." };
   try {
     const base = new URL(s.erpnextUrl).toString().replace(/\/+$/, "");
     const printFormat = await findPosInvoicePrintFormat(base, s.apiKey, s.apiSecret);
@@ -356,8 +514,10 @@ async function getPosReceipt(posInvoice: string): Promise<{ html: string | null;
     // The /printview page carries Frappe's print toolbar (Get PDF / Print / Menu / Letterhead) and page chrome — hide it so only the receipt shows.
     const hideChrome = "<style>.print-toolbar,.page-head,.navbar,#navbar,.web-footer,footer,.btn-print-preview,.print-preview-select{display:none!important;}body{background:#fff!important;margin:0!important;}</style>";
     const clean = /<\/head>/i.test(html) ? html.replace(/<\/head>/i, `${hideChrome}</head>`) : hideChrome + html;
+    cacheReceiptHtml(posInvoice, clean);
     return { html: clean, error: null };
   } catch (e) {
+    if (cached) return { html: cached, error: null };
     return { html: null, error: e instanceof Error ? e.message : "Unable to load receipt." };
   }
 }
@@ -464,10 +624,27 @@ async function fetchPagedList(baseUrl: string, apiKey: string, apiSecret: string
   }
 }
 
-async function fetchItemBarcodePages(baseUrl: string, apiKey: string, apiSecret: string, sendProgress: (message: string) => void): Promise<Record<string, unknown>[]> {
+// --- Delta-sync helpers ---------------------------------------------------
+// Highest `modified` value across the given row groups — used as the next delta watermark
+// (server-basis, so it is immune to client clock skew). Returns "" when there are no rows.
+function maxModified(...rowGroups: Record<string, unknown>[][]): string {
+  let max = "";
+  for (const rows of rowGroups) for (const row of rows) { const m = textValue(row, "modified"); if (m > max) max = m; }
+  return max;
+}
+// A full sync is due when its last-full timestamp is missing or older than 24h.
+function isFullDue(lastFullKey: string): boolean {
+  const last = getMeta(lastFullKey);
+  if (!last) return true;
+  const t = new Date(last).getTime();
+  return Number.isNaN(t) || (Date.now() - t) > 24 * 60 * 60 * 1000;
+}
+
+async function fetchItemBarcodePages(baseUrl: string, apiKey: string, apiSecret: string, sendProgress: (message: string) => void, modifiedAfter?: string): Promise<Record<string, unknown>[]> {
   const rows: Record<string, unknown>[] = [];
   for (let start = 0; ; start += 500) {
     const query = new URLSearchParams({ limit_start: String(start), limit_page_length: "500" });
+    if (modifiedAfter) query.set("modified_after", modifiedAfter);
     const response = await fetch(`${baseUrl}/api/method/aimatic.offline_pos.api.get_item_barcodes?${query.toString()}`, {
       headers: { Authorization: `token ${apiKey}:${apiSecret}` }
     });
@@ -482,9 +659,39 @@ async function fetchItemBarcodePages(baseUrl: string, apiKey: string, apiSecret:
   }
 }
 
-async function syncCustomers(): Promise<{ success: boolean; state: ReturnType<typeof getCustomerSyncState>; error: string | null }> {
+// UOM conversions via custom method (the POS user can't read the UOM Conversion Detail child doctype
+// over /api/resource). Supports delta via modified_after, paginated by next_start/has_more.
+async function fetchUomConversionPages(baseUrl: string, apiKey: string, apiSecret: string, modifiedAfter?: string): Promise<Record<string, unknown>[]> {
+  const rows: Record<string, unknown>[] = [];
+  let start = 0;
+  for (;;) {
+    const query = new URLSearchParams({ limit_start: String(start), limit_page_length: "500" });
+    if (modifiedAfter) query.set("modified_after", modifiedAfter);
+    const response = await fetch(`${baseUrl}/api/method/aimatic.offline_pos.api.get_uom_conversions?${query.toString()}`, {
+      headers: { Authorization: `token ${apiKey}:${apiSecret}` }
+    });
+    if (!response.ok) throw new Error(await getResponseError(response));
+    const body = await response.json() as { message?: { rows?: unknown; has_more?: unknown; next_start?: unknown } };
+    const page = Array.isArray(body.message?.rows) ? body.message.rows.map(asRecord).filter((row): row is Record<string, unknown> => Boolean(row)) : [];
+    rows.push(...page);
+    if (!body.message?.has_more) return rows;
+    start = typeof body.message?.next_start === "number" ? body.message.next_start : start + 500;
+  }
+}
+
+async function syncCustomers(mode: "auto" | "full" = "auto"): Promise<{ success: boolean; state: ReturnType<typeof getCustomerSyncState>; error: string | null }> {
   const settings=loadSettings(); if(!settings.erpnextUrl||!settings.apiKey||!settings.apiSecret) return {success:false,state:getCustomerSyncState(),error:"ERPNext URL and API credentials are required."};
-  try { const base=new URL(settings.erpnextUrl).toString().replace(/\/+$/,""); const customers=await fetchPagedList(base,settings.apiKey,settings.apiSecret,"Customer",["name","customer_name","customer_group","territory","mobile_no","email_id","tax_id","disabled","modified"],[["disabled","=",0]]); upsertCustomers(customers); return {success:true,state:getCustomerSyncState(),error:null}; } catch(error) { return {success:false,state:getCustomerSyncState(),error:error instanceof Error?error.message:"Customer sync failed."}; }
+  try {
+    const base=new URL(settings.erpnextUrl).toString().replace(/\/+$/,"");
+    const cursor=getMeta("customers_last_sync")??"";
+    const doFull=mode==="full"||!cursor||isFullDue("customers_last_full_sync");
+    const filters=doFull?[["disabled","=",0]]:[["disabled","=",0],["modified",">",cursor]];
+    const customers=await fetchPagedList(base,settings.apiKey,settings.apiSecret,"Customer",["name","customer_name","customer_group","territory","mobile_no","email_id","tax_id","disabled","modified"],filters);
+    upsertCustomers(customers);
+    const wm=maxModified(customers); if(wm)setMeta("customers_last_sync",wm);
+    if(doFull)setMeta("customers_last_full_sync",new Date().toISOString());
+    return {success:true,state:getCustomerSyncState(),error:null};
+  } catch(error) { return {success:false,state:getCustomerSyncState(),error:error instanceof Error?error.message:"Customer sync failed."}; }
 }
 
 async function loadCustomer(name: string): Promise<{ customer: Record<string, unknown> | null; cached: boolean; error: string | null }> {
@@ -531,7 +738,9 @@ async function previewCart(input: Record<string, unknown>): Promise<{ preview: R
   }
 }
 
-async function syncItemCatalog(sendProgress: (message: string) => void): Promise<{ success: boolean; totals: ReturnType<typeof getCatalogTotals>; barcodeError: string | null; error: string | null }> {
+// mode "full" = manual refresh / first run / 24h cadence → DELETE+INSERT for barcodes & conversions.
+// mode "auto" with an existing watermark → delta: fetch only `modified > watermark` rows and UPSERT.
+async function syncItemCatalog(sendProgress: (message: string) => void, mode: "auto" | "full" = "auto"): Promise<{ success: boolean; totals: ReturnType<typeof getCatalogTotals>; barcodeError: string | null; error: string | null }> {
   const settings = loadSettings();
   const bootstrap = getPosBootstrap(settings.posProfile);
   const profile = asRecord(bootstrap?.pos_profile);
@@ -541,33 +750,50 @@ async function syncItemCatalog(sendProgress: (message: string) => void): Promise
   if (!settings.erpnextUrl || !settings.apiKey || !settings.apiSecret || !priceList || !warehouse || !currency) {
     return { success: false, totals: getCatalogTotals(), barcodeError: null, error: "Cached POS Profile configuration is required." };
   }
+  const itemsCursor = getMeta("items_last_sync") ?? "";
+  const barcodesCursor = getMeta("barcodes_last_sync") ?? "";
+  const doFull = mode === "full" || !itemsCursor || isFullDue("items_last_full_sync");
+  const since = (base: unknown[]): unknown[] => doFull ? base : [...base, ["modified", ">", itemsCursor]];
   try {
     const baseUrl = new URL(settings.erpnextUrl).toString().replace(/\/+$/, "");
-    sendProgress("Syncing items...");
-    const items = await fetchPagedList(baseUrl, settings.apiKey, settings.apiSecret, "Item", ["name", "item_name", "item_group", "stock_uom", "is_stock_item", "is_sales_item", "disabled", "has_batch_no", "has_serial_no", "modified"]);
+    sendProgress(doFull ? "Full sync: items..." : "Delta sync: items...");
+    const items = await fetchPagedList(baseUrl, settings.apiKey, settings.apiSecret, "Item", ["name", "item_name", "item_group", "stock_uom", "is_stock_item", "is_sales_item", "disabled", "has_batch_no", "has_serial_no", "modified"], doFull ? undefined : [["modified", ">", itemsCursor]]);
     sendProgress(`Items: ${items.length}. Syncing prices...`);
-    const prices = await fetchPagedList(baseUrl, settings.apiKey, settings.apiSecret, "Item Price", ["name", "item_code", "uom", "price_list_rate", "currency", "valid_from", "valid_upto", "modified"], [["price_list", "=", priceList], ["selling", "=", 1]]);
+    const prices = await fetchPagedList(baseUrl, settings.apiKey, settings.apiSecret, "Item Price", ["name", "item_code", "uom", "price_list_rate", "currency", "valid_from", "valid_upto", "modified"], since([["price_list", "=", priceList], ["selling", "=", 1]]));
     sendProgress(`Prices: ${prices.length}. Syncing stock...`);
-    const stock = await fetchPagedList(baseUrl, settings.apiKey, settings.apiSecret, "Bin", ["item_code", "warehouse", "actual_qty", "reserved_qty", "projected_qty", "modified"], [["warehouse", "=", warehouse]]);
+    const stock = await fetchPagedList(baseUrl, settings.apiKey, settings.apiSecret, "Bin", ["item_code", "warehouse", "actual_qty", "reserved_qty", "projected_qty", "modified"], since([["warehouse", "=", warehouse]]));
+    let conversions: Record<string, unknown>[] = [];
+    let conversionError: string | null = null;
+    try {
+      sendProgress("Syncing UOM conversions...");
+      conversions = await fetchUomConversionPages(baseUrl, settings.apiKey, settings.apiSecret, doFull ? undefined : (itemsCursor || undefined));
+    } catch (error) {
+      conversionError = error instanceof Error ? error.message : "Unable to sync UOM conversions.";
+    }
     let barcodes: Record<string, unknown>[] = [];
     let barcodeError: string | null = null;
     try {
       sendProgress("Syncing barcodes...");
-      barcodes = await fetchItemBarcodePages(baseUrl, settings.apiKey, settings.apiSecret, sendProgress);
+      barcodes = await fetchItemBarcodePages(baseUrl, settings.apiKey, settings.apiSecret, sendProgress, doFull ? undefined : (barcodesCursor || undefined));
     } catch (error) {
       barcodeError = error instanceof Error ? error.message : "Unable to sync Item Barcode.";
     }
-    const previousTotals = getCatalogTotals();
-    const totals = { items: items.length, prices: prices.length, barcodes: barcodeError ? previousTotals.barcodes : barcodes.length, stockRows: stock.length, lastSynced: new Date().toISOString() };
-    upsertCatalog({ items, prices, stock, barcodes, totals, replaceBarcodes: !barcodeError });
+    const totals = { items: items.length, prices: prices.length, barcodes: barcodes.length, stockRows: stock.length, lastSynced: new Date().toISOString() };
+    // Full → DELETE+INSERT (replace) for barcodes/conversions; delta → UPSERT only (no destructive replace).
+    upsertCatalog({ items, prices, stock, barcodes, conversions, totals, replaceBarcodes: doFull && !barcodeError, replaceConversions: doFull && !conversionError });
+    // Advance watermarks from the server-provided max(modified) — never regress on an empty delta or a failed fetch.
+    const itemsWatermark = maxModified(items, prices, stock, conversionError ? [] : conversions);
+    if (itemsWatermark) setMeta("items_last_sync", itemsWatermark);
+    if (!barcodeError) { const bw = maxModified(barcodes); if (bw) setMeta("barcodes_last_sync", bw); }
+    if (doFull) setMeta("items_last_full_sync", new Date().toISOString());
     sendProgress("Catalog sync complete.");
-    return { success: true, totals, barcodeError, error: null };
+    return { success: true, totals: getCatalogTotals(), barcodeError: [barcodeError, conversionError].filter(Boolean).join(" | ") || null, error: null };
   } catch (error) {
     return { success: false, totals: getCatalogTotals(), barcodeError: null, error: error instanceof Error ? error.message : "Catalog sync failed." };
   }
 }
 
-async function syncFbrConfig():Promise<{success:boolean;state:ReturnType<typeof getFbrSyncState>;error:string|null}>{const s=loadSettings();if(!s.erpnextUrl||!s.apiKey||!s.apiSecret)return{success:false,state:getFbrSyncState(),error:"Online connection required for FBR configuration sync."};try{const base=new URL(s.erpnextUrl).toString().replace(/\/+$/,"");let start=0;let fee=0;const rows:Record<string,unknown>[]=[];for(;;){const q=new URLSearchParams({limit_start:String(start),limit_page_length:"500"});const r=await fetch(`${base}/api/method/aimatic.offline_pos.api.get_pos_fbr_item_config?${q}`,{headers:{Authorization:`token ${s.apiKey}:${s.apiSecret}`}});if(!r.ok)throw new Error(await getResponseError(r));const b=await r.json() as {message?:unknown};const m=asRecord(b.message);const page=Array.isArray(m?.rows)?m.rows.map(asRecord).filter((x):x is Record<string,unknown>=>x!==null&&typeof x.item_code==="string"):[];rows.push(...page);if(typeof m?.service_fee==="number")fee=m.service_fee;if(!m?.has_more)break;start=typeof m?.next_start==="number"?m.next_start:start+500;}upsertFbrItemConfig(rows,fee);return{success:true,state:getFbrSyncState(),error:null};}catch(e){return{success:false,state:getFbrSyncState(),error:e instanceof Error?e.message:"FBR configuration sync failed."};}}
+async function syncFbrConfig(mode: "auto" | "full" = "auto"):Promise<{success:boolean;state:ReturnType<typeof getFbrSyncState>;error:string|null}>{const s=loadSettings();if(!s.erpnextUrl||!s.apiKey||!s.apiSecret)return{success:false,state:getFbrSyncState(),error:"Online connection required for FBR configuration sync."};try{const base=new URL(s.erpnextUrl).toString().replace(/\/+$/,"");const cursor=getMeta("fbr_config_last_sync")??"";const doFull=mode==="full"||!cursor||isFullDue("fbr_config_last_full_sync");let start=0;let fee=0;const rows:Record<string,unknown>[]=[];for(;;){const q=new URLSearchParams({limit_start:String(start),limit_page_length:"500"});if(!doFull&&cursor)q.set("modified_after",cursor);const r=await fetch(`${base}/api/method/aimatic.offline_pos.api.get_pos_fbr_item_config?${q}`,{headers:{Authorization:`token ${s.apiKey}:${s.apiSecret}`}});if(!r.ok)throw new Error(await getResponseError(r));const b=await r.json() as {message?:unknown};const m=asRecord(b.message);const page=Array.isArray(m?.rows)?m.rows.map(asRecord).filter((x):x is Record<string,unknown>=>x!==null&&typeof x.item_code==="string"):[];rows.push(...page);if(typeof m?.service_fee==="number")fee=m.service_fee;if(!m?.has_more)break;start=typeof m?.next_start==="number"?m.next_start:start+500;}upsertFbrItemConfig(rows,fee);const wm=maxModified(rows);if(wm)setMeta("fbr_config_last_sync",wm);if(doFull)setMeta("fbr_config_last_full_sync",new Date().toISOString());return{success:true,state:getFbrSyncState(),error:null};}catch(e){return{success:false,state:getFbrSyncState(),error:e instanceof Error?e.message:"FBR configuration sync failed."};}}
 
 function summarizePosConfiguration(configuration: Record<string, unknown>): PosConfigurationSummary | null {
   const profile = asRecord(configuration.pos_profile);
@@ -800,7 +1026,7 @@ async function getCustomerBenefits(customerName: string): Promise<{ loyaltyProgr
   const timeout = setTimeout(() => controller.abort(), 5_000);
   try {
     const baseUrl = new URL(settings.erpnextUrl.trim()).toString().replace(/\/+$/, "");
-    const query = new URLSearchParams({ customer: customerName });
+    const query = new URLSearchParams({ customer: customerName, pos_profile: settings.posProfile });
     const response = await fetch(`${baseUrl}/api/method/aimatic.offline_pos.api.get_customer_benefits?${query.toString()}`, {
       headers: { Authorization: `token ${settings.apiKey}:${settings.apiSecret}` },
       signal: controller.signal
@@ -841,7 +1067,33 @@ async function validateCoupon(couponCode: string): Promise<{ couponName: string 
 
 type FbrCalculatedRow = { success: true; item_code: string; quantity: number; inclusiveAmount: number; taxRate: number; salesTax: number; valueExcludingTax: number; retailPrice: number; isThirdSchedule: boolean } | { success: false; item_code: string; error: string };
 function isSuccessfulFbrRow(row: FbrCalculatedRow): row is Extract<FbrCalculatedRow, { success: true }> { return row.success === true; }
-function calculateFbrCart(input:Record<string,unknown>):Record<string,unknown>{const items=Array.isArray(input.items)?input.items.map(asRecord).filter((x):x is Record<string,unknown>=>x!==null):[];const configs=getFbrItemConfigs(items.map(x=>String(x.item_code??"")));const state=getFbrSyncState();const rows:FbrCalculatedRow[]=items.map(item=>{const code=String(item.item_code??"");const c=configs[code];if(!c)return{success:false,item_code:code,error:`FBR Tax Category is missing for ${code}`};if(c.enabled===0)return{success:false,item_code:code,error:`FBR Tax Category is disabled for ${code}`};try{const result=calculateFbrItem({itemCode:code,qty:Number(item.qty)||0,rate:Number(item.rate)||0,amount:Number(item.amount)||undefined,taxRate:Number(c.tax_rate)||0,isExempt:Boolean(c.is_exempt),isZeroRated:Boolean(c.is_zero_rated),isThirdSchedule:Boolean(c.is_third_schedule||c.custom_is_3rd_schedule),mrp:Number(c.custom_mrp)||undefined,taxCategory:String(c.custom_fbr_tax_category||""),hsCode:String(c.custom_fbr_hs_code||"")});return{success:true,item_code:code,quantity:result.quantity,inclusiveAmount:result.inclusiveAmount,taxRate:result.taxRate,salesTax:result.salesTax,valueExcludingTax:result.valueExcludingTax,retailPrice:result.retailPrice,isThirdSchedule:result.isThirdSchedule};}catch(e){return{success:false,item_code:code,error:e instanceof Error?e.message:"FBR calculation failed"};}});const validRows=rows.filter(isSuccessfulFbrRow);const valid=validRows.map(r=>({itemCode:r.item_code,qty:r.quantity,rate:Number((items.find(i=>String(i.item_code)===r.item_code)?.rate)||0),amount:r.inclusiveAmount,taxRate:r.taxRate,isThirdSchedule:r.isThirdSchedule,mrp:r.retailPrice/(r.quantity||1)}));const totals=calculateFbrInvoice(valid,state.serviceFee);const errorRows=rows.filter((row):row is Extract<FbrCalculatedRow,{success:false}>=>row.success===false);return{success:true,rows,totals,errors:errorRows.map(row=>row.error)};}
+function calculateFbrCart(input:Record<string,unknown>):Record<string,unknown>{const items=Array.isArray(input.items)?input.items.map(asRecord).filter((x):x is Record<string,unknown>=>x!==null):[];const configs=getFbrItemConfigs(items.map(x=>String(x.item_code??"")));const state=getFbrSyncState();const rows:FbrCalculatedRow[]=items.map(item=>{const code=String(item.item_code??"");const c=configs[code];if(!c)return{success:false,item_code:code,error:`FBR Tax Category is missing for ${code}`};if(c.enabled===0)return{success:false,item_code:code,error:`FBR Tax Category is disabled for ${code}`};try{const result=calculateFbrItem({itemCode:code,qty:Number(item.qty)||0,rate:Number(item.rate)||0,amount:Number(item.amount)||undefined,taxRate:Number(c.tax_rate)||0,isExempt:Boolean(c.is_exempt),isZeroRated:Boolean(c.is_zero_rated),isThirdSchedule:Boolean(c.is_third_schedule||c.custom_is_3rd_schedule),mrp:Number(c.custom_mrp)?Number(c.custom_mrp)*(Number(item.conversion_factor)||1):undefined,taxCategory:String(c.custom_fbr_tax_category||""),hsCode:String(c.custom_fbr_hs_code||"")});return{success:true,item_code:code,quantity:result.quantity,inclusiveAmount:result.inclusiveAmount,taxRate:result.taxRate,salesTax:result.salesTax,valueExcludingTax:result.valueExcludingTax,retailPrice:result.retailPrice,isThirdSchedule:result.isThirdSchedule};}catch(e){return{success:false,item_code:code,error:e instanceof Error?e.message:"FBR calculation failed"};}});const validRows=rows.filter(isSuccessfulFbrRow);const valid=validRows.map(r=>({itemCode:r.item_code,qty:r.quantity,rate:Number((items.find(i=>String(i.item_code)===r.item_code)?.rate)||0),amount:r.inclusiveAmount,taxRate:r.taxRate,isThirdSchedule:r.isThirdSchedule,mrp:r.retailPrice/(r.quantity||1)}));const totals=calculateFbrInvoice(valid,state.serviceFee);const errorRows=rows.filter((row):row is Extract<FbrCalculatedRow,{success:false}>=>row.success===false);return{success:true,rows,totals,errors:errorRows.map(row=>row.error)};}
+
+// --- Auto-update (electron-updater + GitHub Releases) ---------------------
+let autoUpdaterReady = false;
+function sendUpdateStatus(state: string, payload: Record<string, unknown> = {}): void {
+  mainWindowRef?.webContents.send("update:status", { state, ...payload });
+}
+// Apply a GitHub token for PRIVATE-repo updates when one is saved; public repos need none.
+function applyUpdateFeed(): void {
+  const token = (getMeta("github_update_token") || "").trim();
+  if (token) {
+    autoUpdater.setFeedURL({ provider: "github", owner: "BeelBegins", repo: "Posapplication", private: true, token } as Parameters<typeof autoUpdater.setFeedURL>[0]);
+  }
+}
+function setupAutoUpdater(): void {
+  if (autoUpdaterReady) { applyUpdateFeed(); return; }
+  autoUpdaterReady = true;
+  autoUpdater.autoDownload = false;            // the in-app button controls download
+  autoUpdater.autoInstallOnAppQuit = true;
+  applyUpdateFeed();
+  autoUpdater.on("checking-for-update", () => sendUpdateStatus("checking"));
+  autoUpdater.on("update-available", (info) => sendUpdateStatus("available", { version: info.version }));
+  autoUpdater.on("update-not-available", (info) => sendUpdateStatus("not-available", { version: info.version }));
+  autoUpdater.on("error", (err) => sendUpdateStatus("error", { error: err == null ? "unknown" : String(err.message || err) }));
+  autoUpdater.on("download-progress", (p) => sendUpdateStatus("downloading", { percent: Math.round(p.percent), transferred: p.transferred, total: p.total, bytesPerSecond: p.bytesPerSecond }));
+  autoUpdater.on("update-downloaded", (info) => sendUpdateStatus("downloaded", { version: info.version }));
+}
 
 function createMainWindow(): void {
   const mainWindow = new BrowserWindow({
@@ -856,8 +1108,12 @@ function createMainWindow(): void {
       nodeIntegration: false
     }
   });
+  mainWindowRef = mainWindow;
 
   mainWindow.loadFile(path.join(__dirname, "renderer", "index.html"));
+  mainWindow.on("closed", () => {
+    if (mainWindowRef === mainWindow) mainWindowRef = null;
+  });
   mainWindow.webContents.on("before-input-event", (event, input) => {
     if (input.type === "keyDown" && (input.key === "F9" || input.code === "F9")) {
       event.preventDefault();
@@ -871,6 +1127,14 @@ app.whenReady().then(() => {
   ipcMain.handle("db:getStatus", () => getDatabaseStatus());
   ipcMain.handle("settings:save", (_event, settings) => saveSettings(settings));
   ipcMain.handle("settings:load", () => getSettingsForRenderer());
+  ipcMain.handle("window:focus-pos", () => {
+    const win = mainWindowRef;
+    if (!win || win.isDestroyed()) return false;
+    win.focus();
+    win.webContents.focus();
+    win.webContents.send("pos:focus-scanner");
+    return true;
+  });
   ipcMain.handle("server:test", () => testServerReachability());
   ipcMain.handle("auth:test", () => testApiAuthentication());
   ipcMain.handle("pos-profiles:list", () => loadAvailablePosProfiles());
@@ -882,9 +1146,9 @@ app.whenReady().then(() => {
   ipcMain.handle("pos-session:get-cached", () => getCachedSessionSummary());
   ipcMain.handle("pos-session:active", () => getActivePosSession());
   ipcMain.handle("pos-session:start", (_event,input) => startPosSession(asRecord(input)??{}));
-  ipcMain.handle("catalog:sync", (event) => syncItemCatalog((message) => event.sender.send("catalog:progress", message)));
+  ipcMain.handle("catalog:sync", (event, mode) => syncItemCatalog((message) => event.sender.send("catalog:progress", message), mode === "full" ? "full" : "auto"));
   ipcMain.handle("catalog:get-totals", () => getCatalogTotals());
-  ipcMain.handle("fbr:sync", () => syncFbrConfig());
+  ipcMain.handle("fbr:sync", (_event, mode) => syncFbrConfig(mode === "full" ? "full" : "auto"));
   ipcMain.handle("fbr:state", () => getFbrSyncState());
   ipcMain.handle("catalog:search", (_event, query) => searchCatalog(String(query), textValue(asRecord(getPosBootstrap(loadSettings().posProfile)?.pos_profile), "warehouse")));
   ipcMain.handle("catalog:lookup", (_event, query) => lookupCatalog(String(query), textValue(asRecord(getPosBootstrap(loadSettings().posProfile)?.pos_profile), "warehouse")));
@@ -893,7 +1157,7 @@ app.whenReady().then(() => {
   ipcMain.handle("payments:methods", () => getPaymentMethods());
   ipcMain.handle("payments:load", () => { const id=getCartIdentity(); const cartKey=`${id.terminalId}::${id.openingEntry}`; return loadPaymentDraft(cartKey); });
   ipcMain.handle("payments:save", (_event, payments) => { const id=getCartIdentity(); savePaymentDraft(`${id.terminalId}::${id.openingEntry}`,Array.isArray(payments)?payments:[]); });
-  ipcMain.handle("customers:sync", () => syncCustomers());
+  ipcMain.handle("customers:sync", (_event, mode) => syncCustomers(mode === "full" ? "full" : "auto"));
   ipcMain.handle("customers:state", () => getCustomerSyncState());
   ipcMain.handle("customers:search", (_event, query) => searchCustomers(String(query)));
   ipcMain.handle("customers:load", (_event, name) => loadCustomer(String(name)));
@@ -907,6 +1171,9 @@ app.whenReady().then(() => {
   ipcMain.handle("benefits:validate-coupon", (_event, couponCode) => validateCoupon(String(couponCode)));
   ipcMain.handle("sale:terminal-id", () => getTerminalInvoiceId());
   ipcMain.handle("sale:submit", (_event,input) => submitOnlineSale(asRecord(input)??{}));
+  ipcMain.handle("sale:queue", (_event,input) => queueSale(asRecord(input)??{}));
+  ipcMain.handle("queue:sync", () => syncSaleQueue());
+  ipcMain.handle("queue:status", () => getQueueCounts());
   ipcMain.handle("receipt:get", (_event,invoice) => getPosReceipt(String(invoice)));
   ipcMain.handle("receipt:get-duplicate", (_event, invoice) => getDuplicateReceipt(String(invoice)));
   ipcMain.handle("receipt:print", (_event, html) => printReceiptHtml(String(html ?? "")));
@@ -921,7 +1188,24 @@ app.whenReady().then(() => {
   ipcMain.handle("sale:set-status", (_event, id, status) => setSaleHistoryStatus(String(id), String(status)));
   ipcMain.handle("refund:get-invoice", (_event, invoiceName) => getInvoiceForRefund(String(invoiceName)));
   ipcMain.handle("refund:submit", (_event, input) => submitPosRefund(asRecord(input) ?? {}));
+  ipcMain.handle("shift:summary", (_event, openingEntry) => getShiftSummary(openingEntry ? String(openingEntry) : undefined));
+  ipcMain.handle("shift:close", (_event, input) => closeShift(asRecord(input) ?? {}));
+  ipcMain.handle("shift:history", () => getShiftHistoryList());
+  ipcMain.handle("shift:history-get", (_event, openingEntry) => getShiftHistory(String(openingEntry ?? "")));
+  ipcMain.handle("update:current-version", () => app.getVersion());
+  ipcMain.handle("update:check", async () => {
+    try { setupAutoUpdater(); await autoUpdater.checkForUpdates(); return { ok: true, error: null }; }
+    catch (e) { const msg = e instanceof Error ? e.message : "Update check failed"; sendUpdateStatus("error", { error: msg }); return { ok: false, error: msg }; }
+  });
+  ipcMain.handle("update:download", async () => {
+    try { await autoUpdater.downloadUpdate(); return { ok: true, error: null }; }
+    catch (e) { const msg = e instanceof Error ? e.message : "Download failed"; sendUpdateStatus("error", { error: msg }); return { ok: false, error: msg }; }
+  });
+  ipcMain.handle("update:install", () => { autoUpdater.quitAndInstall(); });
+  ipcMain.handle("update:save-token", (_event, token) => { setMeta("github_update_token", String(token ?? "").trim()); applyUpdateFeed(); return { ok: true }; });
+  ipcMain.handle("update:token-set", () => Boolean((getMeta("github_update_token") || "").trim()));
   createMainWindow();
+  setupAutoUpdater();
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {

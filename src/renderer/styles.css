@@ -15,9 +15,15 @@ body { margin: 0; min-width: 320px; }
 #settings-screen { max-width: 1120px; margin: 0 auto; padding: 48px; }
 #pos-screen { height: 100vh; background: #eef3fa; display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; overflow: hidden; position: relative; }
 /* The hidden attribute must beat the ID-level display rules so only one screen shows at a time. */
-#pos-screen[hidden], #settings-screen[hidden], #start-shift-screen[hidden], #held-sales-screen[hidden], #sales-history-screen[hidden], #refund-screen[hidden] { display: none !important; }
+#pos-screen[hidden], #settings-screen[hidden], #start-shift-screen[hidden], #close-shift-screen[hidden], #shift-history-screen[hidden], #held-sales-screen[hidden], #sales-history-screen[hidden], #refund-screen[hidden] { display: none !important; }
 .icon-button { font-size: 1.2rem; line-height: 1; padding: 8px 12px; }
 .session-warning { padding: 8px 16px; background: #fef3c7; color: #92400e; font-size: 0.85rem; font-weight: 700; }
+.offline-banner { display: flex; align-items: center; gap: 14px; padding: 8px 16px; background: #fee2e2; color: #991b1b; font-size: 0.85rem; font-weight: 700; }
+.offline-banner[hidden] { display: none; } /* hidden attribute must beat display:flex */
+.offline-banner span { flex: 1 1 auto; }
+.offline-banner button { flex: 0 0 auto; padding: 6px 12px; }
+.offline-banner button:disabled { opacity: 0.5; }
+#pos-queue-status.queue-pending { color: #fca5a5; }
 .session-overlay { position: absolute; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; background: rgb(15 23 42 / 78%); }
 .session-overlay[hidden] { display: none; } /* the hidden attribute must override display:flex */
 .session-overlay-card { width: min(520px, 90vw); padding: 28px; border-radius: 14px; background: #fff; box-shadow: 0 20px 60px rgb(0 0 0 / 35%); text-align: center; }
@@ -44,6 +50,46 @@ body { margin: 0; min-width: 320px; }
 .fbr-tag.ok { background: #dcfce7; color: #15803d; }
 .fbr-tag.warn { background: #fef3c7; color: #b45309; }
 .fbr-tag.return { background: #fee2e2; color: #b91c1c; }
+
+/* --- Start Shift / Close Shift screens (1366x768-friendly two-column) --- */
+.shift-screen { height: 100vh; padding: 18px 28px; overflow-y: auto; background: #eef3fa; display: flex; flex-direction: column; gap: 12px; }
+.shift-sub { margin: 4px 0 0; color: #6b778b; font-size: 0.85rem; }
+.header-action { padding: 8px 14px; }
+.shift-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); gap: 16px; min-height: 0; }
+.shift-card { padding: 18px 20px; border: 1px solid #dce3ee; border-radius: 12px; background: #fff; box-shadow: 0 8px 24px rgb(21 34 56 / 6%); }
+.shift-card h3 { margin: 0 0 14px; font-size: 1.05rem; }
+.shift-dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 0; }
+.shift-dl div { padding: 10px 12px; border-radius: 8px; background: #f4f7fb; }
+.shift-dl dt { color: #6b778b; font-size: 0.74rem; }
+.shift-dl dd { margin: 5px 0 0; color: #243b61; font-weight: 700; overflow-wrap: anywhere; }
+.shift-notes { display: block; margin-top: 14px; color: #445168; font-size: 0.85rem; font-weight: 600; }
+.shift-notes textarea { display: block; width: 100%; margin-top: 7px; padding: 9px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font: inherit; resize: vertical; }
+.shift-balance-head, .shift-balance-row { display: grid; grid-template-columns: 1fr 160px; gap: 12px; align-items: center; }
+.shift-balance-head { padding: 6px 10px; color: #64748b; font-size: 0.72rem; font-weight: 700; }
+.shift-balance-rows { display: grid; gap: 8px; }
+.shift-balance-row { padding: 8px 10px; border: 1px solid #e3e9f2; border-radius: 8px; background: #f8fafc; }
+.shift-balance-row span { font-weight: 600; color: #243b61; overflow-wrap: anywhere; }
+.shift-balance-row input { margin: 0; text-align: right; }
+.shift-balance-total { display: flex; justify-content: space-between; margin: 14px 0 0; padding-top: 10px; border-top: 1px solid #dce3ee; font-weight: 700; color: #243b61; }
+.shift-estimate-note { margin: 12px 0 0; padding: 8px 10px; border-radius: 8px; background: #fef3c7; color: #92400e; font-size: 0.78rem; }
+.shift-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.shift-actions .primary-action { padding: 12px 22px; }
+.shift-actions button:disabled { opacity: 0.6; cursor: wait; }
+
+/* Close Shift reconciliation table */
+.close-recon-head, .close-recon-row { display: grid; grid-template-columns: 1.3fr 0.9fr 0.9fr 1.1fr 0.9fr; gap: 10px; align-items: center; }
+.close-recon-head { padding: 6px 10px; color: #64748b; font-size: 0.72rem; font-weight: 700; }
+.close-recon-rows { display: grid; gap: 8px; max-height: calc(100vh - 320px); overflow-y: auto; }
+.close-recon-row { padding: 8px 10px; border: 1px solid #e3e9f2; border-radius: 8px; background: #f8fafc; }
+.close-recon-row span { color: #243b61; font-weight: 600; text-align: right; overflow-wrap: anywhere; }
+.close-recon-row span:first-child { text-align: left; }
+.close-recon-row input { margin: 0; text-align: right; }
+.close-recon-row .recon-diff.balanced { color: #15803d; }
+.close-recon-row .recon-diff.over { color: #b45309; }
+.close-recon-row .recon-diff.short { color: #b91c1c; }
+#close-total-difference.balanced { color: #15803d; }
+#close-total-difference.warn { color: #b91c1c; }
+.shift-history-card .op-card-title .recon-diff.balanced { color: #15803d; }
 
 /* --- Refund screen --- */
 .refund-original { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 4px 16px; margin-bottom: 14px; }
@@ -197,7 +243,7 @@ button:disabled { cursor: wait; opacity: 0.65; }
 .profile-details dt { color: #6b778b; font-size: 0.78rem; }
 .profile-details dd { margin: 6px 0 0; color: #243b61; font-weight: 700; overflow-wrap: anywhere; }
 .cart-rows { display: grid; gap: 4px; margin-top: 6px; overflow-y: auto; max-height: calc(100vh - 210px); }
-.cart-row { width: 100%; text-align: left; background: #fff; color: #243b61; border-radius: 4px; display: grid; grid-template-columns: 1fr 2fr .6fr .7fr .8fr .7fr 1fr .8fr .5fr; gap: 10px; align-items: center; }
+.cart-row { width: 100%; text-align: left; background: #fff; color: #243b61; border-radius: 4px; display: grid; grid-template-columns: 1fr 2fr .6fr .7fr .8fr .7fr 1fr .8fr .5fr; gap: 10px; align-items: center; padding: 10px 12px; cursor: pointer; user-select: none; }
 .cart-row.selected { outline: 3px solid #2563eb; background: #dbeafe; }
 .cart-totals { display: flex; flex-wrap: wrap; gap: 18px; margin-top: 16px; color: #243b61; }
 .catalog-results { display: grid; gap: 6px; margin-top: 10px; }

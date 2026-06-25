@@ -6,6 +6,8 @@ interface DatabaseStatus {
 
 interface PosAPI {
   getDatabaseStatus: () => Promise<DatabaseStatus>;
+  focusPosWindow: () => Promise<boolean>;
+  onFocusScanner: (callback: () => void) => void;
   saveSettings: (settings: AppSettings) => Promise<void>;
   loadSettings: () => Promise<RendererSettings>;
   testServer: () => Promise<{ connected: boolean }>;
@@ -17,8 +19,8 @@ interface PosAPI {
   getCachedPosConfiguration: () => Promise<PosConfigurationSummary | null>;
   syncPosSession: () => Promise<{ success: boolean; summary: PosSessionSummary; error: string | null }>;
   getCachedPosSession: () => Promise<PosSessionSummary>;
-  syncItemCatalog: () => Promise<{ success: boolean; totals: CatalogTotals; barcodeError: string | null; error: string | null }>;
-  syncFbrConfig: () => Promise<{ success: boolean; state: { serviceFee: number }; error: string | null }>;
+  syncItemCatalog: (mode?: "auto" | "full") => Promise<{ success: boolean; totals: CatalogTotals; barcodeError: string | null; error: string | null }>;
+  syncFbrConfig: (mode?: "auto" | "full") => Promise<{ success: boolean; state: { serviceFee: number }; error: string | null }>;
   getFbrSyncState: () => Promise<{ itemCount: number; serviceFee: number; lastSynced: string | null; ready: boolean }>;
   getCatalogTotals: () => Promise<CatalogTotals>;
   searchCatalog: (query: string) => Promise<CatalogSearchResult[]>;
@@ -26,7 +28,7 @@ interface PosAPI {
   lookupCatalog: (query: string) => Promise<{ exact: CatalogSearchResult | null; results: CatalogSearchResult[] }>;
   loadCart: () => Promise<{ cartKey: string; lines: CartLine[] }>;
   saveCart: (lines: CartLine[]) => Promise<void>;
-  syncCustomers: () => Promise<{ success: boolean; state: {count:number;lastSynced:string|null}; error:string|null }>;
+  syncCustomers: (mode?: "auto" | "full") => Promise<{ success: boolean; state: {count:number;lastSynced:string|null}; error:string|null }>;
   getCustomerSyncState: () => Promise<{count:number;lastSynced:string|null}>;
   searchCustomers: (query:string) => Promise<CustomerResult[]>;
   loadCustomer: (name:string) => Promise<{customer: Record<string,unknown>|null;cached:boolean;error:string|null}>;
@@ -38,7 +40,10 @@ interface PosAPI {
   loadPaymentDraft: () => Promise<PaymentRow[]>;
   savePaymentDraft: (payments: PaymentRow[]) => Promise<void>;
   getTerminalInvoiceId: () => Promise<string>;
-  submitSale: (input: Record<string,unknown>) => Promise<{success:boolean;response:Record<string,unknown>|null;error:string|null}>;
+  submitSale: (input: Record<string,unknown>) => Promise<{success:boolean;response:Record<string,unknown>|null;error:string|null;queued?:boolean}>;
+  queueSale: (input: Record<string,unknown>) => Promise<{success:boolean;response:Record<string,unknown>|null;error:string|null;queued:boolean}>;
+  syncSaleQueue: () => Promise<{synced:number;failed:number;remaining:number;error:string|null}>;
+  getQueueStatus: () => Promise<{queued:number;failed:number}>;
   onCompleteSaleShortcut: (callback: () => void) => void;
   getActivePosSession: () => Promise<{success:boolean;session:Record<string,unknown>|null;error:string|null;diagnosticReason:string;apiUser:string;requestedPosProfile:string;entries:Record<string,unknown>[]}>;
   startPosSession: (input: Record<string,unknown>) => Promise<{success:boolean;session:Record<string,unknown>|null;error:string|null}>;
@@ -60,7 +65,22 @@ interface PosAPI {
   setSaleStatus: (id: string, status: string) => Promise<void>;
   getInvoiceForRefund: (invoiceName: string) => Promise<{ data: Record<string, unknown> | null; error: string | null }>;
   submitPosRefund: (input: Record<string, unknown>) => Promise<{ result: Record<string, unknown> | null; error: string | null }>;
+  getShiftSummary: (openingEntry?: string) => Promise<{ success: boolean; summary: ShiftSummary | null; error: string | null }>;
+  closeShift: (input: Record<string, unknown>) => Promise<{ success: boolean; closingEntry: string; response: Record<string, unknown> | null; error: string | null }>;
+  listShiftHistory: () => Promise<ShiftHistoryRow[]>;
+  getShiftHistory: (openingEntry: string) => Promise<ShiftHistoryRow | null>;
+  getAppVersion: () => Promise<string>;
+  checkForUpdate: () => Promise<{ ok: boolean; error: string | null }>;
+  downloadUpdate: () => Promise<{ ok: boolean; error: string | null }>;
+  installUpdate: () => Promise<void>;
+  saveUpdateToken: (token: string) => Promise<{ ok: boolean }>;
+  isUpdateTokenSet: () => Promise<boolean>;
+  onUpdateStatus: (callback: (payload: Record<string, unknown>) => void) => void;
 }
+
+interface ShiftPaymentRow { mode_of_payment: string; opening_amount: number; collected_amount: number; expected_amount: number; }
+interface ShiftSummary { openingEntry: string; posProfile: string; user: string; company: string; periodStart: string; postingDate: string; status: string; payments: ShiftPaymentRow[]; invoiceCount: number; netSales: number; totalOpening: number; totalExpected: number; isEstimate: boolean; }
+interface ShiftHistoryRow { openingEntry: string; closingEntry: string | null; posProfile: string; cashier: string; company: string; openedAt: string | null; closedAt: string | null; openingCash: number; expectedCash: number; actualCash: number; difference: number; netSales: number; status: string; summary: Record<string, unknown> | null; createdAt: string; }
 
 interface HeldSaleSummary { id: number; terminalInvoiceId: string; displayName: string; customer: string; customerName: string; posProfile: string; openingEntry: string; itemCount: number; estimatedTotal: number; createdAt: string; updatedAt: string; status: string; }
 interface HeldSaleDetail extends HeldSaleSummary { company: string; branch: string; cart: unknown[]; payments: unknown[]; benefits: Record<string, unknown> | null; totals: Record<string, unknown> | null; validationSnapshot: Record<string, unknown> | null; }
@@ -113,7 +133,7 @@ interface PosSessionSummary {
 }
 
 interface CatalogTotals { items: number; prices: number; barcodes: number; stockRows: number; lastSynced: string | null; }
-interface CatalogSearchResult { itemCode: string; itemName: string; barcode: string | null; uom: string; sellingPrice: number | null; currency: string | null; actualStock: number | null; warehouse: string | null; }
+interface CatalogSearchResult { itemCode: string; itemName: string; barcode: string | null; uom: string; conversionFactor: number; sellingPrice: number | null; currency: string | null; actualStock: number | null; warehouse: string | null; }
 interface CartLine extends CatalogSearchResult { quantity: number; }
 interface CustomerResult { name:string; customer_name:string; customer_group:string; mobile_no:string; email_id:string; tax_id:string; }
 interface PaymentRow { method:string; amount:number; }
@@ -252,6 +272,34 @@ async function loadCachedPosSession(): Promise<void> {
     showPosSessionSummary({ sessionStatus: "Not Open", openingEntry: "", user: "", startDateTime: "", openingBalanceRowsCount: 0, lastSynced: null });
   }
 }
+// Offline cold start: optimistically trust the cached open shift so offline checkout is allowed.
+// A reconnect revalidation (revalidateLive) will correct this if the shift was actually closed.
+async function seedSessionFromCache(): Promise<boolean> {
+  let summary: PosSessionSummary;
+  try { summary = await window.posAPI.getCachedPosSession(); } catch { return false; }
+  const entry = summary.openingEntry || "";
+  if (!entry || summary.sessionStatus !== "Open") { sessionHasEntry = Boolean(entry); return false; }
+  sessionHasEntry = true;
+  sessionState = {
+    openingEntry: entry, status: "Open", user: summary.user || authenticatedUser,
+    posProfile: document.querySelector<HTMLSelectElement>("#pos-profile")?.value || sessionState.posProfile,
+    company: document.querySelector<HTMLElement>("#config-company")?.textContent || sessionState.company,
+    postingDate: "", periodStart: summary.startDateTime || "", lastChecked: Date.now(), lastError: "", valid: true, reason: ""
+  };
+  applySessionToHeader(); renderSessionInfo(); updateCompleteSaleState();
+  return true;
+}
+// Offline cold start: seed the POS Profile's default customer (online bootstrap normally does this) so checkout isn't blocked.
+async function seedDefaultCustomerFromConfig(cfg: PosConfigurationSummary): Promise<void> {
+  if (selectedCustomer || !cfg.defaultCustomer) return;
+  const base = { name: cfg.defaultCustomer, customer_name: cfg.defaultCustomer, customer_group: "", mobile_no: "", email_id: "", tax_id: "" };
+  selectedCustomer = base;
+  try {
+    const c = await window.posAPI.loadCustomer(cfg.defaultCustomer);
+    if (c.customer) selectedCustomer = { ...base, customer_name: String(c.customer.customer_name ?? base.customer_name), customer_group: String(c.customer.customer_group ?? ""), mobile_no: String(c.customer.mobile_no ?? ""), email_id: String(c.customer.email_id ?? ""), tax_id: String(c.customer.tax_id ?? "") };
+  } catch { /* offline: keep the cached default-customer base */ }
+  showCustomer();
+}
 
 function showCatalogTotals(totals: CatalogTotals): void {
   const fields: Record<string, string> = { "#catalog-items": String(totals.items), "#catalog-prices": String(totals.prices), "#catalog-barcodes": String(totals.barcodes), "#catalog-stock": String(totals.stockRows), "#catalog-synced": formatDateTime(totals.lastSynced) };
@@ -272,7 +320,7 @@ function showCatalogResults(results: CatalogSearchResult[]): void {
   container.replaceChildren();
   for (const result of results) {
     const row = document.createElement("div"); row.className = "catalog-result";
-    row.textContent = `${result.itemCode} — ${result.itemName} | Barcode: ${result.barcode ?? "—"} | UOM: ${result.uom} | Price: ${result.sellingPrice ?? "—"} ${result.currency ?? ""} | Stock: ${result.actualStock ?? "—"} | Warehouse: ${result.warehouse ?? "—"}`;
+    row.textContent = `${result.itemCode} — ${result.itemName} | Barcode: ${result.barcode ?? "—"} | UOM: ${result.uom} x${result.conversionFactor ?? 1} | Price: ${result.sellingPrice ?? "—"} ${result.currency ?? ""} | Stock: ${result.actualStock ?? "—"} | Warehouse: ${result.warehouse ?? "—"}`;
     container.append(row);
   }
 }
@@ -290,7 +338,7 @@ let serverTotals: Record<string, unknown> | null = null;
 let currentCartVersion = 0;        // bumped on every cart / customer / coupon / loyalty change
 let validatedCartVersion = -1;     // highest cart version confirmed by the server preview
 let paymentPreparedVersion = -1;   // cart version the prepared payment belongs to
-let previewStatus: "idle" | "local" | "validating" | "validated" | "applied" | "error" = "idle";
+let previewStatus: "idle" | "local" | "validating" | "validated" | "applied" | "error" | "offline" = "idle";
 let previewError = "";
 let activePreviewPromise: Promise<void> | null = null;
 let serverTaxRows: unknown[] | null = null;   // top-level tax rows returned by the server
@@ -321,20 +369,75 @@ let sessionCheckInFlight: Promise<boolean> | null = null;
 let paymentEditIndex: number | null = null;
 let terminalInvoiceId = "";
 let submissionInProgress = false;
+let startShiftInFlight = false;
+let closeShiftInFlight = false;
+let shiftClosed = false;          // set after a successful Close Shift; blocks F6/F9 until a new shift is started
+let queueSyncInFlight = false;    // guards overlapping offline-queue sync runs
 let appliedBenefits: AppliedBenefits = { loyaltyPoints: 0, couponCode: "" };
 let customerBenefits = { loyaltyProgram: "", availablePoints: 0, conversionFactor: 1 };
 let benefitsOutdated = false;
 const slashSearchEnabled = true;
+let scannerFocusUntil = 0;
+let scannerFocusTimer: number | undefined;
 function cartInput(): HTMLInputElement | null { return document.querySelector<HTMLInputElement>("#cart-search"); }
-function focusCart(): void { window.setTimeout(() => cartInput()?.focus(), 0); }
+function shouldFocusScanner(): boolean {
+  const input = cartInput();
+  const posScreen = document.querySelector<HTMLElement>("#pos-screen");
+  return Boolean(input && !input.disabled && !posScreen?.hidden && !document.querySelector<HTMLDialogElement>("dialog[open]"));
+}
+function isEditableElement(element: Element | null): boolean {
+  return element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement || Boolean(element?.closest("[contenteditable='true']"));
+}
+function isScannerTextKey(event: KeyboardEvent): boolean {
+  return !event.ctrlKey && !event.altKey && !event.metaKey && /^[a-zA-Z0-9]$/.test(event.key);
+}
+function captureScannerTextKey(event: KeyboardEvent): boolean {
+  if (!isScannerTextKey(event) || !shouldFocusScanner() || isEditableElement(document.activeElement)) return false;
+  const input = cartInput();
+  if (!input) return false;
+  event.preventDefault();
+  event.stopPropagation();
+  applyScannerFocus();
+  const start = input.selectionStart ?? input.value.length;
+  const end = input.selectionEnd ?? input.value.length;
+  input.value = `${input.value.slice(0, start)}${event.key}${input.value.slice(end)}`;
+  const next = start + event.key.length;
+  input.setSelectionRange(next, next);
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  return true;
+}
+function applyScannerFocus(): boolean {
+  const input = cartInput();
+  if (!input || !shouldFocusScanner()) return false;
+  input.focus({ preventScroll: true });
+  const end = input.value.length;
+  input.setSelectionRange(end, end);
+  return document.activeElement === input;
+}
+function focusCart(sticky = false, nativeFocus = false): void {
+  if (sticky) scannerFocusUntil = Date.now() + 800;
+  if (nativeFocus) void window.posAPI.focusPosWindow();
+  const tick = (): void => {
+    const focused = applyScannerFocus();
+    if (scannerFocusTimer !== undefined) {
+      window.clearTimeout(scannerFocusTimer);
+      scannerFocusTimer = undefined;
+    }
+    if ((!focused || Date.now() < scannerFocusUntil) && shouldFocusScanner()) {
+      scannerFocusTimer = window.setTimeout(tick, 40);
+    }
+  };
+  window.setTimeout(tick, 0);
+  window.requestAnimationFrame(tick);
+}
 function cartMessage(message: string): void { const e = document.querySelector<HTMLElement>("#cart-message"); if (e) e.textContent = message; }
 function clearCartSearch(): void { cartSearchResults = []; selectedSearchIndex = 0; const input = cartInput(); if (input) input.value = ""; document.querySelector<HTMLElement>("#cart-search-results")?.replaceChildren(); }
-type PosScreen = "pos" | "settings" | "start-shift" | "held-sales" | "sales-history" | "refund";
-const screenIds: Record<PosScreen, string> = { pos: "#pos-screen", settings: "#settings-screen", "start-shift": "#start-shift-screen", "held-sales": "#held-sales-screen", "sales-history": "#sales-history-screen", refund: "#refund-screen" };
+type PosScreen = "pos" | "settings" | "start-shift" | "close-shift" | "shift-history" | "held-sales" | "sales-history" | "refund";
+const screenIds: Record<PosScreen, string> = { pos: "#pos-screen", settings: "#settings-screen", "start-shift": "#start-shift-screen", "close-shift": "#close-shift-screen", "shift-history": "#shift-history-screen", "held-sales": "#held-sales-screen", "sales-history": "#sales-history-screen", refund: "#refund-screen" };
 // Switches the visible view without touching cart/customer/payment state.
 function showScreen(screen: PosScreen): void {
   for (const [key, selector] of Object.entries(screenIds)) { const el = document.querySelector<HTMLElement>(selector); if (el) el.hidden = key !== screen; }
-  if (screen === "pos") focusCart();
+  if (screen === "pos") focusCart(true);
 }
 function updatePosHeader(): void { const set = (id: string, value: string) => { const e = document.querySelector<HTMLElement>(id); if (e) e.textContent = value || "—"; }; set("#pos-branch", (document.querySelector<HTMLInputElement>("#branch")?.value ?? "")); set("#pos-profile-name", document.querySelector<HTMLSelectElement>("#pos-profile")?.value ?? ""); set("#pos-terminal", document.querySelector<HTMLInputElement>("#terminal-id")?.value ?? ""); const user = document.querySelector<HTMLElement>("#session-user")?.textContent ?? ""; set("#pos-cashier", user); set("#pos-opening-entry", document.querySelector<HTMLElement>("#session-opening-entry")?.textContent ?? ""); }
 function showCustomer(): void { const e=document.querySelector<HTMLElement>("#pos-customer"); if(e)e.textContent=selectedCustomer?`${selectedCustomer.customer_name || selectedCustomer.name}${navigator.onLine?"":" (Cached)"}`:"—"; }
@@ -349,11 +452,261 @@ async function selectCustomer(customer: CustomerResult): Promise<void> { const r
 async function searchCustomer(preserveSelection = false): Promise<void> { const query=customerInput()?.value.trim()??""; customerResults=await window.posAPI.searchCustomers(query); if(!preserveSelection) selectedCustomerIndex=0; selectedCustomerIndex=Math.min(selectedCustomerIndex,Math.max(0,customerResults.length-1)); const box=document.querySelector<HTMLElement>("#customer-results"); if(!box)return; box.replaceChildren(...customerResults.map((c,i)=>{const b=document.createElement("button");b.type="button";b.className=`secondary-button search-result${i===selectedCustomerIndex?" selected":""}`;b.textContent=`${c.name} — ${c.customer_name} | ${c.mobile_no||c.email_id||c.tax_id||""}`;b.onclick=()=>void selectCustomer(c);return b;})); box.querySelector<HTMLElement>(".selected")?.scrollIntoView({block:"nearest"}); }
 function openCustomerSearch(): void { const dialog=document.querySelector<HTMLDialogElement>("#customer-dialog"); if(!dialog)return; dialog.showModal(); const createButton=document.querySelector<HTMLButtonElement>("#new-customer"); if(createButton)createButton.disabled=!isOnline(); const detail=document.querySelector<HTMLElement>("#customer-detail"); if(detail)detail.textContent=isOnline()?"":"Online connection required to create a customer."; const input=customerInput(); if(input){input.value="";input.focus();} void searchCustomer(); }
 function isOnline(): boolean { return document.querySelector<HTMLElement>("#pos-server-status")?.textContent === "Online"; }
-async function showStartShift():Promise<void>{const set=(id:string,value:string)=>{const e=document.querySelector<HTMLElement>(id);if(e)e.textContent=value||"—";};set("#shift-profile",document.querySelector<HTMLSelectElement>("#pos-profile")?.value??"");set("#shift-terminal",document.querySelector<HTMLInputElement>("#terminal-id")?.value??"");set("#shift-company",document.querySelector<HTMLElement>("#config-company")?.textContent??"");set("#shift-cashier",document.querySelector<HTMLElement>("#pos-cashier")?.textContent??"");const modes=await window.posAPI.getPaymentMethods();const box=document.querySelector<HTMLElement>("#shift-opening-amounts");const message=document.querySelector<HTMLElement>("#start-shift-message");if(!modes.length){if(message)message.textContent="No payment methods loaded from POS Profile";if(box)box.replaceChildren();showScreen("start-shift");return;}if(message)message.textContent="";if(box)box.replaceChildren(...modes.map((mode)=>{const label=document.createElement("label");label.textContent=`${mode} Opening Amount`;const input=document.createElement("input");input.type="number";input.step="0.001";input.dataset.mode=mode;input.value="0";label.append(input);return label;}));showScreen("start-shift");}
-async function startShift():Promise<void>{const message=document.querySelector<HTMLElement>("#start-shift-message");if(!isOnline()){if(message)message.textContent="Online connection required to start shift";return;}const balances=[...document.querySelectorAll<HTMLInputElement>("#shift-opening-amounts input")].map(input=>({mode_of_payment:input.dataset.mode??"",opening_amount:Number(input.value)||0})).filter(row=>Boolean(row.mode_of_payment));if(!balances.length){if(message)message.textContent="No payment methods loaded from POS Profile";return;}if(message)message.textContent=`Development diagnostics — opening balances: ${balances.map(row=>`${row.mode_of_payment}=${row.opening_amount}`).join(", ")}`;const result=await window.posAPI.startPosSession({opening_balances:balances});if(!result.success||!result.session){if(message)message.textContent=result.error??"Unable to start shift";return;}const s=result.session;showPosSessionSummary({sessionStatus:"Open",openingEntry:String(s.opening_entry??s.name??""),user:String(s.user??""),startDateTime:String(s.period_start_date??s.creation??""),openingBalanceRowsCount:Array.isArray(s.balance_details)?s.balance_details.length:0,lastSynced:new Date().toISOString()});
-  // Server cached the Opening Entry; re-run validation against it, then open POS.
-  sessionState.openingEntry="";const ok=await validateSession("start-shift");updatePosHeader();
-  if(ok){showScreen("pos");}else{if(message)message.textContent=sessionState.reason||"Session could not be validated after starting the shift.";}}
+function fmtMoney(value: number): string { return money2(value).toFixed(2); }
+function setText(id: string, value: string): void { const e = document.querySelector<HTMLElement>(id); if (e) e.textContent = value || "—"; }
+
+// --- Offline sale queue UI ---------------------------------------------------
+// Reflect connectivity + pending-queue count in the header badge and the OFFLINE banner.
+async function updateOfflineUi(): Promise<void> {
+  const online = isOnline();
+  let counts = { queued: 0, failed: 0 };
+  try { counts = await window.posAPI.getQueueStatus(); } catch { /* DB not ready — leave zeros */ }
+  const queueEl = document.querySelector<HTMLElement>("#pos-queue-status");
+  if (queueEl) { queueEl.textContent = counts.queued > 0 ? `${counts.queued} pending` : (online ? "Synced" : "—"); queueEl.className = counts.queued > 0 ? "queue-pending" : ""; }
+  const banner = document.querySelector<HTMLElement>("#pos-offline-banner");
+  const text = document.querySelector<HTMLElement>("#pos-offline-text");
+  const show = !online || counts.queued > 0;
+  if (banner) banner.hidden = !show;
+  if (text) text.textContent = !online
+    ? `OFFLINE — sales complete on local FBR estimates and queue automatically${counts.queued ? ` (${counts.queued} pending)` : ""}. They post to FBR when the server returns.`
+    : counts.queued ? `Back online — ${counts.queued} queued sale(s) pending sync.` : "";
+  const syncBtn = document.querySelector<HTMLButtonElement>("#pos-sync-queue");
+  if (syncBtn) syncBtn.disabled = !online || counts.queued === 0;
+}
+// Replay the offline queue to the server. Called on reconnect and from the manual "Sync Now" button.
+async function syncQueueNow(manual = false): Promise<void> {
+  if (!isOnline()) { if (manual) cartMessage("Still offline — queued sales will sync when the server returns."); return; }
+  if (queueSyncInFlight) return;
+  queueSyncInFlight = true;
+  try {
+    const r = await window.posAPI.syncSaleQueue();
+    if (manual || r.synced || r.failed) cartMessage(`Queue sync: ${r.synced} synced${r.failed ? `, ${r.failed} failed` : ""}${r.remaining ? `, ${r.remaining} remaining` : ""}.`);
+  } catch { if (manual) cartMessage("Queue sync failed — will retry on next reconnect."); }
+  finally { queueSyncInFlight = false; await updateOfflineUi(); }
+}
+
+// --- Start Shift -------------------------------------------------------------
+function updateOpeningTotal(): void {
+  const total = [...document.querySelectorAll<HTMLInputElement>("#shift-opening-amounts input")].reduce((sum, input) => sum + (Number(input.value) || 0), 0);
+  setText("#shift-opening-total", fmtMoney(total));
+}
+async function showStartShift(): Promise<void> {
+  const online = isOnline();
+  const dot = document.querySelector<HTMLElement>("#start-shift-online");
+  if (dot) { dot.textContent = online ? "Online" : "Offline"; dot.className = `online-dot ${online ? "online" : "offline"}`; }
+  setText("#shift-cashier", document.querySelector<HTMLElement>("#pos-cashier")?.textContent ?? authenticatedUser ?? "");
+  setText("#shift-company", document.querySelector<HTMLElement>("#config-company")?.textContent ?? "");
+  setText("#shift-branch", document.querySelector<HTMLInputElement>("#branch")?.value ?? "");
+  setText("#shift-profile", document.querySelector<HTMLSelectElement>("#pos-profile")?.value ?? "");
+  setText("#shift-warehouse", document.querySelector<HTMLInputElement>("#warehouse")?.value ?? document.querySelector<HTMLElement>("#config-warehouse")?.textContent ?? "");
+  setText("#shift-terminal", document.querySelector<HTMLInputElement>("#terminal-id")?.value ?? "");
+  setText("#shift-datetime", new Date().toLocaleString());
+  const message = document.querySelector<HTMLElement>("#start-shift-message");
+  const box = document.querySelector<HTMLElement>("#shift-opening-amounts");
+  const modes = await window.posAPI.getPaymentMethods();
+  if (!modes.length) { if (message) message.textContent = "No payment methods loaded from POS Profile — run Force Full POS Configuration Sync in Settings."; if (box) box.replaceChildren(); }
+  else {
+    if (message) message.textContent = "";
+    if (box) box.replaceChildren(...modes.map((mode) => {
+      const row = document.createElement("div"); row.className = "shift-balance-row";
+      const label = document.createElement("span"); label.textContent = mode;
+      const input = document.createElement("input"); input.type = "number"; input.min = "0"; input.step = "0.01"; input.dataset.mode = mode; input.value = "0";
+      input.addEventListener("input", updateOpeningTotal);
+      row.append(label, input); return row;
+    }));
+  }
+  updateOpeningTotal();
+  showScreen("start-shift");
+}
+async function startShift(): Promise<void> {
+  const message = document.querySelector<HTMLElement>("#start-shift-message");
+  const button = document.querySelector<HTMLButtonElement>("#start-shift");
+  if (startShiftInFlight) return;                                          // prevent duplicate submission
+  if (!isOnline()) { if (message) message.textContent = "Online connection required to start shift"; return; }
+  const balances = [...document.querySelectorAll<HTMLInputElement>("#shift-opening-amounts input")]
+    .map((input) => ({ mode_of_payment: input.dataset.mode ?? "", opening_amount: Number(input.value) || 0 }))
+    .filter((row) => Boolean(row.mode_of_payment));
+  if (!balances.length) { if (message) message.textContent = "No payment methods loaded from POS Profile"; return; }
+  startShiftInFlight = true;
+  if (button) button.disabled = true;
+  if (message) message.textContent = "Starting shift…";
+  try {
+    const result = await window.posAPI.startPosSession({ opening_balances: balances });
+    if (!result.success || !result.session) { if (message) message.textContent = result.error ?? "Unable to start shift"; return; }
+    const s = result.session;
+    showPosSessionSummary({ sessionStatus: "Open", openingEntry: String(s.opening_entry ?? s.name ?? ""), user: String(s.user ?? ""), startDateTime: String(s.period_start_date ?? s.creation ?? ""), openingBalanceRowsCount: Array.isArray(s.balance_details) ? s.balance_details.length : 0, lastSynced: new Date().toISOString() });
+    // Server cached/returned the active Opening Entry (idempotent — never creates a duplicate); re-validate then open POS.
+    shiftClosed = false;
+    sessionState.openingEntry = "";
+    const ok = await validateSession("start-shift");
+    updatePosHeader();
+    if (ok) { if (message) message.textContent = ""; showScreen("pos"); }
+    else if (message) message.textContent = sessionState.reason || "Session could not be validated after starting the shift.";
+  } finally {
+    startShiftInFlight = false;
+    if (button) button.disabled = false;
+  }
+}
+
+// Refresh Session from the Start Shift screen: adopt an already-active shift (if any) and jump to POS.
+async function refreshFromStartShift(): Promise<void> {
+  const message = document.querySelector<HTMLElement>("#start-shift-message");
+  if (!isOnline()) { if (message) message.textContent = "Online connection required to refresh the session"; return; }
+  if (message) message.textContent = "Refreshing session…";
+  sessionState.openingEntry = "";
+  const ok = await validateSession("start-shift-refresh");
+  updatePosHeader();
+  if (ok) { shiftClosed = false; if (message) message.textContent = ""; showScreen("pos"); }
+  else { await showStartShift(); if (message) message.textContent = sessionState.reason || "No active POS Opening Entry found."; }
+}
+
+// --- Close Shift -------------------------------------------------------------
+let closeShiftSummary: ShiftSummary | null = null;
+function reconRows(): { mode: string; expected: number; opening: number; actual: number }[] {
+  return [...document.querySelectorAll<HTMLElement>("#close-recon-rows .close-recon-row")].map((row) => ({
+    mode: row.dataset.mode ?? "",
+    opening: Number(row.dataset.opening) || 0,
+    expected: Number(row.dataset.expected) || 0,
+    actual: Number(row.querySelector<HTMLInputElement>("input")?.value) || 0
+  }));
+}
+function updateCloseDifferences(): void {
+  let totalDiff = 0;
+  for (const row of document.querySelectorAll<HTMLElement>("#close-recon-rows .close-recon-row")) {
+    const expected = Number(row.dataset.expected) || 0;
+    const actual = Number(row.querySelector<HTMLInputElement>("input")?.value) || 0;
+    const diff = money2(actual - expected); totalDiff += diff;
+    const diffEl = row.querySelector<HTMLElement>(".recon-diff");
+    if (diffEl) { diffEl.textContent = fmtMoney(diff); diffEl.className = `recon-diff ${Math.abs(diff) < 0.005 ? "balanced" : diff > 0 ? "over" : "short"}`; }
+  }
+  const totalEl = document.querySelector<HTMLElement>("#close-total-difference");
+  if (totalEl) { totalEl.textContent = fmtMoney(totalDiff); totalEl.className = Math.abs(totalDiff) < 0.005 ? "balanced" : "warn"; }
+}
+async function showCloseShift(): Promise<void> {
+  const message = document.querySelector<HTMLElement>("#close-shift-message");
+  if (!isOnline()) { if (message) message.textContent = "Online connection required to close shift"; showSessionInvalid("Server is offline"); return; }
+  // Validate there is an active shift before opening the form.
+  if (!(await validateSession("close-shift"))) { showScreen("pos"); showSessionInvalid(sessionState.reason); return; }
+  if (txnInProgress()) { showScreen("pos"); if (message) message.textContent = ""; cartMessage("Finish or hold the current sale/payment before closing the shift."); return; }
+  // Drain any queued offline sales first so expected totals (server POS Invoices) include them.
+  await syncQueueNow();
+  const queue = await window.posAPI.getQueueStatus().catch(() => ({ queued: 0, failed: 0 }));
+  const result = await window.posAPI.getShiftSummary(sessionState.openingEntry);
+  if (!result.success || !result.summary) { showScreen("pos"); cartMessage(result.error ?? "Unable to load shift summary"); return; }
+  closeShiftSummary = result.summary;
+  const s = result.summary;
+  setText("#close-opening-entry", s.openingEntry);
+  setText("#close-cashier", s.user);
+  setText("#close-profile", s.posProfile);
+  setText("#close-opened-at", s.periodStart ? new Date(s.periodStart).toLocaleString() : "—");
+  setText("#close-invoice-count", String(s.invoiceCount));
+  setText("#close-net-sales", fmtMoney(s.netSales));
+  const note = document.querySelector<HTMLElement>("#close-estimate-note"); if (note) note.hidden = !s.isEstimate;
+  if (message) message.textContent = queue.queued > 0 ? `Warning: ${queue.queued} offline sale(s) could not be synced and are NOT included in expected totals. Sync the queue before closing if possible.` : "";
+  const box = document.querySelector<HTMLElement>("#close-recon-rows");
+  if (box) box.replaceChildren(...s.payments.map((p) => {
+    const row = document.createElement("div"); row.className = "close-recon-row";
+    row.dataset.mode = p.mode_of_payment; row.dataset.opening = String(p.opening_amount); row.dataset.expected = String(p.expected_amount);
+    const mode = document.createElement("span"); mode.textContent = p.mode_of_payment;
+    const opening = document.createElement("span"); opening.textContent = fmtMoney(p.opening_amount);
+    const expected = document.createElement("span"); expected.textContent = fmtMoney(p.expected_amount);
+    const actualWrap = document.createElement("span");
+    const input = document.createElement("input"); input.type = "number"; input.min = "0"; input.step = "0.01"; input.value = fmtMoney(p.expected_amount);
+    input.addEventListener("input", updateCloseDifferences); actualWrap.append(input);
+    const diff = document.createElement("span"); diff.className = "recon-diff balanced"; diff.textContent = "0.00";
+    row.append(mode, opening, expected, actualWrap, diff); return row;
+  }));
+  updateCloseDifferences();
+  showScreen("close-shift");
+}
+async function submitCloseShift(): Promise<void> {
+  const message = document.querySelector<HTMLElement>("#close-shift-message");
+  const button = document.querySelector<HTMLButtonElement>("#close-shift-submit");
+  if (closeShiftInFlight) return;
+  if (!isOnline()) { if (message) message.textContent = "Online connection required to close shift"; return; }
+  if (!closeShiftSummary) { if (message) message.textContent = "Shift summary not loaded"; return; }
+  // Re-validate the session immediately before submitting.
+  if (!(await validateSession("close-submit"))) { if (message) message.textContent = sessionState.reason || "POS session is no longer active"; return; }
+  const rows = reconRows();
+  const totalDiff = rows.reduce((sum, r) => sum + (r.actual - r.expected), 0);
+  if (Math.abs(totalDiff) >= 0.005 && !confirm(`There is a difference of ${fmtMoney(totalDiff)} between counted and expected amounts. Submit the closing entry anyway?`)) return;
+  closeShiftInFlight = true;
+  if (button) button.disabled = true;
+  if (message) message.textContent = "Submitting closing entry…";
+  try {
+    const result = await window.posAPI.closeShift({
+      opening_entry: closeShiftSummary.openingEntry,
+      closing_balances: rows.map((r) => ({ mode_of_payment: r.mode, opening_amount: r.opening, expected_amount: r.expected, closing_amount: money2(r.actual), difference: money2(r.actual - r.expected) })),
+      notes: document.querySelector<HTMLTextAreaElement>("#close-notes")?.value ?? ""
+    });
+    if (!result.success) { if (message) message.textContent = result.error ?? "Unable to close shift"; return; }
+    // Shift closed: mark closed locally, drop the cached entry, preserve Sales History + held sales, block F6/F9, go to Start Shift.
+    shiftClosed = true;
+    closeShiftSummary = null;
+    sessionState = { openingEntry: "", status: "Closed", user: "", posProfile: sessionState.posProfile, company: sessionState.company, postingDate: "", periodStart: "", lastChecked: Date.now(), lastError: "", valid: false, reason: "Shift closed" };
+    showPosSessionSummary({ sessionStatus: "Not Open", openingEntry: "", user: "", startDateTime: "", openingBalanceRowsCount: 0, lastSynced: new Date().toISOString() });
+    applySessionToHeader(); renderSessionInfo(); updateCompleteSaleState();
+    if (message) message.textContent = `Shift closed${result.closingEntry ? ` — ${result.closingEntry}` : ""}.`;
+    await showStartShift();
+    const startMsg = document.querySelector<HTMLElement>("#start-shift-message");
+    if (startMsg) startMsg.textContent = `Previous shift closed${result.closingEntry ? ` (${result.closingEntry})` : ""}. Start a new shift to continue.`;
+  } finally {
+    closeShiftInFlight = false;
+    if (button) button.disabled = false;
+  }
+}
+
+// --- Shift History -----------------------------------------------------------
+async function openShiftHistory(): Promise<void> { showScreen("shift-history"); await renderShiftHistory(); }
+async function renderShiftHistory(): Promise<void> {
+  const message = document.querySelector<HTMLElement>("#shift-history-message");
+  const list = document.querySelector<HTMLElement>("#shift-history-list");
+  if (!list) return;
+  let rows: ShiftHistoryRow[] = [];
+  try { rows = await window.posAPI.listShiftHistory(); } catch { if (message) message.textContent = "Unable to load shift history"; }
+  if (!rows.length) { if (message) message.textContent = ""; list.replaceChildren(Object.assign(document.createElement("div"), { className: "op-empty", textContent: "No closed shifts recorded on this terminal yet." })); return; }
+  if (message) message.textContent = "";
+  list.replaceChildren(...rows.map((r) => {
+    const card = document.createElement("div"); card.className = "op-card shift-history-card";
+    const main = document.createElement("div"); main.className = "op-card-main";
+    const title = document.createElement("div"); title.className = "op-card-title"; title.textContent = `${r.openingEntry}${r.closingEntry ? ` → ${r.closingEntry}` : ""}`;
+    const diffClass = Math.abs(r.difference) < 0.005 ? "balanced" : r.difference > 0 ? "over" : "short";
+    const meta1 = document.createElement("div"); meta1.className = "op-card-meta"; meta1.textContent = `Cashier: ${r.cashier || "—"} · ${r.posProfile || "—"} · ${r.status}`;
+    const meta2 = document.createElement("div"); meta2.className = "op-card-meta"; meta2.textContent = `Opened ${r.openedAt ? new Date(r.openedAt).toLocaleString() : "—"} · Closed ${r.closedAt ? new Date(r.closedAt).toLocaleString() : "—"}`;
+    const meta3 = document.createElement("div"); meta3.className = "op-card-meta";
+    meta3.append(`Opening ${fmtMoney(r.openingCash)} · Expected ${fmtMoney(r.expectedCash)} · Actual ${fmtMoney(r.actualCash)} · Net ${fmtMoney(r.netSales)} · Diff `);
+    const diffSpan = document.createElement("strong"); diffSpan.className = `recon-diff ${diffClass}`; diffSpan.textContent = fmtMoney(r.difference); meta3.append(diffSpan);
+    main.append(title, meta1, meta2, meta3);
+    const actions = document.createElement("div"); actions.className = "op-card-actions";
+    const view = document.createElement("button"); view.type = "button"; view.className = "secondary-button"; view.textContent = "View Summary"; view.onclick = () => showShiftHistorySummary(r);
+    const print = document.createElement("button"); print.type = "button"; print.className = "secondary-button"; print.textContent = "Print Shift Report"; print.onclick = () => printShiftReport(r);
+    actions.append(view, print);
+    card.append(main, actions); return card;
+  }));
+}
+function shiftReportText(r: ShiftHistoryRow): string {
+  const summary = (r.summary?.summary ?? null) as ShiftSummary | null;
+  const lines = [
+    `Shift Report`, `Opening Entry: ${r.openingEntry}`, `Closing Entry: ${r.closingEntry ?? "—"}`,
+    `Cashier: ${r.cashier || "—"}`, `POS Profile: ${r.posProfile || "—"}`, `Company: ${r.company || "—"}`,
+    `Opened: ${r.openedAt ? new Date(r.openedAt).toLocaleString() : "—"}`, `Closed: ${r.closedAt ? new Date(r.closedAt).toLocaleString() : "—"}`,
+    `Status: ${r.status}`, ``, `Mode               Opening   Expected   Actual   Difference`
+  ];
+  const closing = Array.isArray(r.summary?.closing_balances) ? r.summary!.closing_balances as Record<string, unknown>[] : [];
+  const byMode = new Map(closing.map((c) => [String(c.mode_of_payment ?? ""), c]));
+  for (const p of summary?.payments ?? []) {
+    const c = byMode.get(p.mode_of_payment);
+    const actual = c ? Number(c.closing_amount) || 0 : 0;
+    lines.push(`${p.mode_of_payment.padEnd(18)} ${fmtMoney(p.opening_amount).padStart(8)} ${fmtMoney(p.expected_amount).padStart(9)} ${fmtMoney(actual).padStart(8)} ${fmtMoney(actual - p.expected_amount).padStart(11)}`);
+  }
+  lines.push(``, `Net Sales: ${fmtMoney(r.netSales)}`, `Cash Difference: ${fmtMoney(r.difference)}`);
+  return lines.join("\n");
+}
+function showShiftHistorySummary(r: ShiftHistoryRow): void { alert(shiftReportText(r)); }
+function printShiftReport(r: ShiftHistoryRow): void {
+  const html = `<pre style="font:13px monospace;padding:16px;white-space:pre-wrap">${shiftReportText(r).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c] ?? c))}</pre>`;
+  void window.posAPI.printReceipt(html);
+}
 async function openNewCustomer(): Promise<void> { const error=document.querySelector<HTMLElement>("#customer-detail"); if(!isOnline()){if(error)error.textContent="Online connection required to create a customer.";return;} const options=await window.posAPI.getCustomerCreationOptions(); if(options.error){if(error)error.textContent=options.error;return;} const fill=(id:string,values:string[])=>{const select=document.querySelector<HTMLSelectElement>(id);if(select)select.replaceChildren(...values.map(v=>new Option(v,v)));}; fill("#new-customer-group",options.groups);fill("#new-customer-territory",options.territories);document.querySelector<HTMLDialogElement>("#new-customer-dialog")?.showModal();document.querySelector<HTMLInputElement>("#new-customer-name")?.focus(); }
 async function persistCart(): Promise<void> { await window.posAPI.saveCart(cartLines); }
 function previewNumber(data: Record<string, unknown> | null, ...keys: string[]): number | null { for(const key of keys){const value=data?.[key];if(typeof value==="number")return value;if(typeof value==="string"&&!Number.isNaN(Number(value)))return Number(value);}return null; }
@@ -455,12 +808,20 @@ async function runCartPreview(version: number): Promise<void> {
   previewStatus = "local"; previewError = "";
   try {
     const local = await window.posAPI.previewFbr({
-      items: cartLines.map((line) => ({ item_code: line.itemCode, uom: line.uom, qty: line.quantity, rate: line.sellingPrice ?? 0 }))
+      items: cartLines.map((line) => ({ item_code: line.itemCode, uom: line.uom, qty: line.quantity, rate: line.sellingPrice ?? 0, conversion_factor: line.conversionFactor ?? 1 }))
     });
     if (version !== currentCartVersion) return; // a newer change superseded us
     const normalized = normalizeLocalFbrTotals(local);
     if (normalized) { localFbrTotals = normalized; serverTotals = { ...normalized }; }
   } catch { /* local FBR unavailable — fall through to server validation, keeping prior totals */ }
+  // Offline: the local FBR engine is authoritative for checkout. Accept the cart as validated and skip the server round-trip.
+  if (!isOnline()) {
+    validatedCartVersion = version;
+    previewStatus = "offline"; previewError = "";
+    showPreviewStatus("Offline — Local FBR Estimate");
+    renderServerTaxRows(); renderCart();
+    return;
+  }
   previewStatus = "validating";
   showPreviewStatus("Validating…");
   renderCart();
@@ -614,7 +975,7 @@ function blockedSaleReason():string|null{
   const opening=document.querySelector<HTMLElement>("#session-opening-entry")?.textContent??"";
   const terminal=document.querySelector<HTMLInputElement>("#terminal-id")?.value??"";
   const profile=document.querySelector<HTMLSelectElement>("#pos-profile")?.value??"";
-  return !isOnline()?"Server is offline"
+  return shiftClosed?"Shift is closed — start a new shift"
     :!sessionState.valid?(sessionState.reason||"POS session is no longer active")
     :(!opening||opening==="No active POS Opening Entry")?"No active POS Opening Entry"
     :!cartLines.length?"Cart is empty"
@@ -650,11 +1011,15 @@ async function submitCurrentSale():Promise<void>{
   const opening=document.querySelector<HTMLElement>("#session-opening-entry")?.textContent??"";
   const customer=selectedCustomer!;
   if(!terminalInvoiceId)terminalInvoiceId=await window.posAPI.getTerminalInvoiceId();
-  submissionInProgress=true;cartMessage("Submitting Sale…");updateCompleteSaleState();
+  const online=isOnline();
+  submissionInProgress=true;cartMessage(online?"Submitting Sale…":"Saving offline sale…");updateCompleteSaleState();
   // Submission payload unchanged; terminal_invoice_id is preserved across retries (only regenerated after Close & Start New Sale).
-  const result=await window.posAPI.submitSale({terminal_invoice_id:terminalInvoiceId,terminal_id:terminal,pos_profile:profile,opening_entry:opening,customer:customer.name,items:cartLines.map(x=>({item_code:x.itemCode,qty:x.quantity,uom:x.uom,barcode:x.barcode??undefined})),payments:paymentRows.map(x=>({mode_of_payment:x.method,amount:x.amount})),coupon_code:appliedBenefits.couponCode,redeem_loyalty_points:appliedBenefits.loyaltyPoints>0,loyalty_points:appliedBenefits.loyaltyPoints});
+  const salePayload={terminal_invoice_id:terminalInvoiceId,terminal_id:terminal,pos_profile:profile,opening_entry:opening,customer:customer.name,items:cartLines.map(x=>({item_code:x.itemCode,qty:x.quantity,uom:x.uom,barcode:x.barcode??undefined})),payments:paymentRows.map(x=>({mode_of_payment:x.method,amount:x.amount})),coupon_code:appliedBenefits.couponCode,redeem_loyalty_points:appliedBenefits.loyaltyPoints>0,loyalty_points:appliedBenefits.loyaltyPoints,estimated_total:fbrTotalsView().payable};
+  // Offline → queue locally with a provisional receipt; online → submit (a mid-submit drop auto-queues server-side).
+  const result=online?await window.posAPI.submitSale(salePayload):await window.posAPI.queueSale(salePayload);
   submissionInProgress=false;
-  if(!result.success||!result.response?.pos_invoice){
+  const queued=Boolean(result.queued);
+  if(!result.success||(!queued&&!result.response?.pos_invoice)){
     const submitError=result.error??"Missing POS Invoice";
     cartMessage(`Submission Failed: ${submitError}`);
     // The server can reject a still-"Open" entry as outdated/closed at submit time, even though
@@ -666,13 +1031,14 @@ async function submitCurrentSale():Promise<void>{
     updateCompleteSaleState();
     return;
   }
-  // Success: store authoritative response first, keep the cart, then open the receipt preview.
+  // Success: store authoritative (or provisional) response first, keep the cart, then open the receipt preview.
   lastSaleResponse=result.response;
-  // Only after a confirmed successful submission: remove the resumed held draft so it can't be resumed again.
+  // Only after a confirmed successful submission/queue: remove the resumed held draft so it can't be resumed again.
   if(resumedHeldId!==null){try{await window.posAPI.deleteHeldSale(resumedHeldId);}catch{/* non-fatal: held draft cleanup */}resumedHeldId=null;}
-  cartMessage("Sale Submitted");
+  cartMessage(queued?"Sale saved offline — queued for FBR sync":"Sale Submitted");
   updateCompleteSaleState();
-  await openReceiptPreview(result.response);
+  await openReceiptPreview(result.response??{},queued);
+  void updateOfflineUi();
 }
 
 // --- FBR status interpretation ---
@@ -694,9 +1060,9 @@ function interpretFbr(response:Record<string,unknown>):{accepted:boolean;statusT
   return {accepted,statusText,invoiceNumber,qr};
 }
 
-async function openReceiptPreview(response:Record<string,unknown>):Promise<void>{
+async function openReceiptPreview(response:Record<string,unknown>,provisional=false):Promise<void>{
   receiptMode="sale";
-  setCartText("#receipt-title","Receipt Preview");
+  setCartText("#receipt-title",provisional?"Provisional Receipt — Offline (FBR Pending)":"Receipt Preview");
   document.querySelector<HTMLButtonElement>("#receipt-print")?.removeAttribute("hidden");
   const dupBtn=document.querySelector<HTMLButtonElement>("#receipt-duplicate"); if(dupBtn)dupBtn.hidden=true;
   const closeBtn=document.querySelector<HTMLButtonElement>("#receipt-close"); if(closeBtn)closeBtn.textContent="Close and Start New Sale";
@@ -730,7 +1096,47 @@ async function openReceiptPreview(response:Record<string,unknown>):Promise<void>
   const frame=document.querySelector<HTMLIFrameElement>("#receipt-frame");if(frame){frame.removeAttribute("srcdoc");frame.hidden=true;}
   const structured=document.querySelector<HTMLElement>("#receipt-structured");if(structured)structured.hidden=false;
   document.querySelector<HTMLDialogElement>("#receipt-dialog")?.showModal();
+  if(provisional){
+    // No server invoice yet — print a locally-built provisional slip; the real FBR receipt is available after sync.
+    const msg=document.querySelector<HTMLElement>("#receipt-message");
+    if(msg)msg.textContent="Offline — provisional receipt. This sale is queued and will post to FBR automatically when the server is back online.";
+    lastReceiptHtml=buildLocalReceiptHtml(posInvoice);
+    const printBtn=document.querySelector<HTMLButtonElement>("#receipt-print");if(printBtn)printBtn.disabled=false;
+    const reprintBtn=document.querySelector<HTMLButtonElement>("#receipt-reprint");if(reprintBtn)reprintBtn.hidden=true;
+    return;
+  }
   await retrieveReceipt(posInvoice);
+}
+
+// Build a printable provisional receipt from local cart/totals/payments when there is no server-rendered receipt yet.
+function buildLocalReceiptHtml(posInvoice:string):string{
+  const totals=fbrTotalsView();
+  const esc=(s:string)=>s.replace(/[&<>]/g,(c)=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]??c));
+  const cashier=document.querySelector<HTMLElement>("#pos-cashier")?.textContent??"—";
+  const customer=selectedCustomer?(selectedCustomer.customer_name||selectedCustomer.name):"—";
+  const branch=document.querySelector<HTMLInputElement>("#branch")?.value??"";
+  const itemRows=cartLines.map(line=>`<tr><td>${esc(`${line.itemCode} — ${line.itemName}`)}</td><td style="text-align:right">${line.quantity}</td><td style="text-align:right">${(line.sellingPrice??0).toFixed(2)}</td><td style="text-align:right">${((line.sellingPrice??0)*line.quantity).toFixed(2)}</td></tr>`).join("");
+  const payRows=paymentRows.map(p=>`<tr><td>${esc(p.method)}</td><td style="text-align:right">${p.amount.toFixed(2)}</td></tr>`).join("");
+  return `<div style="font:12px/1.4 monospace;width:280px;padding:8px">
+    <div style="text-align:center"><strong>${esc(branch||"POS")}</strong><br/>PROVISIONAL — OFFLINE<br/>FBR Invoice: PENDING (syncs when online)</div>
+    <hr/>
+    <div>Terminal Inv: ${esc(posInvoice||terminalInvoiceId)}</div>
+    <div>Date: ${new Date().toLocaleString()}</div>
+    <div>Cashier: ${esc(cashier)}</div>
+    <div>Customer: ${esc(customer)}</div>
+    <hr/>
+    <table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left">Item</th><th>Qty</th><th>Rate</th><th>Amount</th></tr></thead><tbody>${itemRows}</tbody></table>
+    <hr/>
+    <div style="display:flex;justify-content:space-between"><span>Sale Before Tax</span><span>${totals.saleBeforeTax.toFixed(2)}</span></div>
+    <div style="display:flex;justify-content:space-between"><span>FBR Sales Tax</span><span>${totals.salesTax.toFixed(2)}</span></div>
+    <div style="display:flex;justify-content:space-between"><span>FBR POS Service Fee</span><span>${totals.serviceFee.toFixed(2)}</span></div>
+    <div style="display:flex;justify-content:space-between"><strong>Grand Total</strong><strong>${totals.payable.toFixed(2)}</strong></div>
+    <hr/>
+    <table style="width:100%">${payRows}</table>
+    <div style="display:flex;justify-content:space-between"><span>Change</span><span>${changeDue.toFixed(2)}</span></div>
+    <hr/>
+    <div style="text-align:center">Provisional slip — not an FBR tax invoice.<br/>A valid FBR invoice prints after sync.</div>
+  </div>`;
 }
 
 // Pull the server-rendered receipt for printing. Failure never resubmits — the sale is already in Sales History.
@@ -751,18 +1157,22 @@ async function retrieveReceipt(posInvoice:string):Promise<void>{
       if(printBtn)printBtn.disabled=false;if(reprintBtn)reprintBtn.hidden=true;
       if(msg)msg.textContent="Receipt ready to print.";
     }else{
-      lastReceiptHtml=null;
+      lastReceiptHtml=receiptMode==="sale"?buildLocalReceiptHtml(posInvoice):null;
       if(frame){frame.removeAttribute("srcdoc");frame.hidden=true;}
       if(structured)structured.hidden=false;                        // fall back to the structured summary
-      if(printBtn)printBtn.disabled=true;if(reprintBtn)reprintBtn.hidden=false;
-      if(msg)msg.textContent=`Receipt retrieval failed: ${result.error??"Unknown error"}. Sale is saved in Sales History.`;
+      if(printBtn)printBtn.disabled=lastReceiptHtml===null;if(reprintBtn)reprintBtn.hidden=false;
+      if(msg)msg.textContent=lastReceiptHtml
+        ? `Server receipt unavailable: ${result.error??"Unknown error"}. Local receipt is printable; server receipt can be reprinted after sync.`
+        : `Receipt retrieval failed: ${result.error??"Unknown error"}. Sale is saved in Sales History.`;
     }
   }catch(error){
-    lastReceiptHtml=null;
+    lastReceiptHtml=receiptMode==="sale"?buildLocalReceiptHtml(posInvoice):null;
     if(frame){frame.removeAttribute("srcdoc");frame.hidden=true;}
     if(structured)structured.hidden=false;
-    if(printBtn)printBtn.disabled=true;if(reprintBtn)reprintBtn.hidden=false;
-    if(msg)msg.textContent=`Receipt retrieval failed: ${error instanceof Error?error.message:"Unknown error"}. Sale is saved in Sales History.`;
+    if(printBtn)printBtn.disabled=lastReceiptHtml===null;if(reprintBtn)reprintBtn.hidden=false;
+    if(msg)msg.textContent=lastReceiptHtml
+      ? `Server receipt unavailable: ${error instanceof Error?error.message:"Unknown error"}. Local receipt is printable; server receipt can be reprinted after sync.`
+      : `Receipt retrieval failed: ${error instanceof Error?error.message:"Unknown error"}. Sale is saved in Sales History.`;
   }
 }
 
@@ -916,10 +1326,14 @@ async function renderSalesHistory():Promise<void>{
     const grand=previewNumber(response,"grand_total","rounded_total")??previewNumber(asTotalsRecord(payload),"grand_total")??0;
     const card=document.createElement("div");card.className="op-card";
     const main=document.createElement("div");main.className="op-card-main";
-    const title=document.createElement("div");title.className="op-card-title";title.textContent=row.posInvoice||"(no invoice)";
+    const queued=row.status==="Queued";
+    const estTotal=grand||previewNumber(asTotalsRecord(payload),"estimated_total")||previewNumber(response,"estimated_total")||0;
+    const title=document.createElement("div");title.className="op-card-title";title.textContent=row.posInvoice||(queued?"Queued (offline)":"(no invoice)");
     const meta=document.createElement("div");meta.className="op-card-meta";
-    meta.textContent=`${new Date(row.submittedAt||row.createdAt).toLocaleString()} · ${String(payload.customer??"—")} · ${grand?`Total ${grand.toFixed(2)}`:row.status} · Term ${row.terminalInvoiceId.slice(0,12)}… · Reprints ${row.reprintCount}`;
-    const fbrTag=document.createElement("span");fbrTag.className=`fbr-tag ${fbr.accepted?"ok":"warn"}`;fbrTag.textContent=`FBR ${fbr.accepted?"Accepted":fbr.statusText}${fbr.invoiceNumber?` · ${fbr.invoiceNumber}`:""}`;
+    meta.textContent=`${new Date(row.submittedAt||row.createdAt).toLocaleString()} · ${String(payload.customer??"—")} · ${estTotal?`Total ${estTotal.toFixed(2)}`:row.status} · Term ${row.terminalInvoiceId.slice(0,12)}… · Reprints ${row.reprintCount}`;
+    const fbrTag=document.createElement("span");
+    if(queued){fbrTag.className="fbr-tag return";fbrTag.textContent="Queued — Offline (FBR pending)";}
+    else{fbrTag.className=`fbr-tag ${fbr.accepted?"ok":"warn"}`;fbrTag.textContent=`FBR ${fbr.accepted?"Accepted":fbr.statusText}${fbr.invoiceNumber?` · ${fbr.invoiceNumber}`:""}`;}
     main.append(title,meta,fbrTag);
     const actions=document.createElement("div");actions.className="op-card-actions";
     const view=document.createElement("button");view.type="button";view.className="secondary-button";view.textContent="View Receipt";view.onclick=()=>void viewHistoryReceipt(row);
@@ -1131,6 +1545,7 @@ function closeBenefitsDialog():void{document.querySelector<HTMLDialogElement>('#
 function renderPaymentMethods():void{const box=document.querySelector<HTMLElement>("#payment-methods");if(!box)return;box.replaceChildren(...paymentMethods.map((m,i)=>{const b=document.createElement("button");b.type="button";b.className=`secondary-button search-result${i===selectedPaymentMethodIndex?" selected":""}`;b.textContent=m;b.onclick=()=>{selectedPaymentMethodIndex=i;renderPaymentMethods();document.querySelector<HTMLInputElement>("#payment-amount")?.focus();};return b;}));}
 async function openPayment():Promise<void>{
   // F6 gate: validate the POS session, then require the current cart version to be server-validated.
+  if(shiftClosed){cartMessage("Shift is closed — start a new shift");return;}
   if(!cartLines.length){cartMessage("Cart is empty");return;}
   if(!(await validateSession("pay"))){showSessionInvalid(sessionState.reason);return;}
   if(validatedCartVersion!==currentCartVersion&&!activePreviewPromise)scheduleCartPreview();
@@ -1140,7 +1555,7 @@ async function openPayment():Promise<void>{
   if(paymentsOutdated&&paymentRows.length){if(!confirm("Cart changed. Clear outdated payments?"))return;paymentRows=[];await persistPayments();paymentsOutdated=false;}paymentMethods=await window.posAPI.getPaymentMethods();paymentRows=await window.posAPI.loadPaymentDraft();changeDue=0;selectedPaymentMethodIndex=0;renderPaymentMethods();const amountInput=document.querySelector<HTMLInputElement>("#payment-amount");if(amountInput)amountInput.value="";const payMsg=document.querySelector<HTMLElement>("#payment-message");if(payMsg)payMsg.textContent="";renderPayments();document.querySelector<HTMLDialogElement>("#payment-dialog")?.showModal();window.setTimeout(()=>amountInput?.focus(),0);}
 function renderCart(): void {
   const container = document.querySelector<HTMLElement>("#cart-rows"); if (!container) return; container.replaceChildren();
-  cartLines.forEach((line, index) => { const row = document.createElement("button"); row.type = "button"; row.className = `cart-row${index === selectedCartIndex ? " selected" : ""}`; const cells = [line.itemCode,line.itemName,line.uom,String(line.quantity),String(line.sellingPrice ?? 0),"0.00",((line.sellingPrice ?? 0) * line.quantity).toFixed(2),`${line.actualStock ?? "—"}${line.actualStock !== null && line.quantity > line.actualStock ? " ⚠" : ""}`,"Void"]; cells.forEach((text) => { const cell=document.createElement("span");cell.textContent=text;row.append(cell); }); row.onclick = () => { selectedCartIndex = index; renderCart(); focusCart(); }; container.append(row); });
+  cartLines.forEach((line, index) => { const row = document.createElement("div"); row.setAttribute("role", "button"); row.tabIndex = -1; row.className = `cart-row${index === selectedCartIndex ? " selected" : ""}`; const cells = [line.itemCode,line.itemName,line.uom,String(line.quantity),String(line.sellingPrice ?? 0),"0.00",((line.sellingPrice ?? 0) * line.quantity).toFixed(2),`${line.actualStock ?? "—"}${line.actualStock !== null && line.quantity > line.actualStock ? " ⚠" : ""}`,"Void"]; cells.forEach((text) => { const cell=document.createElement("span");cell.textContent=text;row.append(cell); }); row.onpointerdown = (event) => event.preventDefault(); row.onclick = () => { selectedCartIndex = index; renderCart(); focusCart(true); }; container.append(row); });
   const quantity = cartLines.reduce((sum, line) => sum + line.quantity, 0);
   const totals = fbrTotalsView();
   const paid = paymentRows.reduce((sum, row) => sum + row.amount, 0);
@@ -1158,23 +1573,41 @@ function renderCart(): void {
   if(couponDisplayEl){couponDisplayEl.textContent=appliedBenefits.couponCode?`Coupon: ${appliedBenefits.couponCode}`:"";}
   updateCompleteSaleState();
 }
-async function addToCart(item: CatalogSearchResult): Promise<void> { const index = cartLines.findIndex((line) => line.itemCode === item.itemCode && line.uom === item.uom); if (index >= 0) { cartLines[index].quantity += 1; selectedCartIndex = index; cartMessage("Quantity changed"); } else { cartLines.push({ ...item, quantity: 1 }); selectedCartIndex = cartLines.length - 1; cartMessage("Item added"); } // mark payment allocation outdated when cart changes
-  if (paymentRows.length) paymentsOutdated = true;
-  await persistCart(); clearCartSearch(); serverTotals=null;scheduleCartPreview(); renderCart(); focusCart(); }
+async function afterCartMutation(message: string): Promise<void> {
+  selectedCartIndex = cartLines.length ? Math.min(Math.max(selectedCartIndex, 0), cartLines.length - 1) : -1;
+  clearCartSearch();
+  paymentPreparedVersion = -1;
+  if (cartLines.length) {
+    if (paymentRows.length) paymentsOutdated = true;
+  } else {
+    paymentRows = [];
+    paymentEditIndex = null;
+    paymentsOutdated = false;
+    changeDue = 0;
+    appliedBenefits = { loyaltyPoints: 0, couponCode: "" };
+    await persistPayments();
+    await saveBenefitsDraft();
+    renderPayments();
+  }
+  await persistCart();
+  serverTotals = null;
+  serverTaxRows = null;
+  localFbrTotals = null;
+  scheduleCartPreview();
+  renderCart();
+  cartMessage(message);
+  focusCart(true, true);
+}
 
-async function changeCartQuantity(delta: number): Promise<void> { if (selectedCartIndex < 0) return; cartLines[selectedCartIndex].quantity += delta; if (cartLines[selectedCartIndex].quantity <= 0) { cartLines.splice(selectedCartIndex, 1); selectedCartIndex = Math.min(selectedCartIndex, cartLines.length - 1); cartMessage("Item voided"); } else cartMessage("Quantity changed"); // mark payment allocation outdated when cart changes
-  if (paymentRows.length) paymentsOutdated = true;
-  await persistCart(); serverTotals=null;scheduleCartPreview(); renderCart(); focusCart(); }
+async function addToCart(item: CatalogSearchResult): Promise<void> { const index = cartLines.findIndex((line) => line.itemCode === item.itemCode && line.uom === item.uom); let message = "Item added"; if (index >= 0) { cartLines[index].quantity += 1; selectedCartIndex = index; message = "Quantity changed"; } else { cartLines.push({ ...item, quantity: 1 }); selectedCartIndex = cartLines.length - 1; } await afterCartMutation(message); }
 
-async function removeSelectedCartRow(): Promise<void> { if (selectedCartIndex < 0 || !confirm("Remove selected item?")) return; cartLines.splice(selectedCartIndex, 1); selectedCartIndex = Math.min(selectedCartIndex, cartLines.length - 1); // mark payment allocation outdated when cart changes
-  if (paymentRows.length) paymentsOutdated = true;
-  await persistCart(); serverTotals=null;scheduleCartPreview(); renderCart(); cartMessage("Item voided"); focusCart(); }
+async function changeCartQuantity(delta: number): Promise<void> { if (selectedCartIndex < 0) return; cartLines[selectedCartIndex].quantity += delta; const voided = cartLines[selectedCartIndex].quantity <= 0; if (voided) cartLines.splice(selectedCartIndex, 1); await afterCartMutation(voided ? "Item voided" : "Quantity changed"); }
+
+async function removeSelectedCartRow(): Promise<void> { if (selectedCartIndex < 0) return; cartLines.splice(selectedCartIndex, 1); await afterCartMutation("Item voided"); }
 function editSelectedQuantity(): void { if (selectedCartIndex < 0) return; const dialog = document.querySelector<HTMLDialogElement>("#quantity-dialog"); const input = document.querySelector<HTMLInputElement>("#quantity-input"); if (!dialog || !input) return; input.value = String(cartLines[selectedCartIndex].quantity); dialog.showModal(); window.setTimeout(() => { input.focus(); input.select(); }, 0); }
-async function saveDialogQuantity(): Promise<void> { const dialog = document.querySelector<HTMLDialogElement>("#quantity-dialog"); const input = document.querySelector<HTMLInputElement>("#quantity-input"); const quantity = Number(input?.value); if (!Number.isFinite(quantity) || quantity < 0 || selectedCartIndex < 0) { dialog?.close(); focusCart(); return; } if (quantity === 0) { cartLines.splice(selectedCartIndex, 1); selectedCartIndex = Math.min(selectedCartIndex, cartLines.length - 1); } else cartLines[selectedCartIndex].quantity = quantity; // mark payment allocation outdated when cart changes
-  if (paymentRows.length) paymentsOutdated = true;
-  await persistCart(); serverTotals=null;scheduleCartPreview(); renderCart(); cartMessage("Quantity changed"); dialog?.close(); focusCart(); }
+async function saveDialogQuantity(): Promise<void> { const dialog = document.querySelector<HTMLDialogElement>("#quantity-dialog"); const input = document.querySelector<HTMLInputElement>("#quantity-input"); const quantity = Number(input?.value); if (!Number.isFinite(quantity) || quantity < 0 || selectedCartIndex < 0) { dialog?.close(); focusCart(); return; } const voided = quantity === 0; if (voided) cartLines.splice(selectedCartIndex, 1); else cartLines[selectedCartIndex].quantity = quantity; await afterCartMutation(voided ? "Item voided" : "Quantity changed"); dialog?.close(); }
 
-function showCartSearchResults(results: CatalogSearchResult[], preserveSelection = false): void { cartSearchResults = results.slice(0, 7); if (!preserveSelection) selectedSearchIndex = 0; selectedSearchIndex = Math.min(selectedSearchIndex, Math.max(0, cartSearchResults.length - 1)); const container = document.querySelector<HTMLElement>("#cart-search-results"); if (!container) return; container.replaceChildren(...cartSearchResults.map((item, index) => { const button = document.createElement("button"); button.type="button"; button.className=`secondary-button search-result${index === selectedSearchIndex ? " selected" : ""}`; const price = item.sellingPrice === null ? "—" : `${item.sellingPrice.toFixed(2)} ${item.currency ?? ""}`; const stock = item.actualStock === null ? "—" : String(item.actualStock); button.innerHTML=`<span class="search-code">${item.itemCode}</span><span class="search-name">${item.itemName}</span><span class="search-meta">${item.uom} · ${price} · Stock ${stock}</span>`; button.onclick=()=>void addToCart(item); return button; })); container.querySelector<HTMLElement>(".selected")?.scrollIntoView({ block: "nearest" }); }
+function showCartSearchResults(results: CatalogSearchResult[], preserveSelection = false): void { cartSearchResults = results.slice(0, 7); if (!preserveSelection) selectedSearchIndex = 0; selectedSearchIndex = Math.min(selectedSearchIndex, Math.max(0, cartSearchResults.length - 1)); const container = document.querySelector<HTMLElement>("#cart-search-results"); if (!container) return; container.replaceChildren(...cartSearchResults.map((item, index) => { const button = document.createElement("button"); button.type="button"; button.className=`secondary-button search-result${index === selectedSearchIndex ? " selected" : ""}`; const price = item.sellingPrice === null ? "—" : `${item.sellingPrice.toFixed(2)} ${item.currency ?? ""}`; const stock = item.actualStock === null ? "—" : String(item.actualStock); button.innerHTML=`<span class="search-code">${item.itemCode}</span><span class="search-name">${item.itemName}</span><span class="search-meta">${item.uom} x${item.conversionFactor ?? 1} · ${price} · Stock ${stock}</span>`; button.onclick=()=>void addToCart(item); return button; })); container.querySelector<HTMLElement>(".selected")?.scrollIntoView({ block: "nearest" }); }
 async function runSlashSearch(): Promise<void> { const query = (cartInput()?.value ?? "").slice(1).trim(); if (!query) { showCartSearchResults([]); return; } const lookup = await window.posAPI.lookupCatalog(query); showCartSearchResults(lookup.exact ? [lookup.exact] : lookup.results); cartMessage(cartSearchResults.length ? "Search results" : "No active sales item found"); }
 async function scanCartInput(): Promise<void> { const input = cartInput(); const query = input?.value.trim() ?? ""; if (!query) return; if (slashSearchEnabled && query.startsWith("/")) { if (cartSearchResults.length) await addToCart(cartSearchResults[selectedSearchIndex] ?? cartSearchResults[0]); else await runSlashSearch(); return; } const lookup = await window.posAPI.lookupCatalog(query); if (lookup.exact) { await addToCart(lookup.exact); return; } showCartSearchResults(lookup.results); cartMessage(lookup.results.length ? "Select an item" : "No active sales item found"); }
 
@@ -1321,22 +1754,64 @@ async function runGuardedSync(key: SyncKey, run: () => Promise<void>): Promise<v
   try { await run(); } catch { /* keep existing cache; row will show the stale/error state */ } finally { syncLocks[key] = false; void renderSyncStatus(); }
 }
 async function syncConfigNow(): Promise<void> { await runGuardedSync("config", async () => { const r = await window.posAPI.syncPosConfiguration(); if (r.summary) showPosConfigurationSummary(r.summary); }); }
-async function syncItemsNow(): Promise<void> { await runGuardedSync("items", async () => { const r = await window.posAPI.syncItemCatalog(); showCatalogTotals(r.totals); }); }
-async function syncCustomersNow(): Promise<void> { await runGuardedSync("customers", async () => { await window.posAPI.syncCustomers(); }); }
-async function syncFbrNow(): Promise<void> { await runGuardedSync("fbr", async () => { await window.posAPI.syncFbrConfig(); }); }
+// mode "auto" (default, used by the background scheduler) = delta when a watermark exists, full every 24h.
+// mode "full" (manual "Force Full" buttons) = full DELETE+INSERT reconciliation. Decision lives in main.ts (it owns app_meta).
+async function syncItemsNow(mode: "auto" | "full" = "auto"): Promise<void> { await runGuardedSync("items", async () => { const r = await window.posAPI.syncItemCatalog(mode); showCatalogTotals(r.totals); }); }
+async function syncCustomersNow(mode: "auto" | "full" = "auto"): Promise<void> { await runGuardedSync("customers", async () => { await window.posAPI.syncCustomers(mode); }); }
+async function syncFbrNow(mode: "auto" | "full" = "auto"): Promise<void> { await runGuardedSync("fbr", async () => { await window.posAPI.syncFbrConfig(mode); }); }
 
 // Single background scheduler: triggers only datasets that are actually stale, never during a transaction.
+// Staleness uses the unchanged SYNC_FRESH thresholds; "auto" mode then picks delta vs full (24h) inside main.ts.
 async function backgroundSyncTick(): Promise<void> {
   if (!isOnline() || txnInProgress()) return;
   try {
-    const totals = await window.posAPI.getCatalogTotals(); if (ageMs(totals.lastSynced) > SYNC_FRESH.items) void syncItemsNow();
-    const cust = await window.posAPI.getCustomerSyncState(); if (ageMs(cust.lastSynced) > SYNC_FRESH.customers) void syncCustomersNow();
-    const fbr = await window.posAPI.getFbrSyncState(); if (ageMs(fbr.lastSynced) > SYNC_FRESH.fbr) void syncFbrNow();
+    void syncQueueNow();
+    const totals = await window.posAPI.getCatalogTotals(); if (ageMs(totals.lastSynced) > SYNC_FRESH.items) void syncItemsNow("auto");
+    const cust = await window.posAPI.getCustomerSyncState(); if (ageMs(cust.lastSynced) > SYNC_FRESH.customers) void syncCustomersNow("auto");
+    const fbr = await window.posAPI.getFbrSyncState(); if (ageMs(fbr.lastSynced) > SYNC_FRESH.fbr) void syncFbrNow("auto");
     const cfg = await window.posAPI.getCachedPosConfiguration(); if (!cfg || ageMs(cfg.lastSynced) > SYNC_FRESH.config) void syncConfigNow();
   } catch { /* ignore — next tick retries */ }
   void renderSyncStatus();
 }
 function startBackgroundSync(): void { if (backgroundSyncStarted) return; backgroundSyncStarted = true; void backgroundSyncTick(); window.setInterval(() => { void backgroundSyncTick(); }, 60_000); }
+
+// --- App auto-update (electron-updater) UI ---------------------------------
+function setupUpdateUi(): void {
+  const statusEl = document.querySelector<HTMLElement>("#update-status");
+  const checkBtn = document.querySelector<HTMLButtonElement>("#check-update");
+  const dlBtn = document.querySelector<HTMLButtonElement>("#download-update");
+  const installBtn = document.querySelector<HTMLButtonElement>("#install-update");
+  const setStatus = (msg: string) => { if (statusEl) statusEl.textContent = msg; };
+  window.posAPI.getAppVersion().then((v) => setText("#app-version", v)).catch(() => {/* ignore */});
+  window.posAPI.isUpdateTokenSet().then((set) => setText("#update-token-status", set ? "A token is saved (private-repo mode)." : "No token saved (public repo).")).catch(() => {/* ignore */});
+
+  window.posAPI.onUpdateStatus((p) => {
+    const state = String(p.state ?? "");
+    if (dlBtn) dlBtn.hidden = state !== "available";
+    if (installBtn) installBtn.hidden = state !== "downloaded";
+    if (checkBtn) checkBtn.disabled = state === "checking" || state === "downloading";
+    switch (state) {
+      case "checking": setStatus("Checking for updates…"); break;
+      case "available": setStatus(`Update available: v${String(p.version ?? "")}. Click Download Update.`); break;
+      case "not-available": setStatus("You're on the latest version."); break;
+      case "downloading": setStatus(`Downloading update… ${String(p.percent ?? 0)}%`); break;
+      case "downloaded": setStatus(`Update v${String(p.version ?? "")} downloaded. Click Install & Restart.`); break;
+      case "error": setStatus(`Update error: ${String(p.error ?? "unknown")}`); break;
+      default: break;
+    }
+  });
+
+  checkBtn?.addEventListener("click", async () => { setStatus("Checking for updates…"); const r = await window.posAPI.checkForUpdate(); if (!r.ok && r.error) setStatus(`Update check failed: ${r.error}`); });
+  dlBtn?.addEventListener("click", async () => { setStatus("Starting download…"); if (dlBtn) dlBtn.disabled = true; const r = await window.posAPI.downloadUpdate(); if (dlBtn) dlBtn.disabled = false; if (!r.ok && r.error) setStatus(`Download failed: ${r.error}`); });
+  installBtn?.addEventListener("click", () => { setStatus("Restarting to install…"); void window.posAPI.installUpdate(); });
+  document.querySelector<HTMLButtonElement>("#save-update-token")?.addEventListener("click", async () => {
+    const input = document.querySelector<HTMLInputElement>("#update-token");
+    const token = input?.value.trim() ?? "";
+    await window.posAPI.saveUpdateToken(token);
+    if (input) input.value = "";
+    setText("#update-token-status", token ? "Token saved (private-repo mode)." : "Token cleared (public repo).");
+  });
+}
 
 function buildSyncRow(key: SyncKey, name: string, detail: string, lastSynced: string | null, retry: () => void): HTMLElement {
   const has = lastSynced != null;
@@ -1401,9 +1876,11 @@ async function runStartup(reason: string = "startup"): Promise<void> {
       const cachedCfg = await window.posAPI.getCachedPosConfiguration();
       if (cachedCfg) {
         showPosConfigurationSummary(cachedCfg); await loadCachedPosSession(); updatePosHeader();
-        ["config", "catalogue", "customers", "fbr"].forEach((s) => setStep(s as SetupStep, "warning"));
+        await seedSessionFromCache();                              // allow offline checkout against the cached open shift
+        await seedDefaultCustomerFromConfig(cachedCfg);            // default customer so the offline cart isn't "Missing Customer"
+        ["config", "catalogue", "customers", "fbr", "session"].forEach((s) => setStep(s as SetupStep, "warning"));
         setOverallBadge("Ready Using Cached Data", "warn"); if (progress) progress.textContent = "Offline — using cached data";
-        setupCompleted = true; void renderSyncStatus(); showScreen("pos"); return;
+        setupCompleted = true; void renderSyncStatus(); void updateOfflineUi(); showScreen("pos"); return;
       }
       setOverallBadge("Setup Required", "warn"); if (progress) progress.textContent = "Server not reachable"; showSettingsMessage("Server not reachable and no cached configuration. Check ERPNext URL / connection."); showScreen("settings"); return;
     }
@@ -1457,7 +1934,14 @@ function populateSettingsForm(settings: RendererSettings): void {
     ? "Saved securely; enter to replace"
     : "Enter to save";
   (document.querySelector<HTMLInputElement>("#terminal-id") as HTMLInputElement).value = settings.terminalId;
-  (document.querySelector<HTMLSelectElement>("#pos-profile") as HTMLSelectElement).dataset.savedValue = settings.posProfile;
+  const profileSelect = document.querySelector<HTMLSelectElement>("#pos-profile") as HTMLSelectElement;
+  profileSelect.dataset.savedValue = settings.posProfile;
+  // Offline-safe: keep the saved profile selectable before the online dropdown (loadPosProfiles) runs,
+  // otherwise offline checkout is blocked with "Missing POS Profile". populatePosProfileDropdown rebuilds this when online.
+  if (settings.posProfile) {
+    if (!Array.from(profileSelect.options).some((o) => o.value === settings.posProfile)) profileSelect.add(new Option(settings.posProfile, settings.posProfile));
+    profileSelect.value = settings.posProfile;
+  }
   (document.querySelector<HTMLInputElement>("#branch") as HTMLInputElement).value = settings.branch;
   (document.querySelector<HTMLInputElement>("#warehouse") as HTMLInputElement).value = settings.warehouse;
 }
@@ -1572,13 +2056,27 @@ window.addEventListener("DOMContentLoaded", () => {
   void window.posAPI.getCatalogTotals().then(showCatalogTotals);
   window.posAPI.onCatalogProgress(showCatalogProgress);
   void window.posAPI.loadCart().then((state) => { cartLines = state.lines; selectedCartIndex = cartLines.length ? 0 : -1; renderCart(); focusCart(); }); void window.posAPI.loadBenefitsDraft().then((draft) => { if(draft) appliedBenefits = draft; }); void window.posAPI.getTerminalInvoiceId().then((id)=>{terminalInvoiceId=id;}); window.posAPI.onCompleteSaleShortcut(()=>void submitCurrentSale());
+  window.posAPI.onFocusScanner(() => focusCart(true));
   void renderSyncStatus();
   void runPosBootstrap("startup");
-  window.addEventListener("online", () => { scheduleCartPreview(); void backgroundSyncTick(); });
+  window.addEventListener("online", () => { scheduleCartPreview(); void backgroundSyncTick(); void syncQueueNow(); });
   document.querySelector<HTMLButtonElement>("#retry-startup")?.addEventListener("click", () => void runPosBootstrap("retry"));
   document.querySelector<HTMLButtonElement>("#complete-setup")?.addEventListener("click", (e) => { /* form submit handles save + bootstrap */ void e; });
   document.querySelector<HTMLButtonElement>("#refresh-config")?.addEventListener("click", () => void syncConfigNow());
   document.querySelector<HTMLButtonElement>("#start-shift")?.addEventListener("click", () => void startShift());
+  document.querySelector<HTMLButtonElement>("#start-shift-refresh")?.addEventListener("click", () => void refreshFromStartShift());
+  document.querySelector<HTMLButtonElement>("#start-shift-cancel")?.addEventListener("click", () => void goToPos());
+  document.querySelector<HTMLButtonElement>("#start-shift-settings")?.addEventListener("click", () => showScreen("settings"));
+  // Close Shift + Shift History actions.
+  document.querySelector<HTMLButtonElement>("#pos-close-shift")?.addEventListener("click", () => void showCloseShift());
+  document.querySelector<HTMLButtonElement>("#pos-sync-queue")?.addEventListener("click", () => void syncQueueNow(true));
+  void updateOfflineUi();
+  document.querySelector<HTMLButtonElement>("#close-shift-back")?.addEventListener("click", () => showScreen("pos"));
+  document.querySelector<HTMLButtonElement>("#close-shift-cancel")?.addEventListener("click", () => showScreen("pos"));
+  document.querySelector<HTMLButtonElement>("#close-shift-submit")?.addEventListener("click", () => void submitCloseShift());
+  document.querySelector<HTMLButtonElement>("#close-shift-hold")?.addEventListener("click", () => void holdCurrentSale());
+  document.querySelector<HTMLButtonElement>("#open-shift-history")?.addEventListener("click", () => void openShiftHistory());
+  document.querySelector<HTMLButtonElement>("#shift-history-back")?.addEventListener("click", () => { if (shiftClosed) void showStartShift(); else void goToPos(); });
   document.querySelector<HTMLButtonElement>("#open-settings")?.addEventListener("click", () => showScreen("settings"));
   document.querySelector<HTMLButtonElement>("#back-to-pos")?.addEventListener("click", () => void goToPos());
   // Session-invalid overlay actions (non-destructive — cart/customer/payment preserved).
@@ -1590,9 +2088,9 @@ window.addEventListener("DOMContentLoaded", () => {
   window.addEventListener("focus", () => { if (isOnline()) void revalidateLive("focus"); });
   // Server-health poll (online/offline + reconnect-driven session revalidation).
   window.setInterval(async () => { try { const online = await window.posAPI.testServer(); const status = document.querySelector<HTMLElement>("#pos-server-status"); const connected = Boolean(online.connected); if (status) status.textContent = connected ? "Online" : "Offline"; setOnlineIndicator(connected);
-      if (connected && !prevServerConnected) { scheduleCartPreview(); void revalidateLive("reconnect"); void backgroundSyncTick(); } // after reconnect: re-check session + sync stale data
-      prevServerConnected = connected;
-    } catch { const status = document.querySelector<HTMLElement>("#pos-server-status"); if (status) status.textContent = "Reconnecting"; prevServerConnected = false; } }, 30_000);
+      if (connected && !prevServerConnected) { scheduleCartPreview(); void revalidateLive("reconnect"); void backgroundSyncTick(); void syncQueueNow(); } // after reconnect: re-check session + drain offline queue + sync stale data
+      prevServerConnected = connected; void updateOfflineUi();
+    } catch { const status = document.querySelector<HTMLElement>("#pos-server-status"); if (status) status.textContent = "Reconnecting"; prevServerConnected = false; void updateOfflineUi(); } }, 30_000);
   // Revalidate the POS session every 60 seconds while online.
   window.setInterval(() => { if (isOnline()) void revalidateLive("interval"); }, 60_000);
 
@@ -1726,13 +2224,14 @@ window.addEventListener("DOMContentLoaded", () => {
   document.querySelector<HTMLButtonElement>("#sync-item-catalog")?.addEventListener("click", async () => {
     const button = document.querySelector<HTMLButtonElement>("#sync-item-catalog");
     if (button) { button.disabled = true; button.textContent = "Syncing…"; }
-    try { showCatalogProgress("Catalog sync started…"); await syncItemsNow(); showCatalogProgress("Catalog sync complete."); showSettingsMessage("Item catalogue synced"); }
+    try { showCatalogProgress("Catalog sync started…"); await syncItemsNow("full"); showCatalogProgress("Catalog sync complete."); showSettingsMessage("Item catalogue synced"); }
     catch { showCatalogProgress("Catalog sync failed."); }
     finally { if (button) { button.disabled = false; button.textContent = "Force Full Item Catalogue Sync"; } }
   });
 
-  document.querySelector<HTMLButtonElement>("#sync-customers")?.addEventListener("click", async () => { await syncCustomersNow(); const state = await window.posAPI.getCustomerSyncState(); showSettingsMessage(`Customers synced: ${state.count}`); });
-  document.querySelector<HTMLButtonElement>("#sync-fbr-config")?.addEventListener("click", async () => { const button=document.querySelector<HTMLButtonElement>("#sync-fbr-config"); if(button){button.disabled=true;button.textContent="Syncing…";} try { await syncFbrNow(); showSettingsMessage("FBR configuration synced"); } catch { showSettingsMessage("FBR sync failed"); } finally { if(button){button.disabled=false;button.textContent="Force Full FBR Configuration Sync";} } });
+  document.querySelector<HTMLButtonElement>("#sync-customers")?.addEventListener("click", async () => { await syncCustomersNow("full"); const state = await window.posAPI.getCustomerSyncState(); showSettingsMessage(`Customers synced: ${state.count}`); });
+  document.querySelector<HTMLButtonElement>("#sync-fbr-config")?.addEventListener("click", async () => { const button=document.querySelector<HTMLButtonElement>("#sync-fbr-config"); if(button){button.disabled=true;button.textContent="Syncing…";} try { await syncFbrNow("full"); showSettingsMessage("FBR configuration synced"); } catch { showSettingsMessage("FBR sync failed"); } finally { if(button){button.disabled=false;button.textContent="Force Full FBR Configuration Sync";} } });
+  setupUpdateUi();
   customerInput()?.addEventListener("input", () => void searchCustomer());
   document.querySelector<HTMLButtonElement>("#new-customer")?.addEventListener("click", () => void openNewCustomer());
   document.querySelector<HTMLButtonElement>("#cancel-new-customer")?.addEventListener("click", () => { document.querySelector<HTMLDialogElement>("#new-customer-dialog")?.close(); focusCart(); });
@@ -1745,11 +2244,12 @@ window.addEventListener("DOMContentLoaded", () => {
 
   cartInput()?.addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); void scanCartInput(); } });
   cartInput()?.addEventListener("input", () => { if (slashSearchEnabled && cartInput()?.value.startsWith("/")) void runSlashSearch(); else if (!cartInput()?.value) clearCartSearch(); });
+  document.querySelector<HTMLElement>("#pos-screen")?.addEventListener("pointerup", (event) => {
+    if (!isEditableElement(event.target as Element | null)) focusCart(true);
+  });
   document.querySelector("#cart-qty")?.addEventListener("click", () => void editSelectedQuantity());
   document.querySelector("#cart-remove")?.addEventListener("click", () => void removeSelectedCartRow());
-  document.querySelector("#cart-clear")?.addEventListener("click", async () => { if (!cartLines.length || !confirm("Clear the full cart?")) return; cartLines=[]; selectedCartIndex=-1; // mark payment allocation outdated when cart cleared
-    if (paymentRows.length) paymentsOutdated = true;
-    await persistCart(); serverTotals=null;scheduleCartPreview(); renderCart(); cartMessage("Cart cleared"); focusCart(); });
+  document.querySelector("#cart-clear")?.addEventListener("click", async () => { if (!cartLines.length || !confirm("Clear the full cart?")) return; cartLines=[]; selectedCartIndex=-1; await afterCartMutation("Cart cleared"); });
   document.querySelector<HTMLFormElement>("#quantity-form")?.addEventListener("submit", (event) => { event.preventDefault(); const submitter = event.submitter as HTMLButtonElement | null; if (submitter?.value === "cancel") { document.querySelector<HTMLDialogElement>("#quantity-dialog")?.close(); focusCart(); } else void saveDialogQuantity(); });
   document.querySelector<HTMLDialogElement>("#quantity-dialog")?.addEventListener("cancel", () => focusCart());
   // Payment dialog controls
@@ -1801,6 +2301,7 @@ window.addEventListener("DOMContentLoaded", () => {
     const scannerActive = document.activeElement === cartInput();
     const benefitsOpen = benefitsDialog?.open;
     const paymentOpen = paymentDialog?.open;
+    if (captureScannerTextKey(event)) return;
     if (event.key === 'F7') { event.preventDefault(); event.stopPropagation(); if (benefitsOpen) { closeBenefitsDialog(); } else { void openBenefits(); } return; }
     if (event.key === 'F9') { event.preventDefault(); event.stopPropagation(); void submitCurrentSale(); return; }
     if (benefitsOpen) {

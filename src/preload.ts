@@ -22,6 +22,8 @@ interface RendererSettings {
 
 contextBridge.exposeInMainWorld("posAPI", {
   getDatabaseStatus: () => ipcRenderer.invoke("db:getStatus"),
+  focusPosWindow: () => ipcRenderer.invoke("window:focus-pos"),
+  onFocusScanner: (callback: () => void) => ipcRenderer.on("pos:focus-scanner", () => callback()),
   saveSettings: (settings: AppSettings) => ipcRenderer.invoke("settings:save", settings),
   loadSettings: () => ipcRenderer.invoke("settings:load") as Promise<RendererSettings>,
   testServer: () => ipcRenderer.invoke("server:test"),
@@ -33,16 +35,16 @@ contextBridge.exposeInMainWorld("posAPI", {
   getCachedPosConfiguration: () => ipcRenderer.invoke("pos-configuration:get-cached"),
   syncPosSession: () => ipcRenderer.invoke("pos-session:sync"),
   getCachedPosSession: () => ipcRenderer.invoke("pos-session:get-cached")
-  ,syncItemCatalog: () => ipcRenderer.invoke("catalog:sync")
+  ,syncItemCatalog: (mode?: string) => ipcRenderer.invoke("catalog:sync", mode)
   ,getCatalogTotals: () => ipcRenderer.invoke("catalog:get-totals")
-  ,syncFbrConfig: () => ipcRenderer.invoke("fbr:sync")
+  ,syncFbrConfig: (mode?: string) => ipcRenderer.invoke("fbr:sync", mode)
   ,getFbrSyncState: () => ipcRenderer.invoke("fbr:state")
   ,searchCatalog: (query: string) => ipcRenderer.invoke("catalog:search", query)
   ,onCatalogProgress: (callback: (message: string) => void) => ipcRenderer.on("catalog:progress", (_event, message: string) => callback(message))
   ,lookupCatalog: (query: string) => ipcRenderer.invoke("catalog:lookup", query)
   ,loadCart: () => ipcRenderer.invoke("cart:load")
   ,saveCart: (lines: unknown[]) => ipcRenderer.invoke("cart:save", lines)
-  ,syncCustomers: () => ipcRenderer.invoke("customers:sync")
+  ,syncCustomers: (mode?: string) => ipcRenderer.invoke("customers:sync", mode)
   ,getCustomerSyncState: () => ipcRenderer.invoke("customers:state")
   ,searchCustomers: (query: string) => ipcRenderer.invoke("customers:search", query)
   ,loadCustomer: (name: string) => ipcRenderer.invoke("customers:load", name)
@@ -59,6 +61,9 @@ contextBridge.exposeInMainWorld("posAPI", {
   ,validateCoupon: (couponCode: string) => ipcRenderer.invoke("benefits:validate-coupon", couponCode)
   ,getTerminalInvoiceId: () => ipcRenderer.invoke("sale:terminal-id")
   ,submitSale: (input: Record<string, unknown>) => ipcRenderer.invoke("sale:submit", input)
+  ,queueSale: (input: Record<string, unknown>) => ipcRenderer.invoke("sale:queue", input)
+  ,syncSaleQueue: () => ipcRenderer.invoke("queue:sync")
+  ,getQueueStatus: () => ipcRenderer.invoke("queue:status")
   ,getActivePosSession: () => ipcRenderer.invoke("pos-session:active")
   ,startPosSession: (input: Record<string, unknown>) => ipcRenderer.invoke("pos-session:start", input)
   ,onCompleteSaleShortcut: (callback: () => void) => ipcRenderer.on("pos:complete-sale-shortcut", () => callback())
@@ -76,4 +81,15 @@ contextBridge.exposeInMainWorld("posAPI", {
   ,setSaleStatus: (id: string, status: string) => ipcRenderer.invoke("sale:set-status", id, status)
   ,getInvoiceForRefund: (invoiceName: string) => ipcRenderer.invoke("refund:get-invoice", invoiceName)
   ,submitPosRefund: (input: Record<string, unknown>) => ipcRenderer.invoke("refund:submit", input)
+  ,getShiftSummary: (openingEntry?: string) => ipcRenderer.invoke("shift:summary", openingEntry)
+  ,closeShift: (input: Record<string, unknown>) => ipcRenderer.invoke("shift:close", input)
+  ,listShiftHistory: () => ipcRenderer.invoke("shift:history")
+  ,getShiftHistory: (openingEntry: string) => ipcRenderer.invoke("shift:history-get", openingEntry)
+  ,getAppVersion: () => ipcRenderer.invoke("update:current-version")
+  ,checkForUpdate: () => ipcRenderer.invoke("update:check")
+  ,downloadUpdate: () => ipcRenderer.invoke("update:download")
+  ,installUpdate: () => ipcRenderer.invoke("update:install")
+  ,saveUpdateToken: (token: string) => ipcRenderer.invoke("update:save-token", token)
+  ,isUpdateTokenSet: () => ipcRenderer.invoke("update:token-set")
+  ,onUpdateStatus: (callback: (payload: Record<string, unknown>) => void) => ipcRenderer.on("update:status", (_event, payload: Record<string, unknown>) => callback(payload))
 });

@@ -6,6 +6,11 @@
   "scripts": {
     "start": "npm run build && set ELECTRON_RUN_AS_NODE=&& electron .",
     "build": "tsc && copyfiles -u 1 src/renderer/*.html src/renderer/*.css dist",
+    "obfuscate": "node scripts/obfuscate.cjs",
+    "dist": "npm run build && electron-builder --win nsis",
+    "dist:protected": "npm run build && npm run obfuscate && electron-builder --win nsis",
+    "release": "npm run build && electron-builder --win nsis --publish always",
+    "pack:dir": "npm run build && electron-builder --dir",
     "dev": "concurrently \"tsc --watch\" \"wait-on dist/main.js && set ELECTRON_RUN_AS_NODE=&& electron .\"",
     "rebuild": "electron-rebuild -f -w better-sqlite3",
     "postinstall": "npm run rebuild"
@@ -17,10 +22,57 @@
     "concurrently": "^9.1.0",
     "copyfiles": "^2.4.1",
     "electron": "^33.2.1",
+    "electron-builder": "^25.1.8",
+    "javascript-obfuscator": "^4.2.2",
     "typescript": "^5.7.2",
     "wait-on": "^8.0.1"
   },
   "dependencies": {
-    "better-sqlite3": "^12.11.1"
+    "better-sqlite3": "^12.11.1",
+    "electron-updater": "^6.8.9"
+  },
+  "build": {
+    "appId": "com.beelbegins.erpnextofflinepos",
+    "productName": "ERPNext Offline POS",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "BeelBegins",
+        "repo": "Posapplication"
+      }
+    ],
+    "directories": {
+      "output": "dist-installer",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "asarUnpack": [
+      "**/node_modules/better-sqlite3/**"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "${productName}-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": true,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "runAfterFinish": true,
+      "include": "build/installer.nsh"
+    }
   }
 }

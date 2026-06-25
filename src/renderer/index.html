@@ -84,6 +84,29 @@
           <div id="sync-rows" class="sync-rows"></div>
         </section>
 
+        <section class="sync-card" aria-label="App Updates">
+          <h3>App Updates</h3>
+          <p class="card-meta">Current version <strong id="app-version">—</strong></p>
+          <div class="form-actions primary-row">
+            <button id="check-update" type="button" class="secondary-button">Check for Updates</button>
+            <button id="download-update" type="button" hidden>Download Update</button>
+            <button id="install-update" type="button" hidden>Install &amp; Restart</button>
+          </div>
+          <p id="update-status" class="settings-message" role="status"></p>
+          <details class="diagnostics-block">
+            <summary>Private repo token (optional)</summary>
+            <div class="diagnostics-body">
+              <label>GitHub Token (only needed when the update repo is private)
+                <input id="update-token" type="password" autocomplete="off" placeholder="Saved securely; enter to set or replace" />
+              </label>
+              <div class="form-actions">
+                <button id="save-update-token" type="button" class="secondary-button">Save Token</button>
+                <p id="update-token-status" class="card-meta"></p>
+              </div>
+            </div>
+          </details>
+        </section>
+
         <details class="diagnostics-block">
           <summary>Advanced Diagnostics</summary>
           <div class="diagnostics-body">
@@ -177,17 +200,80 @@
       </section>
       </section>
 
-      <section id="start-shift-screen" class="app-screen" hidden>
-        <section class="setup-card">
-          <h2>Start Shift</h2>
-          <p>POS Profile: <strong id="shift-profile">—</strong></p>
-          <p>Company: <strong id="shift-company">—</strong></p>
-          <p>Terminal ID: <strong id="shift-terminal">—</strong></p>
-          <p>Cashier: <strong id="shift-cashier">—</strong></p>
-          <div id="shift-opening-amounts" class="settings-form"></div>
-          <button id="start-shift" type="button">Start Shift</button>
-          <p id="start-shift-message" class="settings-message"></p>
-        </section>
+      <section id="start-shift-screen" class="app-screen shift-screen" hidden>
+        <header class="op-header">
+          <div><h2>Start Shift</h2><p class="shift-sub">Open a POS Opening Entry to begin selling.</p></div>
+          <span id="start-shift-online" class="online-dot offline">Offline</span>
+        </header>
+        <div class="shift-grid">
+          <section class="shift-card">
+            <h3>Session Context</h3>
+            <dl class="shift-dl">
+              <div><dt>Cashier</dt><dd id="shift-cashier">—</dd></div>
+              <div><dt>Company</dt><dd id="shift-company">—</dd></div>
+              <div><dt>Branch</dt><dd id="shift-branch">—</dd></div>
+              <div><dt>POS Profile</dt><dd id="shift-profile">—</dd></div>
+              <div><dt>Warehouse</dt><dd id="shift-warehouse">—</dd></div>
+              <div><dt>Terminal ID</dt><dd id="shift-terminal">—</dd></div>
+              <div><dt>Opening Date &amp; Time</dt><dd id="shift-datetime">—</dd></div>
+            </dl>
+            <label class="shift-notes">Notes (optional)<textarea id="shift-notes" rows="2" placeholder="Opening note"></textarea></label>
+          </section>
+          <section class="shift-card">
+            <h3>Opening Balances</h3>
+            <div class="shift-balance-head"><span>Mode of Payment</span><span>Opening Amount</span></div>
+            <div id="shift-opening-amounts" class="shift-balance-rows"></div>
+            <p class="shift-balance-total">Total Opening <strong id="shift-opening-total">0.00</strong></p>
+          </section>
+        </div>
+        <p id="start-shift-message" class="settings-message" role="status"></p>
+        <div class="shift-actions">
+          <button id="start-shift" type="button" class="primary-action">Start Shift</button>
+          <button id="start-shift-refresh" type="button" class="secondary-button">Refresh Session</button>
+          <button id="start-shift-cancel" type="button" class="secondary-button">Cancel</button>
+          <button id="start-shift-settings" type="button" class="secondary-button">Open Settings</button>
+        </div>
+      </section>
+
+      <section id="close-shift-screen" class="app-screen shift-screen" hidden>
+        <header class="op-header">
+          <div><h2>Close Shift</h2><p class="shift-sub">Reconcile counted cash &amp; payments, then submit the POS Closing Entry.</p></div>
+          <button id="close-shift-back" type="button" class="secondary-button">Back to POS</button>
+        </header>
+        <div class="shift-grid">
+          <section class="shift-card">
+            <h3>Shift Info</h3>
+            <dl class="shift-dl">
+              <div><dt>Opening Entry</dt><dd id="close-opening-entry">—</dd></div>
+              <div><dt>Cashier</dt><dd id="close-cashier">—</dd></div>
+              <div><dt>POS Profile</dt><dd id="close-profile">—</dd></div>
+              <div><dt>Opened At</dt><dd id="close-opened-at">—</dd></div>
+              <div><dt>Invoices</dt><dd id="close-invoice-count">0</dd></div>
+              <div><dt>Net Sales</dt><dd id="close-net-sales">0.00</dd></div>
+            </dl>
+            <p id="close-estimate-note" class="shift-estimate-note">Expected amounts are a local estimate from this terminal's submitted sales. The server recalculates authoritative totals on submit.</p>
+            <label class="shift-notes">Notes (optional)<textarea id="close-notes" rows="2" placeholder="Closing note"></textarea></label>
+          </section>
+          <section class="shift-card">
+            <h3>Payment Reconciliation</h3>
+            <div class="close-recon-head"><span>Mode</span><span>Opening</span><span>Expected</span><span>Actual Closing</span><span>Difference</span></div>
+            <div id="close-recon-rows" class="close-recon-rows"></div>
+            <p class="shift-balance-total">Total Difference <strong id="close-total-difference">0.00</strong></p>
+          </section>
+        </div>
+        <p id="close-shift-message" class="settings-message" role="status"></p>
+        <div class="shift-actions">
+          <button id="close-shift-submit" type="button" class="primary-action">Submit Close Shift</button>
+          <button id="close-shift-hold" type="button" class="secondary-button">Hold Current Cart</button>
+          <button id="close-shift-cancel" type="button" class="secondary-button">Cancel</button>
+          <button id="open-shift-history" type="button" class="secondary-button">Shift History</button>
+        </div>
+      </section>
+
+      <section id="shift-history-screen" class="app-screen op-screen" hidden>
+        <header class="op-header"><h2>Shift History</h2><button id="shift-history-back" type="button" class="secondary-button">Back</button></header>
+        <p id="shift-history-message" class="settings-message"></p>
+        <div id="shift-history-list" class="op-list"></div>
       </section>
 
       <section id="pos-screen" class="app-screen" hidden>
@@ -200,9 +286,12 @@
           <div><span>Server</span><strong id="pos-server-status">Reconnecting</strong></div>
           <div><span>Sync</span><strong id="pos-sync-status">Pending</strong></div>
           <div><span>Shift Age</span><strong id="pos-session-age">—</strong></div>
+          <div><span>Queue</span><strong id="pos-queue-status">—</strong></div>
+          <button id="pos-close-shift" type="button" class="secondary-button header-action">Close Shift</button>
           <button id="open-settings" type="button" class="secondary-button icon-button" title="Settings" aria-label="Settings">⚙</button>
         </header>
         <div id="pos-session-warning" class="session-warning" hidden></div>
+        <div id="pos-offline-banner" class="offline-banner" hidden><span id="pos-offline-text"></span><button id="pos-sync-queue" type="button" class="secondary-button">Sync Now</button></div>
         <section class="pos-layout" aria-labelledby="cart-title">
           <div class="pos-cart-pane">
             <h2 id="cart-title" class="visually-hidden">POS Cart</h2>
