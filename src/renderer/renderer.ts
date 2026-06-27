@@ -76,10 +76,18 @@ interface PosAPI {
   saveUpdateToken: (token: string) => Promise<{ ok: boolean }>;
   isUpdateTokenSet: () => Promise<boolean>;
   onUpdateStatus: (callback: (payload: Record<string, unknown>) => void) => void;
+  listReleases: () => Promise<{ releases: ReleaseEntry[]; error: string | null }>;
+  installRelease: (input: Record<string, unknown>) => Promise<{ ok: boolean; error: string | null }>;
+  getAdminPinStatus: () => Promise<{ configured: boolean; locked: boolean; secondsRemaining: number; failedAttempts: number }>;
+  verifyAdminPin: (pin: string) => Promise<{ ok: boolean; error: string | null; locked?: boolean; secondsRemaining?: number }>;
+  authorizeAdminAction: (input: Record<string, unknown>) => Promise<{ ok: boolean; token: string; error: string | null }>;
+  setAdminPin: (input: Record<string, unknown>) => Promise<{ ok: boolean; error: string | null }>;
 }
 
-interface ShiftPaymentRow { mode_of_payment: string; opening_amount: number; collected_amount: number; expected_amount: number; }
-interface ShiftSummary { openingEntry: string; posProfile: string; user: string; company: string; periodStart: string; postingDate: string; status: string; payments: ShiftPaymentRow[]; invoiceCount: number; netSales: number; totalOpening: number; totalExpected: number; isEstimate: boolean; }
+interface ReleaseEntry { tag: string; version: string; name: string; notes: string; publishedAt: string; prerelease: boolean; exeName: string; exeUrl: string; exeApiUrl: string; }
+
+interface ShiftPaymentRow { mode_of_payment: string; opening_amount: number; collected_amount: number; expected_amount: number; sale_amount?: number; refund_amount?: number; net_movement?: number; }
+interface ShiftSummary { openingEntry: string; posProfile: string; user: string; company: string; periodStart: string; postingDate: string; status: string; payments: ShiftPaymentRow[]; invoiceCount: number; netSales: number; refunds: number; totalOpening: number; totalExpected: number; isEstimate: boolean; }
 interface ShiftHistoryRow { openingEntry: string; closingEntry: string | null; posProfile: string; cashier: string; company: string; openedAt: string | null; closedAt: string | null; openingCash: number; expectedCash: number; actualCash: number; difference: number; netSales: number; status: string; summary: Record<string, unknown> | null; createdAt: string; }
 
 interface HeldSaleSummary { id: number; terminalInvoiceId: string; displayName: string; customer: string; customerName: string; posProfile: string; openingEntry: string; itemCount: number; estimatedTotal: number; createdAt: string; updatedAt: string; status: string; }
@@ -349,7 +357,9 @@ let lastReceiptHtml: string | null = null;                   // server-rendered 
 let receiptInvoice = "";                                     // POS Invoice name for (re)printing
 let changeDue = 0;                                           // cash tendered above the bill, to be returned (never recorded as payment)
 let resumedHeldId: number | null = null;                     // id of the held sale currently resumed (removed after successful submit)
-let receiptMode: "sale" | "history" = "sale";                // sale = just submitted (close starts new sale); history = duplicate view
+let receiptMode: "sale" | "history" | "refund" = "sale";     // sale = just submitted; history = duplicate/view; refund = return receipt
+let receiptAutoPrintPending = false;
+let receiptAutoPrintDone = false;
 // --- Refund state ---
 let refundData: Record<string, unknown> | null = null;       // server get_pos_invoice_for_refund payload
 let refundTerminalId = "";                                   // persistent terminal_refund_id for the current refund operation
@@ -582,6 +592,50 @@ function updateCloseDifferences(): void {
   const totalEl = document.querySelector<HTMLElement>("#close-total-difference");
   if (totalEl) { totalEl.textContent = fmtMoney(totalDiff); totalEl.className = Math.abs(totalDiff) < 0.005 ? "balanced" : "warn"; }
 }
+// Thermal-receipt-width shift summary: opening, sales, refunds, actual, difference (+ per-mode difference).
+function buildShiftSummaryHtml(): string {
+  const s = closeShiftSummary;
+  const rows = reconRows();
+  const opening = rows.reduce((a, r) => a + r.opening, 0) || (s?.totalOpening ?? 0);
+  const expected = rows.reduce((a, r) => a + r.expected, 0) || (s?.totalExpected ?? 0);
+  const actual = rows.reduce((a, r) => a + r.actual, 0);
+  const difference = money2(actual - expected);
+  const sales = s?.netSales ?? 0;
+  const refunds = s?.refunds ?? 0;
+  const esc = (t: string) => t.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c] ?? c));
+  const branch = document.querySelector<HTMLInputElement>("#branch")?.value ?? "";
+  const cashier = s?.user || (document.querySelector<HTMLElement>("#pos-cashier")?.textContent ?? "—");
+  const opened = s?.periodStart ? new Date(s.periodStart).toLocaleString() : "—";
+  const line = (label: string, value: number, bold = false) => `<div style="display:flex;justify-content:space-between">${bold ? "<strong>" : ""}<span>${esc(label)}</span><span>${value.toFixed(2)}</span>${bold ? "</strong>" : ""}</div>`;
+  const perMode = rows.map((r) => `<div style="display:flex;justify-content:space-between"><span>${esc(r.mode)}</span><span>${money2(r.actual - r.expected).toFixed(2)}</span></div>`).join("");
+  return `<div style="font:12px/1.5 monospace;width:280px;padding:8px">
+    <div style="text-align:center"><strong>${esc(branch || "POS")}</strong><br/>SHIFT SUMMARY</div>
+    <hr/>
+    <div>Opening Entry: ${esc(s?.openingEntry ?? "—")}</div>
+    <div>Cashier: ${esc(cashier)}</div>
+    <div>POS Profile: ${esc(s?.posProfile ?? "—")}</div>
+    <div>Opened: ${esc(opened)}</div>
+    <div>Printed: ${new Date().toLocaleString()}</div>
+    <hr/>
+    ${line("Opening", opening)}
+    ${line("Sales", sales)}
+    ${line("Refunds", refunds)}
+    ${line("Expected", expected)}
+    ${line("Actual (counted)", actual)}
+    ${line("Difference", difference, true)}
+    <hr/>
+    <div style="text-align:center;font-size:11px">Difference by mode</div>
+    ${perMode}
+    ${s?.isEstimate ? '<hr/><div style="text-align:center;font-size:10px">Local estimate — server is authoritative</div>' : ""}
+  </div>`;
+}
+async function printShiftSummary(): Promise<void> {
+  const message = document.querySelector<HTMLElement>("#close-shift-message");
+  if (!closeShiftSummary) { if (message) message.textContent = "Open Close Shift first to load the summary."; return; }
+  const result = await window.posAPI.printReceipt(buildShiftSummaryHtml());
+  if (message) message.textContent = result.success ? "Shift summary sent to printer." : `Print failed: ${result.error ?? "Unknown error"}`;
+}
+
 async function showCloseShift(): Promise<void> {
   const message = document.querySelector<HTMLElement>("#close-shift-message");
   if (!isOnline()) { if (message) message.textContent = "Online connection required to close shift"; showSessionInvalid("Server is offline"); return; }
@@ -602,19 +656,25 @@ async function showCloseShift(): Promise<void> {
   setText("#close-invoice-count", String(s.invoiceCount));
   setText("#close-net-sales", fmtMoney(s.netSales));
   const note = document.querySelector<HTMLElement>("#close-estimate-note"); if (note) note.hidden = !s.isEstimate;
-  if (message) message.textContent = queue.queued > 0 ? `Warning: ${queue.queued} offline sale(s) could not be synced and are NOT included in expected totals. Sync the queue before closing if possible.` : "";
+  const heldCount = await window.posAPI.listHeldSales().then((rows) => rows.length).catch(() => 0);
+  if (message) message.textContent = queue.queued > 0
+    ? `Warning: ${queue.queued} offline sale(s) could not be synced and are NOT included in expected totals. Sync the queue before closing if possible.`
+    : `Review counted amounts carefully. Submit Close Shift will create the ERPNext POS Closing Entry, close this shift, print the summary, delete ${heldCount} held sale(s), and require a new shift before selling again.`;
   const box = document.querySelector<HTMLElement>("#close-recon-rows");
   if (box) box.replaceChildren(...s.payments.map((p) => {
     const row = document.createElement("div"); row.className = "close-recon-row";
     row.dataset.mode = p.mode_of_payment; row.dataset.opening = String(p.opening_amount); row.dataset.expected = String(p.expected_amount);
     const mode = document.createElement("span"); mode.textContent = p.mode_of_payment;
     const opening = document.createElement("span"); opening.textContent = fmtMoney(p.opening_amount);
+    const sales = document.createElement("span"); sales.textContent = fmtMoney(p.sale_amount ?? Math.max(p.collected_amount, 0));
+    const refunds = document.createElement("span"); refunds.textContent = fmtMoney(p.refund_amount ?? Math.min(p.collected_amount, 0));
+    const net = document.createElement("span"); net.textContent = fmtMoney(p.net_movement ?? p.collected_amount);
     const expected = document.createElement("span"); expected.textContent = fmtMoney(p.expected_amount);
     const actualWrap = document.createElement("span");
-    const input = document.createElement("input"); input.type = "number"; input.min = "0"; input.step = "0.01"; input.value = fmtMoney(p.expected_amount);
+    const input = document.createElement("input"); input.type = "number"; input.step = "0.01"; input.value = fmtMoney(p.expected_amount);
     input.addEventListener("input", updateCloseDifferences); actualWrap.append(input);
     const diff = document.createElement("span"); diff.className = "recon-diff balanced"; diff.textContent = "0.00";
-    row.append(mode, opening, expected, actualWrap, diff); return row;
+    row.append(mode, opening, sales, refunds, net, expected, actualWrap, diff); return row;
   }));
   updateCloseDifferences();
   showScreen("close-shift");
@@ -629,6 +689,8 @@ async function submitCloseShift(): Promise<void> {
   if (!(await validateSession("close-submit"))) { if (message) message.textContent = sessionState.reason || "POS session is no longer active"; return; }
   const rows = reconRows();
   const totalDiff = rows.reduce((sum, r) => sum + (r.actual - r.expected), 0);
+  const heldCount = await window.posAPI.listHeldSales().then((rows) => rows.length).catch(() => 0);
+  if (!confirm(`Close Shift will submit an ERPNext POS Closing Entry, mark this shift closed, print the shift summary, delete ${heldCount} held sale(s), and block new sales until a new shift is opened. Continue?`)) return;
   if (Math.abs(totalDiff) >= 0.005 && !confirm(`There is a difference of ${fmtMoney(totalDiff)} between counted and expected amounts. Submit the closing entry anyway?`)) return;
   closeShiftInFlight = true;
   if (button) button.disabled = true;
@@ -640,7 +702,9 @@ async function submitCloseShift(): Promise<void> {
       notes: document.querySelector<HTMLTextAreaElement>("#close-notes")?.value ?? ""
     });
     if (!result.success) { if (message) message.textContent = result.error ?? "Unable to close shift"; return; }
-    // Shift closed: mark closed locally, drop the cached entry, preserve Sales History + held sales, block F6/F9, go to Start Shift.
+    if (message) message.textContent = "Shift closed. Printing summary...";
+    await window.posAPI.printReceipt(buildShiftSummaryHtml());
+    // Shift closed: mark closed locally, drop the cached entry, clear held drafts, preserve Sales History, block F6/F9, go to Start Shift.
     shiftClosed = true;
     closeShiftSummary = null;
     sessionState = { openingEntry: "", status: "Closed", user: "", posProfile: sessionState.posProfile, company: sessionState.company, postingDate: "", periodStart: "", lastChecked: Date.now(), lastError: "", valid: false, reason: "Shift closed" };
@@ -1062,6 +1126,8 @@ function interpretFbr(response:Record<string,unknown>):{accepted:boolean;statusT
 
 async function openReceiptPreview(response:Record<string,unknown>,provisional=false):Promise<void>{
   receiptMode="sale";
+  receiptAutoPrintPending=true;
+  receiptAutoPrintDone=false;
   setCartText("#receipt-title",provisional?"Provisional Receipt — Offline (FBR Pending)":"Receipt Preview");
   document.querySelector<HTMLButtonElement>("#receipt-print")?.removeAttribute("hidden");
   const dupBtn=document.querySelector<HTMLButtonElement>("#receipt-duplicate"); if(dupBtn)dupBtn.hidden=true;
@@ -1103,40 +1169,96 @@ async function openReceiptPreview(response:Record<string,unknown>,provisional=fa
     lastReceiptHtml=buildLocalReceiptHtml(posInvoice);
     const printBtn=document.querySelector<HTMLButtonElement>("#receipt-print");if(printBtn)printBtn.disabled=false;
     const reprintBtn=document.querySelector<HTMLButtonElement>("#receipt-reprint");if(reprintBtn)reprintBtn.hidden=true;
+    await autoPrintReceiptOnce();
     return;
   }
   await retrieveReceipt(posInvoice);
 }
 
 // Build a printable provisional receipt from local cart/totals/payments when there is no server-rendered receipt yet.
+function receiptPrintCss():string{
+  return `<style>
+    @page{size:80mm auto;margin:2mm}
+    @media print{html,body{width:80mm!important;margin:0!important;padding:0!important;background:#fff!important}button,input,select,textarea,.btn,.print-toolbar,.page-head,.navbar,#navbar,.web-footer,footer,.print-actions,a[href*="download_pdf"],a[href*="pdf"]{display:none!important}.receipt-item-row,.receipt-totals,.receipt-fbr,.receipt-footer,.rc-item,.rc-totals,.rc-fbr,.rc-footer{break-inside:avoid;page-break-inside:avoid}}
+    *{box-sizing:border-box}body,.print-format,.pos-receipt{margin:0;padding:0;background:#fff!important;color:#000!important;font-family:Calibri,Arial,sans-serif!important;font-variant-numeric:tabular-nums}
+    .print-format,.pos-receipt{width:80mm!important;max-width:80mm!important;margin:0 auto!important;padding:3mm 3mm 4mm!important;font-size:11px!important;line-height:1.35!important}
+    .thermal-receipt{width:80mm;max-width:80mm;margin:0 auto;padding:3mm 3mm 4mm;color:#000;background:#fff;font:11px/1.35 Calibri,Arial,sans-serif}
+    .receipt-company{font-size:18px;font-weight:800;text-align:center;color:#000}.receipt-title{font-size:15px;font-weight:800;text-align:center;border-top:1px solid #000;border-bottom:1px solid #000;margin:4px 0;padding:3px 0;color:#000}.receipt-label{font-size:15px;font-weight:900;text-align:center;border:2px solid #000;margin:0 0 5px;padding:5px;text-transform:uppercase;color:#000}
+    .receipt-meta{font-size:11px;color:#000}.receipt-meta div,.receipt-total-row,.receipt-payment-row,.receipt-fbr-row{display:flex;justify-content:space-between;gap:8px}
+    .receipt-items{width:100%;border-collapse:collapse;margin-top:4px;table-layout:fixed}.receipt-items th{font-size:10px;font-weight:800;color:#000;border-top:1px solid #000;border-bottom:1px solid #000;padding:3px 0;text-align:right}.receipt-items th:first-child{text-align:left}.receipt-items td{font-size:10px;font-weight:700;color:#000;padding:3px 0;text-align:right;vertical-align:top;border-bottom:1px dotted #999}.receipt-items td:first-child{font-size:11px;font-weight:800;text-align:left;white-space:normal;overflow-wrap:anywhere}.receipt-items .desc{width:auto}.receipt-items .qty{width:15mm}.receipt-items .rate{width:20mm}.receipt-items .amount{width:22mm}
+    .receipt-totals{border-top:1px solid #000;margin-top:5px;padding-top:4px}.receipt-total-row{font-size:12px;font-weight:800;color:#000;margin:2px 0}.receipt-total-row.grand{font-size:16px;font-weight:900;border-top:2px solid #000;margin-top:4px;padding-top:4px}
+    .receipt-payments{border:1px solid #000;margin-top:5px;padding:4px}.receipt-payment-title{font-size:10px;font-weight:900;text-transform:uppercase}.receipt-payment-row{font-size:11px;font-weight:700}
+    .receipt-fbr{border:1px solid #000;margin-top:5px;padding:4px}.receipt-fbr-title{font-size:12px;font-weight:900;text-align:center}.receipt-fbr-row,.receipt-fbr-invoice{font-size:11px;font-weight:800;color:#000}.receipt-fbr-invoice{text-align:center;word-break:break-all;margin:4px 0}.receipt-footer{font-size:10px;font-weight:700;text-align:center;border-top:1px dashed #000;margin-top:6px;padding-top:5px;color:#000}
+    .rc-company{font-size:18px!important;font-weight:800!important;color:#000!important}.rc-title{font-size:15px!important;font-weight:800!important;color:#000!important}.rc-meta,.rc-meta-row,.rc-fbr-row,.rc-fbr-inv{font-size:11px!important;color:#000!important;font-weight:700!important}
+    .rc-meta-lbl,.rc-item-code,.rc-item-nums .c-desc,.rc-terms,.rc-footer{color:#000!important}.rc-col-hdr,.rc-item-nums{display:grid!important;grid-template-columns:minmax(0,1fr) 16mm 20mm 22mm!important;gap:1.5mm!important;color:#000!important}.rc-col-hdr{font-size:10px!important;font-weight:800!important}.rc-item-nums{font-size:10px!important;font-weight:700!important}
+    .rc-item{padding:2px 1px!important;border-bottom:1px dotted #999!important}.rc-item-code{display:none!important}.rc-item-name{font-size:11px!important;font-weight:800!important;color:#000!important;overflow:visible!important;display:block!important;line-height:1.2!important}.rc-item-nums .c-num,.rc-col-hdr .c-num{text-align:right!important;white-space:nowrap!important}.rc-item-tax{margin-top:1px!important;padding:1px 2px!important;border-left:0!important;background:transparent!important;font-size:9.5px!important;line-height:1.15!important;color:#000!important;font-weight:800!important}.rc-item-tax-3rd,.rc-item-disc{display:none!important}
+    .rc-tot-row{font-size:12px!important;color:#000!important;font-weight:700!important}.rc-tot-row.grand{font-size:16px!important;font-weight:900!important;color:#000!important}.rc-tot-amt{white-space:nowrap!important}.rc-fbr-title{font-size:12px!important;font-weight:900!important;color:#000!important}.rc-fbr-inv b,.rc-fbr-row span:last-child{font-weight:900!important;color:#000!important}.rc-footer{font-size:10px!important;color:#000!important}
+    .rc-fbr-qr img,.receipt-qr-img{width:100px!important;height:100px!important;image-rendering:crisp-edges}.duplicate-copy,.return-copy{text-align:center!important;font:900 15px Calibri,Arial,sans-serif!important;border:2px solid #000!important;color:#000!important;background:#fff!important;padding:5px!important;margin:4px 0 6px!important;letter-spacing:1px!important;text-transform:uppercase!important}
+  </style>`;
+}
 function buildLocalReceiptHtml(posInvoice:string):string{
   const totals=fbrTotalsView();
   const esc=(s:string)=>s.replace(/[&<>]/g,(c)=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]??c));
-  const cashier=document.querySelector<HTMLElement>("#pos-cashier")?.textContent??"—";
-  const customer=selectedCustomer?(selectedCustomer.customer_name||selectedCustomer.name):"—";
+  const cashier=document.querySelector<HTMLElement>("#pos-cashier")?.textContent??"-";
+  const customer=selectedCustomer?(selectedCustomer.customer_name||selectedCustomer.name):"-";
   const branch=document.querySelector<HTMLInputElement>("#branch")?.value??"";
-  const itemRows=cartLines.map(line=>`<tr><td>${esc(`${line.itemCode} — ${line.itemName}`)}</td><td style="text-align:right">${line.quantity}</td><td style="text-align:right">${(line.sellingPrice??0).toFixed(2)}</td><td style="text-align:right">${((line.sellingPrice??0)*line.quantity).toFixed(2)}</td></tr>`).join("");
-  const payRows=paymentRows.map(p=>`<tr><td>${esc(p.method)}</td><td style="text-align:right">${p.amount.toFixed(2)}</td></tr>`).join("");
-  return `<div style="font:12px/1.4 monospace;width:280px;padding:8px">
-    <div style="text-align:center"><strong>${esc(branch||"POS")}</strong><br/>PROVISIONAL — OFFLINE<br/>FBR Invoice: PENDING (syncs when online)</div>
-    <hr/>
-    <div>Terminal Inv: ${esc(posInvoice||terminalInvoiceId)}</div>
-    <div>Date: ${new Date().toLocaleString()}</div>
-    <div>Cashier: ${esc(cashier)}</div>
-    <div>Customer: ${esc(customer)}</div>
-    <hr/>
-    <table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left">Item</th><th>Qty</th><th>Rate</th><th>Amount</th></tr></thead><tbody>${itemRows}</tbody></table>
-    <hr/>
-    <div style="display:flex;justify-content:space-between"><span>Sale Before Tax</span><span>${totals.saleBeforeTax.toFixed(2)}</span></div>
-    <div style="display:flex;justify-content:space-between"><span>FBR Sales Tax</span><span>${totals.salesTax.toFixed(2)}</span></div>
-    <div style="display:flex;justify-content:space-between"><span>FBR POS Service Fee</span><span>${totals.serviceFee.toFixed(2)}</span></div>
-    <div style="display:flex;justify-content:space-between"><strong>Grand Total</strong><strong>${totals.payable.toFixed(2)}</strong></div>
-    <hr/>
-    <table style="width:100%">${payRows}</table>
-    <div style="display:flex;justify-content:space-between"><span>Change</span><span>${changeDue.toFixed(2)}</span></div>
-    <hr/>
-    <div style="text-align:center">Provisional slip — not an FBR tax invoice.<br/>A valid FBR invoice prints after sync.</div>
-  </div>`;
+  const itemRows=cartLines.map(line=>`<tr class="receipt-item-row"><td>${esc(`${line.itemCode} - ${line.itemName}`)}</td><td>${line.quantity}</td><td>${(line.sellingPrice??0).toFixed(2)}</td><td>${((line.sellingPrice??0)*line.quantity).toFixed(2)}</td></tr>`).join("");
+  const payRows=paymentRows.map(p=>`<div class="receipt-payment-row"><span>${esc(p.method)}</span><strong>${p.amount.toFixed(2)}</strong></div>`).join("");
+  return `<!doctype html><html><head><meta charset="utf-8">${receiptPrintCss()}</head><body>
+    <div class="thermal-receipt">
+      <div class="receipt-company">${esc(branch||"POS")}</div>
+      <div class="receipt-label">PROVISIONAL - OFFLINE</div>
+      <div class="receipt-title">POS INVOICE</div>
+      <div class="receipt-meta">
+        <div><span>Terminal Inv</span><strong>${esc(posInvoice||terminalInvoiceId)}</strong></div>
+        <div><span>Date</span><strong>${new Date().toLocaleString()}</strong></div>
+        <div><span>Cashier</span><strong>${esc(cashier)}</strong></div>
+        <div><span>Customer</span><strong>${esc(customer)}</strong></div>
+        <div><span>FBR Invoice</span><strong>PENDING</strong></div>
+      </div>
+      <table class="receipt-items">
+        <thead><tr><th class="desc">Item</th><th class="qty">Qty</th><th class="rate">Rate</th><th class="amount">Amount</th></tr></thead>
+        <tbody>${itemRows}</tbody>
+      </table>
+      <div class="receipt-totals">
+        <div class="receipt-total-row"><span>Sale Before Tax</span><strong>${totals.saleBeforeTax.toFixed(2)}</strong></div>
+        <div class="receipt-total-row"><span>FBR Sales Tax</span><strong>${totals.salesTax.toFixed(2)}</strong></div>
+        <div class="receipt-total-row"><span>FBR POS Service Fee</span><strong>${totals.serviceFee.toFixed(2)}</strong></div>
+        <div class="receipt-total-row grand"><span>Grand Total</span><strong>${totals.payable.toFixed(2)}</strong></div>
+      </div>
+      <div class="receipt-payments">
+        <div class="receipt-payment-title">Payment</div>
+        ${payRows}
+        <div class="receipt-payment-row"><span>Change</span><strong>${changeDue.toFixed(2)}</strong></div>
+      </div>
+      <div class="receipt-footer">Provisional slip - not an FBR tax invoice.<br>A valid FBR invoice prints after sync.</div>
+    </div>
+  </body></html>`;
+}
+
+function sanitizeReceiptHtml(html:string):string{
+  const chromeSelector=".print-toolbar,.page-head,.navbar,#navbar,.web-footer,footer,.btn-print-preview,.print-preview-select,.print-preview-toolbar,.print-actions";
+  try{
+    const doc=new DOMParser().parseFromString(html,"text/html");
+    doc.querySelectorAll(chromeSelector).forEach((el)=>el.remove());
+    doc.querySelectorAll("a,button").forEach((el)=>{
+      const text=(el.textContent||"").trim().toLowerCase();
+      const href=el instanceof HTMLAnchorElement?el.href.toLowerCase():"";
+      if(text==="print"||text==="get pdf"||text.includes("get pdf")||href.includes("download_pdf")||href.includes("pdf"))el.remove();
+    });
+    doc.head.insertAdjacentHTML("beforeend",receiptPrintCss());
+    return `<!doctype html>${doc.documentElement.outerHTML}`;
+  }catch{
+    const css=receiptPrintCss();
+    return /<\/head>/i.test(html)?html.replace(/<\/head>/i,`${css}</head>`):css+html;
+  }
+}
+
+function decorateReceiptHtml(html:string):string{
+  const title=document.querySelector<HTMLElement>("#receipt-title")?.textContent??"";
+  if(!/^REFUND \/ RETURN/i.test(title))return html;
+  const banner=`<div class="return-copy">${title}</div>`;
+  return /<body[^>]*>/i.test(html)?html.replace(/(<body[^>]*>)/i,`$1${banner}`):banner+html;
 }
 
 // Pull the server-rendered receipt for printing. Failure never resubmits — the sale is already in Sales History.
@@ -1151,11 +1273,12 @@ async function retrieveReceipt(posInvoice:string):Promise<void>{
   try{
     const result=await window.posAPI.getReceipt(posInvoice);
     if(result.html){
-      lastReceiptHtml=result.html;
-      if(frame){frame.srcdoc=result.html;frame.hidden=false;}      // show the authoritative rendered receipt
+      lastReceiptHtml=decorateReceiptHtml(sanitizeReceiptHtml(result.html));
+      if(frame){frame.srcdoc=lastReceiptHtml;frame.hidden=false;}      // show the authoritative rendered receipt
       if(structured)structured.hidden=true;
       if(printBtn)printBtn.disabled=false;if(reprintBtn)reprintBtn.hidden=true;
-      if(msg)msg.textContent="Receipt ready to print.";
+      if(msg)msg.textContent=receiptAutoPrintPending?"Receipt ready. Printing automatically...":"Receipt ready to print.";
+      await autoPrintReceiptOnce();
     }else{
       lastReceiptHtml=receiptMode==="sale"?buildLocalReceiptHtml(posInvoice):null;
       if(frame){frame.removeAttribute("srcdoc");frame.hidden=true;}
@@ -1164,6 +1287,7 @@ async function retrieveReceipt(posInvoice:string):Promise<void>{
       if(msg)msg.textContent=lastReceiptHtml
         ? `Server receipt unavailable: ${result.error??"Unknown error"}. Local receipt is printable; server receipt can be reprinted after sync.`
         : `Receipt retrieval failed: ${result.error??"Unknown error"}. Sale is saved in Sales History.`;
+      await autoPrintReceiptOnce();
     }
   }catch(error){
     lastReceiptHtml=receiptMode==="sale"?buildLocalReceiptHtml(posInvoice):null;
@@ -1173,7 +1297,17 @@ async function retrieveReceipt(posInvoice:string):Promise<void>{
     if(msg)msg.textContent=lastReceiptHtml
       ? `Server receipt unavailable: ${error instanceof Error?error.message:"Unknown error"}. Local receipt is printable; server receipt can be reprinted after sync.`
       : `Receipt retrieval failed: ${error instanceof Error?error.message:"Unknown error"}. Sale is saved in Sales History.`;
+    await autoPrintReceiptOnce();
   }
+}
+
+async function autoPrintReceiptOnce():Promise<void>{
+  if(!receiptAutoPrintPending||receiptAutoPrintDone||receiptMode!=="sale"||!lastReceiptHtml)return;
+  receiptAutoPrintPending=false;
+  receiptAutoPrintDone=true;
+  const msg=document.querySelector<HTMLElement>("#receipt-message");
+  if(msg)msg.textContent="Receipt ready. Printing automatically...";
+  await printReceiptNow();
 }
 
 // The ONLY place the cart, payments and benefits are cleared and a new terminal_invoice_id is generated.
@@ -1201,6 +1335,7 @@ async function startNewSaleAfterReceipt():Promise<void>{
 // Receipt close behaves differently for a just-completed sale vs. a duplicate viewed from history.
 async function closeReceiptDialog():Promise<void>{
   if(receiptMode==="history"){document.querySelector<HTMLDialogElement>("#receipt-dialog")?.close();focusCart();return;}
+  if(receiptMode==="refund"){document.querySelector<HTMLDialogElement>("#receipt-dialog")?.close();await openSalesHistory();return;}
   await startNewSaleAfterReceipt();
 }
 
@@ -1308,16 +1443,57 @@ async function resumeHeldSale(id:number):Promise<void>{
 }
 
 // ---------------- Phase 4: Sales History + Duplicate Print ----------------
-async function openSalesHistory():Promise<void>{ showScreen("sales-history"); await renderSalesHistory(); }
+function todayDateInputValue():string{
+  const d=new Date();
+  const m=String(d.getMonth()+1).padStart(2,"0");
+  const day=String(d.getDate()).padStart(2,"0");
+  return `${d.getFullYear()}-${m}-${day}`;
+}
+async function openSalesHistory():Promise<void>{
+  showScreen("sales-history");
+  const search=document.querySelector<HTMLInputElement>("#history-search");
+  const from=document.querySelector<HTMLInputElement>("#history-from");
+  const to=document.querySelector<HTMLInputElement>("#history-to");
+  if(!search?.value.trim()&&from&&!from.value)from.value=todayDateInputValue();
+  if(!search?.value.trim()&&to&&!to.value)to.value=todayDateInputValue();
+  await renderSalesHistory();
+}
+type RefundHistoryStatus = "unknown" | "none" | "partial" | "complete";
+function classifyRefundHistory(data:Record<string,unknown>|null):RefundHistoryStatus{
+  if(!data)return "unknown";
+  const rows=Array.isArray(data.items)?data.items as Record<string,unknown>[]:[];
+  if(!rows.length)return "unknown";
+  const returned=rows.some((row)=>(previewNumber(row,"already_returned_qty")??0)>0);
+  const remaining=rows.some((row)=>(previewNumber(row,"remaining_qty")??0)>0);
+  if(returned&&!remaining)return "complete";
+  if(returned&&remaining)return "partial";
+  return "none";
+}
+async function loadRefundHistoryStatuses(rows:SalesHistoryRow[]):Promise<Map<string,RefundHistoryStatus>>{
+  const statuses=new Map<string,RefundHistoryStatus>();
+  if(!isOnline())return statuses;
+  const invoices=[...new Set(rows.filter((row)=>row.posInvoice&&row.status==="Submitted").map((row)=>row.posInvoice as string))];
+  await Promise.all(invoices.map(async(invoice)=>{
+    const result=await window.posAPI.getInvoiceForRefund(invoice).catch(()=>({data:null,error:""}));
+    statuses.set(invoice,classifyRefundHistory(result.data));
+  }));
+  return statuses;
+}
 async function renderSalesHistory():Promise<void>{
   const list=document.querySelector<HTMLElement>("#history-list"); const msg=document.querySelector<HTMLElement>("#history-message"); if(!list)return;
-  const search=document.querySelector<HTMLInputElement>("#history-search")?.value??"";
-  const from=document.querySelector<HTMLInputElement>("#history-from")?.value??"";
-  const to=document.querySelector<HTMLInputElement>("#history-to")?.value??"";
+  const search=document.querySelector<HTMLInputElement>("#history-search")?.value.trim()??"";
+  const fromInput=document.querySelector<HTMLInputElement>("#history-from");
+  const toInput=document.querySelector<HTMLInputElement>("#history-to");
+  if(!search&&fromInput&&!fromInput.value)fromInput.value=todayDateInputValue();
+  if(!search&&toInput&&!toInput.value)toInput.value=todayDateInputValue();
+  const from=search?"":fromInput?.value??"";
+  const to=search?"":toInput?.value??"";
   if(msg)msg.textContent="Loading…";
   let rows:SalesHistoryRow[]=[];
   try{rows=await window.posAPI.listSalesHistory({search,dateFrom:from?`${from}T00:00:00.000Z`:"",dateTo:to?`${to}T23:59:59.999Z`:"",limit:50,offset:0});}
   catch{if(msg)msg.textContent="Unable to load sales history.";return;}
+  if(msg)msg.textContent=isOnline()?"Checking refund status...":"";
+  const refundStatuses=await loadRefundHistoryStatuses(rows);
   if(msg)msg.textContent="";
   if(!rows.length){list.replaceChildren(Object.assign(document.createElement("div"),{className:"op-empty",textContent:"No matching sales."}));return;}
   list.replaceChildren(...rows.map((row)=>{
@@ -1335,10 +1511,17 @@ async function renderSalesHistory():Promise<void>{
     if(queued){fbrTag.className="fbr-tag return";fbrTag.textContent="Queued — Offline (FBR pending)";}
     else{fbrTag.className=`fbr-tag ${fbr.accepted?"ok":"warn"}`;fbrTag.textContent=`FBR ${fbr.accepted?"Accepted":fbr.statusText}${fbr.invoiceNumber?` · ${fbr.invoiceNumber}`:""}`;}
     main.append(title,meta,fbrTag);
+    const refundStatus=row.posInvoice?refundStatuses.get(row.posInvoice):undefined;
+    if(refundStatus==="partial"||refundStatus==="complete"){
+      const refundTag=document.createElement("span");
+      refundTag.className=`fbr-tag ${refundStatus==="complete"?"return":"warn"}`;
+      refundTag.textContent=refundStatus==="complete"?"Completely refunded":"Partially refunded";
+      main.append(refundTag);
+    }
     const actions=document.createElement("div");actions.className="op-card-actions";
     const view=document.createElement("button");view.type="button";view.className="secondary-button";view.textContent="View Receipt";view.onclick=()=>void viewHistoryReceipt(row);
     const dup=document.createElement("button");dup.type="button";dup.textContent="Print Duplicate";dup.disabled=!row.posInvoice;dup.onclick=()=>void printDuplicate(row);
-    const refund=document.createElement("button");refund.type="button";refund.className="secondary-button";refund.textContent="Refund";refund.disabled=!row.posInvoice||row.status!=="Submitted";refund.onclick=()=>void openRefund(row.posInvoice??"");
+    const refund=document.createElement("button");refund.type="button";refund.className="secondary-button";refund.textContent=refundStatus==="complete"?"Refunded":"Refund";refund.disabled=!row.posInvoice||row.status!=="Submitted"||refundStatus==="complete";refund.onclick=()=>void openRefund(row.posInvoice??"");
     actions.append(view,dup,refund);
     card.append(main,actions);return card;
   }));
@@ -1396,6 +1579,10 @@ async function printDuplicate(row:SalesHistoryRow):Promise<void>{
 
 // ---------------- Phase F: Online Refund / Return ----------------
 function refundItemRows():Record<string,unknown>[]{ return Array.isArray(refundData?.items)?(refundData!.items as Record<string,unknown>[]):[]; }
+function refundHasRemaining(data:Record<string,unknown>|null=refundData):boolean{
+  const rows=Array.isArray(data?.items)?data.items as Record<string,unknown>[]:[];
+  return rows.some((row)=>(previewNumber(row,"remaining_qty")??0)>0);
+}
 
 // Entry point from Sales History (an original submitted sale). Loads authoritative data from the server.
 async function openRefund(posInvoice:string):Promise<void>{
@@ -1432,57 +1619,141 @@ async function renderRefundScreen():Promise<void>{
   const select=document.querySelector<HTMLSelectElement>("#refund-mode");
   if(select){const modes=await window.posAPI.getPaymentMethods();select.replaceChildren(...modes.map(m=>new Option(m,m)));const original=Array.isArray(d.payments)?d.payments:[];const firstMode=original.length?String((asTotalsRecord(original[0])??{}).mode_of_payment??""):"";if(firstMode&&modes.includes(firstMode))select.value=firstMode;}
   computeRefundTotal();
+  const hasRemaining=refundHasRemaining();
+  document.querySelector<HTMLButtonElement>("#refund-full")?.toggleAttribute("disabled",!hasRemaining);
+  document.querySelector<HTMLButtonElement>("#refund-clear")?.toggleAttribute("disabled",!hasRemaining);
+  document.querySelector<HTMLButtonElement>("#refund-submit")?.toggleAttribute("disabled",!hasRemaining);
+  if(!hasRemaining&&msg)msg.textContent="This invoice is fully refunded. No refundable quantity remains.";
+}
+
+// --- Refund quantity helpers ---
+function refundStep(input:HTMLInputElement):number{ return Number(input.dataset.step)||1; }
+function refundRemaining(input:HTMLInputElement):number{ return Number(input.dataset.remaining)||0; }
+function roundToStep(value:number, step:number):number{ return step>=1 ? Math.round(value) : Math.round(value*1000)/1000; }
+function fmtQty(value:number, fractional:boolean):string{ return fractional ? value.toFixed(3) : String(Math.round(value)); }
+function refundCellError(cell:Element|null, message:string):void{ const e=cell?.querySelector<HTMLElement>(".refund-error"); if(e){ if(message){ e.textContent=message; e.hidden=false; } else { e.textContent=""; e.hidden=true; } } }
+// Step a row up/down by its UOM step, clamped to [0, remaining]. Never below 0, never above remaining.
+function stepRefundQty(input:HTMLInputElement, direction:number):void{
+  if(input.disabled) return;
+  const step=refundStep(input), remaining=refundRemaining(input);
+  let v=(Number(input.value)||0)+direction*step;
+  v=roundToStep(Math.min(remaining, Math.max(0, v)), step);
+  input.value=String(v);
+  refundCellError(input.closest(".refund-qty-cell"), "");
+  computeRefundTotal();
+}
+// Clamp/validate on BLUR only (not per keystroke) so typing + cursor stay stable. Shows an inline error when corrected.
+function clampRefundInput(input:HTMLInputElement):void{
+  const cell=input.closest(".refund-qty-cell");
+  const remaining=refundRemaining(input), step=refundStep(input);
+  const raw=input.value.trim();
+  if(raw===""){ input.value="0"; refundCellError(cell,""); return; }
+  const v=Number(raw);
+  if(!Number.isFinite(v)||v<0){ input.value="0"; refundCellError(cell,"Invalid — reset to 0"); return; }
+  if(v>remaining){ input.value=String(roundToStep(remaining,step)); refundCellError(cell,`Max refundable: ${fmtQty(remaining, step<1)}`); return; }
+  input.value=String(roundToStep(v,step)); refundCellError(cell,"");
 }
 
 function buildRefundRow(it:Record<string,unknown>):HTMLElement{
-  const remaining=previewNumber(it,"remaining_qty")??0;
+  const sold=previewNumber(it,"sold_qty")??0;
+  const alreadyReturned=previewNumber(it,"already_returned_qty")??0;
+  const remaining=Math.max(0, previewNumber(it,"remaining_qty")??0);
   const rate=previewNumber(it,"rate")??0;
-  const row=document.createElement("div");row.className="refund-row";
-  const cells:(string|HTMLElement)[]=[
-    `${String(it.item_code??"")} — ${String(it.item_name??"")}`,
-    String(previewNumber(it,"sold_qty")??0),
-    String(previewNumber(it,"already_returned_qty")??0),
-    remaining.toFixed(3),
-    rate.toFixed(2)
-  ];
-  const input=document.createElement("input");input.type="number";input.min="0";input.step="0.001";input.value="0";
-  input.dataset.rowName=String(it.row_name??"");input.dataset.remaining=String(remaining);input.dataset.rate=String(rate);
-  input.max=String(remaining);
-  input.addEventListener("input",()=>{let v=Number(input.value)||0;if(v<0)v=0;if(v>remaining){v=remaining;input.value=String(remaining);}computeRefundTotal();});
-  const est=document.createElement("span");est.className="refund-est";est.textContent="0.00";
+  const rowAmount=Math.abs(previewNumber(it,"amount")??0);
+  const rowTax=Math.abs(previewNumber(it,"sales_tax")??0);
+  const rowName=String(it.row_name??"");                 // preserve the original invoice child-row id
+  const fractional=!Number.isInteger(sold)||!Number.isInteger(remaining);
+  const step=fractional?0.001:1;                          // 1 for whole-number UOMs, 0.001 when fractional
+  const refundable=remaining>0;                           // disable ONLY when nothing remains
+
   const container=document.createElement("div");container.className="refund-row";
-  cells.forEach((c)=>{const s=document.createElement("span");if(typeof c==="string")s.textContent=c;else s.append(c);container.append(s);});
-  const qtyCell=document.createElement("span");qtyCell.append(input);container.append(qtyCell);
+  const text=(t:string)=>{const s=document.createElement("span");s.textContent=t;return s;};
+  container.append(
+    text(`${String(it.item_code??"")} — ${String(it.item_name??"")}`),
+    text(fmtQty(sold,fractional)),
+    text(fmtQty(alreadyReturned,fractional)),
+    text(fmtQty(remaining,fractional)),
+    text(rate.toFixed(2))
+  );
+
+  const qtyCell=document.createElement("span");qtyCell.className="refund-qty-cell";
+  const controls=document.createElement("div");controls.className="refund-qty-controls";
+  const minus=document.createElement("button");minus.type="button";minus.className="refund-step";minus.textContent="−";minus.tabIndex=-1;minus.disabled=!refundable;
+  const plus=document.createElement("button");plus.type="button";plus.className="refund-step";plus.textContent="+";plus.tabIndex=-1;plus.disabled=!refundable;
+  const input=document.createElement("input");
+  input.type="number";input.className="refund-qty-input";input.value="0";
+  input.min="0";input.max=String(remaining);input.step=String(step);
+  input.dataset.rowName=rowName;input.dataset.remaining=String(remaining);input.dataset.rate=String(rate);input.dataset.step=String(step);input.dataset.sold=String(sold);input.dataset.rowAmount=String(rowAmount);input.dataset.rowTax=String(rowTax);
+  input.disabled=!refundable;                             // never readonly; disabled only when remaining<=0
+  minus.addEventListener("click",()=>stepRefundQty(input,-1));
+  plus.addEventListener("click",()=>stepRefundQty(input,1));
+  // Arrow keys step by UOM step (clamped); digits, decimal point, Backspace, Delete and selection stay native.
+  input.addEventListener("keydown",(e)=>{ if(e.key==="ArrowUp"){ e.preventDefault(); stepRefundQty(input,1); } else if(e.key==="ArrowDown"){ e.preventDefault(); stepRefundQty(input,-1); } });
+  input.addEventListener("input",()=>{ refundCellError(qtyCell,""); computeRefundTotal(); });   // no mid-type clamp
+  input.addEventListener("blur",()=>{ clampRefundInput(input); computeRefundTotal(); });
+  controls.append(minus,input,plus);
+  const err=document.createElement("span");err.className="refund-error";err.hidden=true;
+  qtyCell.append(controls,err);
+  container.append(qtyCell);
+
+  const est=document.createElement("span");est.className="refund-est";est.textContent="0.00";
   container.append(est);
   return container;
 }
 
 function computeRefundTotal():void{
-  let total=0;
-  document.querySelectorAll<HTMLInputElement>("#refund-items input[type=number]").forEach((input)=>{
-    const qty=Number(input.value)||0;const rate=Number(input.dataset.rate)||0;const est=qty*rate;
+  let total=0;let gst=0;
+  document.querySelectorAll<HTMLInputElement>(".refund-qty-input").forEach((input)=>{
+    const qty=Number(input.value)||0;const sold=Number(input.dataset.sold)||0;const rowAmount=Number(input.dataset.rowAmount)||0;const rowTax=Number(input.dataset.rowTax)||0;const ratio=sold>0?qty/sold:0;const est=qty>0?money2(rowAmount*ratio):0;const tax=qty>0?money2(rowTax*ratio):0;
     const estSpan=input.closest(".refund-row")?.querySelector<HTMLElement>(".refund-est");
     if(estSpan)estSpan.textContent=est.toFixed(2);
-    total+=est;
+    total+=est;gst+=tax;
   });
+  const fee=previewNumber(refundData??{},"fbr_pos_service_fee")??0;
+  setCartText("#refund-merchandise",total.toFixed(2));
+  setCartText("#refund-gst",gst.toFixed(2));
+  setCartText("#refund-fbr-fee",fee.toFixed(2));
   setCartText("#refund-total",total.toFixed(2));
 }
 
-function setRefundFull():void{ document.querySelectorAll<HTMLInputElement>("#refund-items input[type=number]").forEach((input)=>{input.value=String(Number(input.dataset.remaining)||0);});computeRefundTotal(); }
-function clearRefundQty():void{ document.querySelectorAll<HTMLInputElement>("#refund-items input[type=number]").forEach((input)=>{input.value="0";});computeRefundTotal(); }
+// Full Refund: every refundable row -> its remaining qty. Clear: every row -> 0.
+function setRefundFull():void{ document.querySelectorAll<HTMLInputElement>(".refund-qty-input").forEach((input)=>{ if(input.disabled) return; input.value=String(roundToStep(refundRemaining(input),refundStep(input))); refundCellError(input.closest(".refund-qty-cell"),""); }); computeRefundTotal(); }
+function clearRefundQty():void{ document.querySelectorAll<HTMLInputElement>(".refund-qty-input").forEach((input)=>{ input.value="0"; refundCellError(input.closest(".refund-qty-cell"),""); }); computeRefundTotal(); }
 
 async function submitRefund():Promise<void>{
   if(refundSubmitting||!refundData)return;
   const msg=document.querySelector<HTMLElement>("#refund-message");
   if(!isOnline()){if(msg)msg.textContent="Online connection required to submit a refund.";return;}
   if(!(await validateSession("refund"))){if(msg)msg.textContent=sessionState.reason||"POS session is not active.";return;}
+  // Clamp any value typed but not yet blurred, then collect selected rows (qty>0) by original row id.
+  document.querySelectorAll<HTMLInputElement>(".refund-qty-input").forEach((input)=>clampRefundInput(input));
   const items:{original_row_name:string;qty:number}[]=[];
-  document.querySelectorAll<HTMLInputElement>("#refund-items input[type=number]").forEach((input)=>{const qty=Number(input.value)||0;if(qty>0)items.push({original_row_name:input.dataset.rowName??"",qty});});
+  document.querySelectorAll<HTMLInputElement>(".refund-qty-input").forEach((input)=>{const qty=Number(input.value)||0;if(qty>0&&input.dataset.rowName)items.push({original_row_name:input.dataset.rowName,qty});});
   if(!items.length){if(msg)msg.textContent="Enter at least one refund quantity.";return;}
   const mode=document.querySelector<HTMLSelectElement>("#refund-mode")?.value??"";
   if(!mode){if(msg)msg.textContent="Select a refund mode of payment.";return;}
   const reason=document.querySelector<HTMLInputElement>("#refund-reason")?.value??"";
-  refundSubmitting=true;const btn=document.querySelector<HTMLButtonElement>("#refund-submit");if(btn)btn.disabled=true;if(msg)msg.textContent="Submitting Refund…";
+  const btn=document.querySelector<HTMLButtonElement>("#refund-submit");if(btn)btn.disabled=true;
+  // Re-fetch authoritative remaining quantities and block if another refund reduced availability.
+  if(msg)msg.textContent="Verifying available quantities…";
+  const fresh=await window.posAPI.getInvoiceForRefund(String(refundData.original_invoice??""));
+  if(!fresh.data){if(msg)msg.textContent=`Unable to verify quantities: ${fresh.error??"Unknown error"}`;if(btn)btn.disabled=false;return;}
+  const freshRemaining=new Map<string,number>();
+  for(const raw of (Array.isArray(fresh.data.items)?fresh.data.items:[])){const r=asTotalsRecord(raw);if(r)freshRemaining.set(String(r.row_name??""),Math.max(0,previewNumber(r,"remaining_qty")??0));}
+  const conflict=items.find((it)=>it.qty>(freshRemaining.get(it.original_row_name)??0)+1e-9);
+  if(conflict){
+    refundData=fresh.data;
+    await renderRefundScreen();
+    if(!refundHasRemaining(fresh.data)){
+      if(msg)msg.textContent="This invoice is now fully refunded. Returning to Sales History.";
+      window.setTimeout(()=>void openSalesHistory(),900);
+    }else if(msg){
+      msg.textContent="Available quantity changed (another refund may have processed). Quantities refreshed — re-check and submit again.";
+    }
+    if(btn)btn.disabled=!refundHasRemaining(fresh.data);
+    return;
+  }
+  refundSubmitting=true;if(msg)msg.textContent="Submitting Refund…";
   // terminal_refund_id is NOT regenerated on retry — idempotency is server-enforced.
   const payload={terminal_refund_id:refundTerminalId,original_invoice:refundData.original_invoice,pos_opening_entry:sessionState.openingEntry,reason,items,payments:[{mode_of_payment:mode,amount:0}]};
   const result=await window.posAPI.submitPosRefund(payload);
@@ -1494,7 +1765,7 @@ async function submitRefund():Promise<void>{
 }
 
 async function showRefundReceipt(res:Record<string,unknown>):Promise<void>{
-  receiptMode="history"; // close just closes; never starts a new sale
+  receiptMode="refund"; // close returns to refreshed Sales History
   const invoice=asTotalsRecord(res.invoice)??{};
   const returnName=String(invoice.name??"");
   receiptInvoice=returnName;
@@ -1510,7 +1781,10 @@ async function showRefundReceipt(res:Record<string,unknown>):Promise<void>{
   const itemsBox=document.querySelector<HTMLElement>("#receipt-items");
   if(itemsBox)itemsBox.replaceChildren(...items.map((it)=>{const r=asTotalsRecord(it)??{};const div=document.createElement("div");div.className="receipt-item";[String(r.item_code??""),(previewNumber(r,"qty")??0).toFixed(3),(previewNumber(r,"rate")??0).toFixed(2),(previewNumber(r,"amount")??0).toFixed(2)].forEach(t=>{const s=document.createElement("span");s.textContent=t;div.append(s);});return div;}));
   const grand=previewNumber(invoice,"grand_total")??0;
-  setCartText("#receipt-before-tax","");setCartText("#receipt-sales-tax","");setCartText("#receipt-service-fee","0.00");
+  const refundTotals=asTotalsRecord(res.refund_totals)??{};
+  setCartText("#receipt-before-tax",(previewNumber(refundTotals,"merchandise_refund")??Math.abs(grand)).toFixed(2));
+  setCartText("#receipt-sales-tax",(previewNumber(refundTotals,"gst_refund")??0).toFixed(2));
+  setCartText("#receipt-service-fee",`Not refunded ${(previewNumber(refundTotals,"non_refundable_fbr_pos_fee")??0).toFixed(2)}`);
   setCartText("#receipt-grand-total",grand.toFixed(2));
   const payments=Array.isArray(res.payments)?res.payments:[];
   const payBox=document.querySelector<HTMLElement>("#receipt-payments");
@@ -1792,10 +2066,11 @@ function setupUpdateUi(): void {
     if (checkBtn) checkBtn.disabled = state === "checking" || state === "downloading";
     switch (state) {
       case "checking": setStatus("Checking for updates…"); break;
-      case "available": setStatus(`Update available: v${String(p.version ?? "")}. Click Download Update.`); break;
+      case "available": { setStatus(`Update available: v${String(p.version ?? "")}. Click Download Update.`); const n = document.querySelector<HTMLElement>("#update-notes"); const notes = String(p.notes ?? "").trim(); if (n) { n.hidden = !notes; n.textContent = notes; } break; }
       case "not-available": setStatus("You're on the latest version."); break;
       case "downloading": setStatus(`Downloading update… ${String(p.percent ?? 0)}%`); break;
       case "downloaded": setStatus(`Update v${String(p.version ?? "")} downloaded. Click Install & Restart.`); break;
+      case "installing": setStatus("Installing update. The app will restart automatically..."); break;
       case "error": setStatus(`Update error: ${String(p.error ?? "unknown")}`); break;
       default: break;
     }
@@ -1805,12 +2080,46 @@ function setupUpdateUi(): void {
   dlBtn?.addEventListener("click", async () => { setStatus("Starting download…"); if (dlBtn) dlBtn.disabled = true; const r = await window.posAPI.downloadUpdate(); if (dlBtn) dlBtn.disabled = false; if (!r.ok && r.error) setStatus(`Download failed: ${r.error}`); });
   installBtn?.addEventListener("click", () => { setStatus("Restarting to install…"); void window.posAPI.installUpdate(); });
   document.querySelector<HTMLButtonElement>("#save-update-token")?.addEventListener("click", async () => {
+    if (!(await requireAdminPin("change_credentials", "Saving this token changes update credentials for private release downloads."))) return;
     const input = document.querySelector<HTMLInputElement>("#update-token");
     const token = input?.value.trim() ?? "";
     await window.posAPI.saveUpdateToken(token);
     if (input) input.value = "";
     setText("#update-token-status", token ? "Token saved (private-repo mode)." : "Token cleared (public repo).");
   });
+  document.querySelector<HTMLButtonElement>("#show-releases")?.addEventListener("click", () => void renderReleasesList());
+}
+
+// Lists every published release so the admin can install (or roll back to) a specific version.
+async function renderReleasesList(): Promise<void> {
+  const box = document.querySelector<HTMLElement>("#releases-list");
+  if (!box) return;
+  const empty = (text: string) => box.replaceChildren(Object.assign(document.createElement("div"), { className: "op-empty", textContent: text }));
+  empty("Loading releases…");
+  const result = await window.posAPI.listReleases();
+  if (result.error) { empty(`Unable to load releases: ${result.error}`); return; }
+  if (!result.releases.length) { empty("No published releases found. Publish a release on GitHub first."); return; }
+  const current = await window.posAPI.getAppVersion().catch(() => "");
+  box.replaceChildren(...result.releases.map((rel) => {
+    const card = document.createElement("div"); card.className = "op-card";
+    const main = document.createElement("div"); main.className = "op-card-main";
+    const title = document.createElement("div"); title.className = "op-card-title";
+    title.textContent = `${rel.name}${rel.version === current ? " — installed" : ""}${rel.prerelease ? " · pre-release" : ""}`;
+    const meta = document.createElement("div"); meta.className = "op-card-meta";
+    meta.textContent = `v${rel.version}${rel.publishedAt ? ` · ${new Date(rel.publishedAt).toLocaleDateString()}` : ""}`;
+    main.append(title, meta);
+    if (rel.notes.trim()) { const notes = document.createElement("pre"); notes.className = "update-notes"; notes.textContent = rel.notes.trim(); main.append(notes); }
+    const actions = document.createElement("div"); actions.className = "op-card-actions";
+    const install = document.createElement("button"); install.type = "button";
+    install.textContent = rel.version === current ? "Reinstall" : "Install this version";
+    install.onclick = async () => {
+      install.disabled = true; install.textContent = "Downloading…";
+      const r = await window.posAPI.installRelease({ version: rel.version, exeName: rel.exeName, exeUrl: rel.exeUrl, exeApiUrl: rel.exeApiUrl });
+      if (!r.ok) { install.disabled = false; install.textContent = "Retry"; setText("#update-status", `Install failed: ${r.error ?? "unknown"}`); }
+    };
+    actions.append(install);
+    card.append(main, actions); return card;
+  }));
 }
 
 function buildSyncRow(key: SyncKey, name: string, detail: string, lastSynced: string | null, retry: () => void): HTMLElement {
@@ -2047,6 +2356,103 @@ async function populatePosProfileDropdown(): Promise<void> {
   showSettingsMessage(result.profiles.length ? "POS Profiles Loaded" : "No POS Profiles available");
 }
 
+type ProtectedAction = "setup_pin" | "reset_pin" | "change_credentials" | "close_shift" | "settings" | "force_sync" | "diagnostics";
+
+function adminMessage(id: string, text: string): void {
+  const el = document.querySelector<HTMLElement>(id);
+  if (el) el.textContent = text;
+}
+
+async function requestSupervisorPinSetup(action: "setup_pin" | "reset_pin"): Promise<boolean> {
+  const dialog = document.querySelector<HTMLDialogElement>("#admin-supervisor-dialog");
+  const title = document.querySelector<HTMLElement>("#admin-supervisor-title");
+  const note = document.querySelector<HTMLElement>("#admin-supervisor-note");
+  const form = document.querySelector<HTMLFormElement>("#admin-supervisor-form");
+  if (!dialog || !form) return false;
+  if (!navigator.onLine) {
+    alert("Admin PIN reset requires an online connection and authorized ERPNext supervisor credentials.");
+    return false;
+  }
+  if (title) title.textContent = action === "setup_pin" ? "Create Admin PIN" : "Reset Admin PIN";
+  if (note) note.textContent = action === "setup_pin"
+    ? "First-time PIN setup requires online ERPNext supervisor verification."
+    : "Forgot Admin PIN requires online ERPNext supervisor verification.";
+  ["#admin-supervisor-user","#admin-supervisor-password","#admin-new-pin","#admin-confirm-pin"].forEach((id)=>{const input=document.querySelector<HTMLInputElement>(id);if(input)input.value="";});
+  adminMessage("#admin-supervisor-message", "");
+  return new Promise((resolve) => {
+    const cleanup = () => { form.onsubmit = null; resolve(false); };
+    document.querySelector<HTMLButtonElement>("#admin-supervisor-cancel")!.onclick = () => { dialog.close(); cleanup(); };
+    form.onsubmit = async (event) => {
+      event.preventDefault();
+      const username = document.querySelector<HTMLInputElement>("#admin-supervisor-user")?.value.trim() ?? "";
+      const passwordInput = document.querySelector<HTMLInputElement>("#admin-supervisor-password");
+      const password = passwordInput?.value ?? "";
+      const pinInput = document.querySelector<HTMLInputElement>("#admin-new-pin");
+      const confirmInput = document.querySelector<HTMLInputElement>("#admin-confirm-pin");
+      const pin = pinInput?.value ?? "";
+      const confirmPin = confirmInput?.value ?? "";
+      adminMessage("#admin-supervisor-message", "Verifying supervisor...");
+      const auth = await window.posAPI.authorizeAdminAction({ username, password, action, terminal_id: (document.querySelector<HTMLInputElement>("#terminal-id")?.value ?? "") });
+      if (passwordInput) passwordInput.value = "";
+      if (!auth.ok) { adminMessage("#admin-supervisor-message", auth.error ?? "Supervisor authorization failed."); return; }
+      const saved = await window.posAPI.setAdminPin({ action, token: auth.token, pin, confirmPin });
+      if (pinInput) pinInput.value = "";
+      if (confirmInput) confirmInput.value = "";
+      if (!saved.ok) { adminMessage("#admin-supervisor-message", saved.error ?? "Unable to save Admin PIN."); return; }
+      dialog.close();
+      form.onsubmit = null;
+      resolve(true);
+    };
+    dialog.showModal();
+    window.setTimeout(()=>document.querySelector<HTMLInputElement>("#admin-supervisor-user")?.focus(),0);
+  });
+}
+
+async function requireAdminPin(action: ProtectedAction, note: string): Promise<boolean> {
+  const status = await window.posAPI.getAdminPinStatus();
+  if (!status.configured) return requestSupervisorPinSetup("setup_pin");
+  if (status.locked) { alert(`Admin PIN is locked. Try again in ${status.secondsRemaining}s.`); return false; }
+  const dialog = document.querySelector<HTMLDialogElement>("#admin-pin-dialog");
+  const form = document.querySelector<HTMLFormElement>("#admin-pin-form");
+  if (!dialog || !form) return false;
+  const title = document.querySelector<HTMLElement>("#admin-pin-title"); if (title) title.textContent = "Admin PIN Required";
+  const noteEl = document.querySelector<HTMLElement>("#admin-pin-note"); if (noteEl) noteEl.textContent = note;
+  const input = document.querySelector<HTMLInputElement>("#admin-pin-input"); if (input) input.value = "";
+  adminMessage("#admin-pin-message", "");
+  return new Promise((resolve) => {
+    const cleanup = (value: boolean) => { form.onsubmit = null; resolve(value); };
+    document.querySelector<HTMLButtonElement>("#admin-pin-cancel")!.onclick = () => { dialog.close(); cleanup(false); };
+    document.querySelector<HTMLButtonElement>("#admin-pin-forgot")!.onclick = async () => {
+      dialog.close();
+      const ok = await requestSupervisorPinSetup("reset_pin");
+      cleanup(ok);
+    };
+    form.onsubmit = async (event) => {
+      event.preventDefault();
+      const pin = document.querySelector<HTMLInputElement>("#admin-pin-input")?.value ?? "";
+      adminMessage("#admin-pin-message", "Checking PIN...");
+      const result = await window.posAPI.verifyAdminPin(pin);
+      const pinInput = document.querySelector<HTMLInputElement>("#admin-pin-input"); if (pinInput) pinInput.value = "";
+      if (!result.ok) { adminMessage("#admin-pin-message", result.error ?? "Wrong Admin PIN."); return; }
+      dialog.close();
+      cleanup(true);
+    };
+    dialog.showModal();
+    window.setTimeout(()=>input?.focus(),0);
+  });
+}
+
+async function runProtected(action: ProtectedAction, note: string, fn: () => void | Promise<void>): Promise<void> {
+  if (!(await requireAdminPin(action, note))) return;
+  await fn();
+}
+
+async function requireIfAdminConfigured(action: ProtectedAction, note: string): Promise<boolean> {
+  const status = await window.posAPI.getAdminPinStatus();
+  if (!status.configured) return true;
+  return requireAdminPin(action, note);
+}
+
 window.addEventListener("DOMContentLoaded", () => {
   void showDatabaseStatus();
   void loadPosProfileCacheStatus();
@@ -2062,28 +2468,29 @@ window.addEventListener("DOMContentLoaded", () => {
   window.addEventListener("online", () => { scheduleCartPreview(); void backgroundSyncTick(); void syncQueueNow(); });
   document.querySelector<HTMLButtonElement>("#retry-startup")?.addEventListener("click", () => void runPosBootstrap("retry"));
   document.querySelector<HTMLButtonElement>("#complete-setup")?.addEventListener("click", (e) => { /* form submit handles save + bootstrap */ void e; });
-  document.querySelector<HTMLButtonElement>("#refresh-config")?.addEventListener("click", () => void syncConfigNow());
+  document.querySelector<HTMLButtonElement>("#refresh-config")?.addEventListener("click", () => void runProtected("force_sync", "This will refresh POS configuration from ERPNext.", () => syncConfigNow()));
   document.querySelector<HTMLButtonElement>("#start-shift")?.addEventListener("click", () => void startShift());
   document.querySelector<HTMLButtonElement>("#start-shift-refresh")?.addEventListener("click", () => void refreshFromStartShift());
   document.querySelector<HTMLButtonElement>("#start-shift-cancel")?.addEventListener("click", () => void goToPos());
-  document.querySelector<HTMLButtonElement>("#start-shift-settings")?.addEventListener("click", () => showScreen("settings"));
+  document.querySelector<HTMLButtonElement>("#start-shift-settings")?.addEventListener("click", () => void runProtected("settings", "Settings contain terminal credentials and sync controls.", () => showScreen("settings")));
   // Close Shift + Shift History actions.
-  document.querySelector<HTMLButtonElement>("#pos-close-shift")?.addEventListener("click", () => void showCloseShift());
+  document.querySelector<HTMLButtonElement>("#pos-close-shift")?.addEventListener("click", () => void runProtected("close_shift", "Close Shift will reconcile payments and prepare the POS Closing Entry.", () => showCloseShift()));
   document.querySelector<HTMLButtonElement>("#pos-sync-queue")?.addEventListener("click", () => void syncQueueNow(true));
   void updateOfflineUi();
   document.querySelector<HTMLButtonElement>("#close-shift-back")?.addEventListener("click", () => showScreen("pos"));
   document.querySelector<HTMLButtonElement>("#close-shift-cancel")?.addEventListener("click", () => showScreen("pos"));
-  document.querySelector<HTMLButtonElement>("#close-shift-submit")?.addEventListener("click", () => void submitCloseShift());
+  document.querySelector<HTMLButtonElement>("#close-shift-submit")?.addEventListener("click", () => void runProtected("close_shift", "Submitting Close Shift will create the ERPNext POS Closing Entry, close this shift, print the shift summary, delete held sales, and require a new shift before selling again.", () => submitCloseShift()));
+  document.querySelector<HTMLButtonElement>("#close-shift-print")?.addEventListener("click", () => void printShiftSummary());
   document.querySelector<HTMLButtonElement>("#close-shift-hold")?.addEventListener("click", () => void holdCurrentSale());
   document.querySelector<HTMLButtonElement>("#open-shift-history")?.addEventListener("click", () => void openShiftHistory());
   document.querySelector<HTMLButtonElement>("#shift-history-back")?.addEventListener("click", () => { if (shiftClosed) void showStartShift(); else void goToPos(); });
-  document.querySelector<HTMLButtonElement>("#open-settings")?.addEventListener("click", () => showScreen("settings"));
+  document.querySelector<HTMLButtonElement>("#open-settings")?.addEventListener("click", () => void runProtected("settings", "Settings contain terminal credentials and sync controls.", () => showScreen("settings")));
   document.querySelector<HTMLButtonElement>("#back-to-pos")?.addEventListener("click", () => void goToPos());
   // Session-invalid overlay actions (non-destructive — cart/customer/payment preserved).
   document.querySelector<HTMLButtonElement>("#session-refresh")?.addEventListener("click", () => void revalidateLive("refresh"));
   document.querySelector<HTMLButtonElement>("#session-switch")?.addEventListener("click", () => void switchToActiveShift());
   document.querySelector<HTMLButtonElement>("#session-go-shift")?.addEventListener("click", () => { clearSessionInvalid(); void showStartShift(); });
-  document.querySelector<HTMLButtonElement>("#session-open-settings")?.addEventListener("click", () => { clearSessionInvalid(); showScreen("settings"); });
+  document.querySelector<HTMLButtonElement>("#session-open-settings")?.addEventListener("click", () => void runProtected("settings", "Settings contain terminal credentials and sync controls.", () => { clearSessionInvalid(); showScreen("settings"); }));
   // Revalidate the POS session whenever the window regains focus.
   window.addEventListener("focus", () => { if (isOnline()) void revalidateLive("focus"); });
   // Server-health poll (online/offline + reconnect-driven session revalidation).
@@ -2097,6 +2504,7 @@ window.addEventListener("DOMContentLoaded", () => {
   // Primary action: Save and Complete Setup -> save settings, then run the one bootstrap chain.
   document.querySelector<HTMLFormElement>("#settings-form")?.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (!(await requireIfAdminConfigured("change_credentials", "Saving settings can change ERPNext URL, API credentials, terminal ID, profile, and warehouse."))) return;
     const button = document.querySelector<HTMLButtonElement>("#complete-setup");
     if (button) button.disabled = true;
     try {
@@ -2158,6 +2566,7 @@ window.addEventListener("DOMContentLoaded", () => {
   });
 
   document.querySelector<HTMLSelectElement>("#pos-profile")?.addEventListener("change", async () => {
+    if (!(await requireIfAdminConfigured("change_credentials", "Changing POS Profile changes terminal configuration."))) return;
     try {
       await window.posAPI.saveSettings(getSettingsFromForm());
       showSettingsMessage("POS Profile Saved");
@@ -2167,6 +2576,7 @@ window.addEventListener("DOMContentLoaded", () => {
   });
 
   document.querySelector<HTMLButtonElement>("#load-pos-profile")?.addEventListener("click", async () => {
+    if (!(await requireAdminPin("force_sync", "This will force reload POS Profiles from ERPNext."))) return;
     const button = document.querySelector<HTMLButtonElement>("#load-pos-profile");
     if (button) {
       button.disabled = true;
@@ -2191,6 +2601,7 @@ window.addEventListener("DOMContentLoaded", () => {
   });
 
   document.querySelector<HTMLButtonElement>("#sync-pos-configuration")?.addEventListener("click", async () => {
+    if (!(await requireAdminPin("force_sync", "This will force full POS configuration sync from ERPNext."))) return;
     const button = document.querySelector<HTMLButtonElement>("#sync-pos-configuration");
     if (button) { button.disabled = true; button.textContent = "Syncing…"; }
     try { await window.posAPI.saveSettings(getSettingsFromForm()); await syncConfigNow(); showSettingsMessage("POS Configuration synced"); }
@@ -2222,6 +2633,7 @@ window.addEventListener("DOMContentLoaded", () => {
   });
 
   document.querySelector<HTMLButtonElement>("#sync-item-catalog")?.addEventListener("click", async () => {
+    if (!(await requireAdminPin("force_sync", "This will force full Item Catalogue sync from ERPNext."))) return;
     const button = document.querySelector<HTMLButtonElement>("#sync-item-catalog");
     if (button) { button.disabled = true; button.textContent = "Syncing…"; }
     try { showCatalogProgress("Catalog sync started…"); await syncItemsNow("full"); showCatalogProgress("Catalog sync complete."); showSettingsMessage("Item catalogue synced"); }
@@ -2229,9 +2641,17 @@ window.addEventListener("DOMContentLoaded", () => {
     finally { if (button) { button.disabled = false; button.textContent = "Force Full Item Catalogue Sync"; } }
   });
 
-  document.querySelector<HTMLButtonElement>("#sync-customers")?.addEventListener("click", async () => { await syncCustomersNow("full"); const state = await window.posAPI.getCustomerSyncState(); showSettingsMessage(`Customers synced: ${state.count}`); });
-  document.querySelector<HTMLButtonElement>("#sync-fbr-config")?.addEventListener("click", async () => { const button=document.querySelector<HTMLButtonElement>("#sync-fbr-config"); if(button){button.disabled=true;button.textContent="Syncing…";} try { await syncFbrNow("full"); showSettingsMessage("FBR configuration synced"); } catch { showSettingsMessage("FBR sync failed"); } finally { if(button){button.disabled=false;button.textContent="Force Full FBR Configuration Sync";} } });
+  document.querySelector<HTMLButtonElement>("#sync-customers")?.addEventListener("click", async () => { if (!(await requireAdminPin("force_sync", "This will force full Customer sync from ERPNext."))) return; await syncCustomersNow("full"); const state = await window.posAPI.getCustomerSyncState(); showSettingsMessage(`Customers synced: ${state.count}`); });
+  document.querySelector<HTMLButtonElement>("#sync-fbr-config")?.addEventListener("click", async () => { if (!(await requireAdminPin("force_sync", "This will force full FBR configuration sync from ERPNext."))) return; const button=document.querySelector<HTMLButtonElement>("#sync-fbr-config"); if(button){button.disabled=true;button.textContent="Syncing...";} try { await syncFbrNow("full"); showSettingsMessage("FBR configuration synced"); } catch { showSettingsMessage("FBR sync failed"); } finally { if(button){button.disabled=false;button.textContent="Force Full FBR Configuration Sync";} } });
   setupUpdateUi();
+  document.querySelectorAll<HTMLDetailsElement>(".diagnostics-block").forEach((details) => {
+    const summary = details.querySelector("summary");
+    summary?.addEventListener("click", (event) => {
+      if (details.open) return;
+      event.preventDefault();
+      void runProtected("diagnostics", "Advanced Diagnostics can expose local paths, cache state, sync controls, and credential utilities.", () => { details.open = true; });
+    });
+  });
   customerInput()?.addEventListener("input", () => void searchCustomer());
   document.querySelector<HTMLButtonElement>("#new-customer")?.addEventListener("click", () => void openNewCustomer());
   document.querySelector<HTMLButtonElement>("#cancel-new-customer")?.addEventListener("click", () => { document.querySelector<HTMLDialogElement>("#new-customer-dialog")?.close(); focusCart(); });
@@ -2288,6 +2708,8 @@ window.addEventListener("DOMContentLoaded", () => {
   document.querySelector<HTMLInputElement>('#benefits-redeem-points')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); void applyBenefits(); } });
   document.querySelector<HTMLInputElement>('#benefits-coupon-code')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); void applyBenefits(); } });
   document.addEventListener("keydown", (event) => {
+    // Refund quantity inputs own their keystrokes — never let global POS shortcuts intercept typing/arrows there.
+    if ((document.activeElement as HTMLElement | null)?.closest("#refund-items")) return;
     // While the receipt preview is open the sale is already submitted; keep POS hotkeys off the underlying cart.
     if (document.querySelector<HTMLDialogElement>("#receipt-dialog")?.open) {
       if (["F2","F3","F4","F6","F7","F8","F9","F10"].includes(event.key)) { event.preventDefault(); event.stopPropagation(); }

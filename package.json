@@ -1,6 +1,6 @@
 {
   "name": "erpnext-offline-pos",
-  "version": "0.1.0",
+  "version": "0.1.8",
   "description": "Basic Electron shell for ERPNext Online-First POS",
   "main": "dist/main.js",
   "scripts": {
@@ -9,7 +9,7 @@
     "obfuscate": "node scripts/obfuscate.cjs",
     "dist": "npm run build && electron-builder --win nsis",
     "dist:protected": "npm run build && npm run obfuscate && electron-builder --win nsis",
-    "release": "npm run build && electron-builder --win nsis --publish always",
+    "release": "npm run build && dotenv -e .env -- electron-builder --win nsis --publish always && dotenv -e .env -- node scripts/publish-github-release.cjs",
     "pack:dir": "npm run build && electron-builder --dir",
     "dev": "concurrently \"tsc --watch\" \"wait-on dist/main.js && set ELECTRON_RUN_AS_NODE=&& electron .\"",
     "rebuild": "electron-rebuild -f -w better-sqlite3",
@@ -21,6 +21,7 @@
     "@types/node": "^22.10.2",
     "concurrently": "^9.1.0",
     "copyfiles": "^2.4.1",
+    "dotenv-cli": "^8.0.0",
     "electron": "^33.2.1",
     "electron-builder": "^25.1.8",
     "javascript-obfuscator": "^4.2.2",
@@ -38,7 +39,8 @@
       {
         "provider": "github",
         "owner": "BeelBegins",
-        "repo": "Posapplication"
+        "repo": "Posapplication",
+        "releaseType": "release"
       }
     ],
     "directories": {

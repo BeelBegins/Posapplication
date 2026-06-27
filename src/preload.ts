@@ -92,4 +92,10 @@ contextBridge.exposeInMainWorld("posAPI", {
   ,saveUpdateToken: (token: string) => ipcRenderer.invoke("update:save-token", token)
   ,isUpdateTokenSet: () => ipcRenderer.invoke("update:token-set")
   ,onUpdateStatus: (callback: (payload: Record<string, unknown>) => void) => ipcRenderer.on("update:status", (_event, payload: Record<string, unknown>) => callback(payload))
+  ,listReleases: () => ipcRenderer.invoke("releases:list")
+  ,installRelease: (input: Record<string, unknown>) => ipcRenderer.invoke("releases:install", input)
+  ,getAdminPinStatus: () => ipcRenderer.invoke("admin:pin-status")
+  ,verifyAdminPin: (pin: string) => ipcRenderer.invoke("admin:pin-verify", pin)
+  ,authorizeAdminAction: (input: Record<string, unknown>) => ipcRenderer.invoke("admin:authorize-action", input)
+  ,setAdminPin: (input: Record<string, unknown>) => ipcRenderer.invoke("admin:pin-set", input)
 });

@@ -1,7 +1,9 @@
-import { app, BrowserWindow, ipcMain } from "electron";
+import { app, BrowserWindow, ipcMain, shell } from "electron";
 import { autoUpdater } from "electron-updater";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { writeFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from "node:crypto";
 import { calculateFbrInvoice, calculateFbrItem } from "./domain/fbr-calculation";
 import {
   cachePosProfile,
@@ -40,6 +42,7 @@ import {
   ,listHeldSales
   ,getHeldSale
   ,deleteHeldSale
+  ,deleteAllHeldSales
   ,renameHeldSale
   ,listSalesHistory
   ,getSaleHistory
@@ -54,6 +57,8 @@ import {
   ,getCachedReceiptHtml
   ,getMeta
   ,setMeta
+  ,logRefund
+  ,getShiftRefundTotal
 } from "./db/database";
 import type { HeldSaleInput, SalesHistoryFilter, ShiftHistoryRow } from "./db/database";
 
@@ -219,6 +224,158 @@ function textValue(record: Record<string, unknown> | null, key: string): string 
   return typeof record?.[key] === "string" ? record[key] as string : "";
 }
 
+const ADMIN_PIN_HASH_KEY = "admin_pin_hash_v1";
+const ADMIN_PIN_FAILED_KEY = "admin_pin_failed_attempts";
+const ADMIN_PIN_LOCK_UNTIL_KEY = "admin_pin_lock_until";
+const ADMIN_PIN_MIN_LENGTH = 4;
+const ADMIN_PIN_MAX_ATTEMPTS = 5;
+const ADMIN_PIN_LOCK_MS = 5 * 60_000;
+const ADMIN_PIN_DELAY_MS = 900;
+const ALLOW_HTTP_SUPERVISOR_AUTH = !app.isPackaged || process.env.POS_ALLOW_HTTP_SUPERVISOR_AUTH === "1";
+const DEV_ADMIN_AUTH_BYPASS = !app.isPackaged || process.env.POS_DEV_ADMIN_AUTH_BYPASS === "1";
+type AdminAction = "setup_pin" | "reset_pin" | "change_credentials" | "close_shift" | "settings" | "force_sync" | "diagnostics";
+let pendingAdminAuthorization: { tokenHash: string; action: AdminAction; terminalId: string; expiresAt: number } | null = null;
+
+function hashSecret(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function pinHash(pin: string, salt = randomBytes(16).toString("hex")): string {
+  const hash = scryptSync(pin, salt, 32).toString("hex");
+  return `scrypt:v1:${salt}:${hash}`;
+}
+
+function verifyPinHash(pin: string, stored: string): boolean {
+  const parts = stored.split(":");
+  if (parts.length !== 4 || parts[0] !== "scrypt" || parts[1] !== "v1") return false;
+  const expected = Buffer.from(parts[3], "hex");
+  const actual = scryptSync(pin, parts[2], expected.length);
+  return expected.length === actual.length && timingSafeEqual(expected, actual);
+}
+
+function adminPinConfigured(): boolean {
+  return Boolean(getMeta(ADMIN_PIN_HASH_KEY));
+}
+
+function adminLockState(): { locked: boolean; lockUntil: number; secondsRemaining: number; failedAttempts: number } {
+  const lockUntil = Number(getMeta(ADMIN_PIN_LOCK_UNTIL_KEY) || 0);
+  const now = Date.now();
+  return {
+    locked: lockUntil > now,
+    lockUntil,
+    secondsRemaining: lockUntil > now ? Math.ceil((lockUntil - now) / 1000) : 0,
+    failedAttempts: Number(getMeta(ADMIN_PIN_FAILED_KEY) || 0)
+  };
+}
+
+function adminStatus(): { configured: boolean; locked: boolean; secondsRemaining: number; failedAttempts: number } {
+  const lock = adminLockState();
+  return { configured: adminPinConfigured(), locked: lock.locked, secondsRemaining: lock.secondsRemaining, failedAttempts: lock.failedAttempts };
+}
+
+function validatePinFormat(pin: string): string | null {
+  if (!/^\d+$/.test(pin)) return "PIN must contain digits only.";
+  if (pin.length < ADMIN_PIN_MIN_LENGTH) return `PIN must be at least ${ADMIN_PIN_MIN_LENGTH} digits.`;
+  if (pin.length > 12) return "PIN must be 12 digits or less.";
+  return null;
+}
+
+async function verifyAdminPin(pin: string): Promise<{ ok: boolean; error: string | null; locked?: boolean; secondsRemaining?: number }> {
+  const lock = adminLockState();
+  if (lock.locked) return { ok: false, error: `Admin PIN is locked. Try again in ${lock.secondsRemaining}s.`, locked: true, secondsRemaining: lock.secondsRemaining };
+  await new Promise((resolve) => setTimeout(resolve, ADMIN_PIN_DELAY_MS));
+  const stored = getMeta(ADMIN_PIN_HASH_KEY);
+  if (!stored) return { ok: false, error: "Admin PIN is not set." };
+  if (verifyPinHash(pin, stored)) {
+    setMeta(ADMIN_PIN_FAILED_KEY, "0");
+    setMeta(ADMIN_PIN_LOCK_UNTIL_KEY, "0");
+    return { ok: true, error: null };
+  }
+  const failed = Number(getMeta(ADMIN_PIN_FAILED_KEY) || 0) + 1;
+  setMeta(ADMIN_PIN_FAILED_KEY, String(failed));
+  if (failed >= ADMIN_PIN_MAX_ATTEMPTS) {
+    const until = Date.now() + ADMIN_PIN_LOCK_MS;
+    setMeta(ADMIN_PIN_LOCK_UNTIL_KEY, String(until));
+    return { ok: false, error: "Too many wrong PIN attempts. Admin PIN is locked for 5 minutes.", locked: true, secondsRemaining: Math.ceil(ADMIN_PIN_LOCK_MS / 1000) };
+  }
+  return { ok: false, error: `Wrong Admin PIN. ${ADMIN_PIN_MAX_ATTEMPTS - failed} attempt(s) remaining.` };
+}
+
+function consumePendingAdminAuthorization(token: string, action: AdminAction): { ok: boolean; error: string | null } {
+  const pending = pendingAdminAuthorization;
+  pendingAdminAuthorization = null;
+  const terminalId = loadSettings().terminalId;
+  if (!pending) return { ok: false, error: "Supervisor authorization is missing or expired." };
+  if (pending.expiresAt < Date.now()) return { ok: false, error: "Supervisor authorization expired." };
+  if (pending.action !== action) return { ok: false, error: "Supervisor authorization was for a different action." };
+  if (pending.terminalId !== terminalId) return { ok: false, error: "Supervisor authorization was for a different terminal." };
+  if (pending.tokenHash !== hashSecret(token)) return { ok: false, error: "Supervisor authorization token is invalid." };
+  return { ok: true, error: null };
+}
+
+async function authorizePosAdminAction(input: Record<string, unknown>): Promise<{ ok: boolean; token: string; error: string | null }> {
+  const settings = loadSettings();
+  const action = textValue(input, "action") as AdminAction;
+  const username = textValue(input, "username");
+  const password = textValue(input, "password");
+  if (!settings.erpnextUrl || !settings.apiKey || !settings.apiSecret || !settings.terminalId) return { ok: false, token: "", error: "Terminal settings are required before supervisor authorization." };
+  if (!["setup_pin", "reset_pin", "change_credentials"].includes(action)) return { ok: false, token: "", error: "Invalid admin action." };
+  if (!username || !password) return { ok: false, token: "", error: "Supervisor username and password are required." };
+  if (DEV_ADMIN_AUTH_BYPASS) {
+    const token = randomUUID();
+    pendingAdminAuthorization = { tokenHash: hashSecret(token), action, terminalId: settings.terminalId, expiresAt: Date.now() + 5 * 60_000 };
+    return { ok: true, token, error: null };
+  }
+  let base: URL;
+  try { base = new URL(settings.erpnextUrl); } catch { return { ok: false, token: "", error: "ERPNext URL is invalid." }; }
+  if (base.protocol !== "https:" && !ALLOW_HTTP_SUPERVISOR_AUTH) {
+    return { ok: false, token: "", error: "Supervisor authorization requires HTTPS ERPNext URL." };
+  }
+  const endpoint = `${base.toString().replace(/\/+$/, "")}/api/method/aimatic.offline_pos.api.authorize_pos_admin_action`;
+  try {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: { Authorization: `token ${settings.apiKey}:${settings.apiSecret}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password, action, terminal_id: settings.terminalId })
+    });
+    const raw = await response.text();
+    let parsed: { message?: unknown } = {};
+    try { parsed = JSON.parse(raw) as { message?: unknown }; } catch { /* non-JSON */ }
+    const payload = asRecord(parsed.message) ?? {};
+    const token = textValue(payload, "token");
+    if (!response.ok || !token) {
+      const serverError = textValue(payload, "error") || textValue(payload, "message") || textValue(asRecord(parsed) ?? {}, "exception") || textValue(asRecord(parsed) ?? {}, "_server_messages");
+      return { ok: false, token: "", error: serverError ? `Supervisor authorization failed: ${serverError}` : "Supervisor authorization failed." };
+    }
+    pendingAdminAuthorization = { tokenHash: hashSecret(token), action, terminalId: settings.terminalId, expiresAt: Date.now() + 5 * 60_000 };
+    return { ok: true, token, error: null };
+  } catch (error) {
+    return { ok: false, token: "", error: `Supervisor authorization failed: ${error instanceof Error ? error.message : "network error"}` };
+  }
+}
+
+async function setAdminPin(input: Record<string, unknown>): Promise<{ ok: boolean; error: string | null }> {
+  const pin = textValue(input, "pin");
+  const confirmPin = textValue(input, "confirmPin");
+  const action = textValue(input, "action") as AdminAction;
+  const currentPin = textValue(input, "currentPin");
+  const token = textValue(input, "token");
+  const formatError = validatePinFormat(pin);
+  if (formatError) return { ok: false, error: formatError };
+  if (pin !== confirmPin) return { ok: false, error: "PIN confirmation does not match." };
+  if (action === "change_credentials" && adminPinConfigured()) {
+    const verified = await verifyAdminPin(currentPin);
+    if (!verified.ok) return { ok: false, error: verified.error };
+  } else {
+    const consumed = consumePendingAdminAuthorization(token, action);
+    if (!consumed.ok) return consumed;
+  }
+  setMeta(ADMIN_PIN_HASH_KEY, pinHash(pin));
+  setMeta(ADMIN_PIN_FAILED_KEY, "0");
+  setMeta(ADMIN_PIN_LOCK_UNTIL_KEY, "0");
+  return { ok: true, error: null };
+}
+
 async function fetchErpResource(baseUrl: string, apiKey: string, apiSecret: string, doctype: string, name: string): Promise<Record<string, unknown>> {
   const endpoint = `${baseUrl}/api/resource/${encodeURIComponent(doctype)}/${encodeURIComponent(name)}`;
   const controller = new AbortController();
@@ -326,10 +483,10 @@ async function syncPosSession(): Promise<{ success: boolean; summary: PosSession
 async function getActivePosSession(): Promise<{ success:boolean; session:Record<string,unknown>|null; error:string|null; diagnosticReason:string; apiUser:string; requestedPosProfile:string; entries:Record<string,unknown>[] }>{const s=loadSettings();if(!s.erpnextUrl||!s.apiKey||!s.apiSecret)return {success:false,session:null,error:"Online connection required to load POS session.",diagnosticReason:"Missing ERPNext URL or API credentials",apiUser:"",requestedPosProfile:s.posProfile,entries:[]};try{const base=new URL(s.erpnextUrl).toString().replace(/\/+$/,"");const r=await fetch(`${base}/api/method/aimatic.offline_pos.api.get_active_pos_session?pos_profile=${encodeURIComponent(s.posProfile)}`,{headers:{Authorization:`token ${s.apiKey}:${s.apiSecret}`}});if(!r.ok){const error=await getResponseError(r);return {success:false,session:null,error,diagnosticReason:error,apiUser:"",requestedPosProfile:s.posProfile,entries:[]};}const b=await r.json() as {message?:unknown};const outer=asRecord(b.message);const payload=asRecord(outer?.message)??outer??{};const session=asRecord(payload.session);const entries=(Array.isArray(payload.submitted_open_entries)?payload.submitted_open_entries:Array.isArray(payload.open_entries)?payload.open_entries:[]).map(asRecord).filter((x):x is Record<string,unknown>=>Boolean(x));const diagnosticReason=textValue(payload,"diagnostic_reason")||textValue(payload,"reason")||(session?"Active session returned":"No active POS Opening Entry returned by server");const apiUser=textValue(payload,"authenticated_user")||textValue(payload,"api_user");if(session){const entry=textValue(session,"opening_entry")||textValue(session,"name");if(entry)cachePosSession(entry,s.posProfile,textValue(session,"user"),session,new Date().toISOString());}return {success:true,session,error:null,diagnosticReason,apiUser,requestedPosProfile:textValue(payload,"requested_pos_profile")||textValue(payload,"pos_profile")||s.posProfile,entries};}catch(e){const error=e instanceof Error?e.message:"Unable to load POS session.";return {success:false,session:null,error,diagnosticReason:error,apiUser:"",requestedPosProfile:s.posProfile,entries:[]};}}
 async function startPosSession(input:Record<string,unknown>):Promise<{success:boolean;session:Record<string,unknown>|null;error:string|null}>{const s=loadSettings();if(!s.erpnextUrl||!s.apiKey||!s.apiSecret)return {success:false,session:null,error:"Online connection required to start shift"};try{const base=new URL(s.erpnextUrl).toString().replace(/\/+$/,"");const r=await fetch(`${base}/api/method/aimatic.offline_pos.api.start_pos_session`,{method:"POST",headers:{Authorization:`token ${s.apiKey}:${s.apiSecret}`,"Content-Type":"application/json"},body:JSON.stringify({pos_profile:s.posProfile,opening_balances:JSON.stringify(Array.isArray(input.opening_balances)?input.opening_balances:[])})});if(!r.ok)return {success:false,session:null,error:await getResponseError(r)};const b=await r.json() as {message?:unknown};const raw=asRecord(b.message);const session=asRecord(raw?.message)??raw;const entry=textValue(session,"opening_entry")||textValue(session,"name");if(!session||!entry)return {success:false,session:null,error:"Server returned no Opening Entry."};cachePosSession(entry,s.posProfile,textValue(session,"user"),session,new Date().toISOString());return {success:true,session,error:null};}catch(e){return {success:false,session:null,error:e instanceof Error?e.message:"Unable to start shift."};}}
 
-interface ShiftPaymentRow { mode_of_payment: string; opening_amount: number; collected_amount: number; expected_amount: number; }
+interface ShiftPaymentRow { mode_of_payment: string; opening_amount: number; collected_amount: number; expected_amount: number; sale_amount?: number; refund_amount?: number; net_movement?: number; }
 interface ShiftSummary {
   openingEntry: string; posProfile: string; user: string; company: string; periodStart: string; postingDate: string; status: string;
-  payments: ShiftPaymentRow[]; invoiceCount: number; netSales: number; totalOpening: number; totalExpected: number; isEstimate: boolean;
+  payments: ShiftPaymentRow[]; invoiceCount: number; netSales: number; refunds: number; totalOpening: number; totalExpected: number; isEstimate: boolean;
 }
 
 function numValue(record: Record<string, unknown> | null, ...keys: string[]): number {
@@ -339,7 +496,7 @@ function numValue(record: Record<string, unknown> | null, ...keys: string[]): nu
 
 // Build a Close Shift summary from local data only (cached Opening Entry balances + submitted sales for this shift).
 // Authoritative reconciliation happens server-side on close; these figures are the cashier's local estimate.
-function getShiftSummary(openingEntry?: string): { success: boolean; summary: ShiftSummary | null; error: string | null } {
+function getLocalShiftSummary(openingEntry?: string): { success: boolean; summary: ShiftSummary | null; error: string | null } {
   const settings = loadSettings();
   const session = getCachedPosSession(settings.posProfile);
   if (!session) return { success: false, summary: null, error: "No cached POS Opening Entry — refresh the session first." };
@@ -374,9 +531,28 @@ function getShiftSummary(openingEntry?: string): { success: boolean; summary: Sh
     openingEntry: entry, posProfile: textValue(session, "pos_profile") || settings.posProfile, user: textValue(session, "user"),
     company: textValue(session, "company"), periodStart: textValue(session, "period_start_date") || textValue(session, "posting_date") || textValue(session, "creation"),
     postingDate: textValue(session, "posting_date"), status: textValue(session, "status") || "Open",
-    payments, invoiceCount, netSales, totalOpening: payments.reduce((s, p) => s + p.opening_amount, 0), totalExpected: payments.reduce((s, p) => s + p.expected_amount, 0), isEstimate: true
+    payments, invoiceCount, netSales, refunds: getShiftRefundTotal(entry), totalOpening: payments.reduce((s, p) => s + p.opening_amount, 0), totalExpected: payments.reduce((s, p) => s + p.expected_amount, 0), isEstimate: true
   };
   return { success: true, summary, error: null };
+}
+
+async function getShiftSummary(openingEntry?: string): Promise<{ success: boolean; summary: ShiftSummary | null; error: string | null }> {
+  const s = loadSettings();
+  if (!s.erpnextUrl || !s.apiKey || !s.apiSecret) return getLocalShiftSummary(openingEntry);
+  if (!openingEntry) return { success: false, summary: null, error: "Opening Entry is required." };
+  try {
+    const base = new URL(s.erpnextUrl).toString().replace(/\/+$/, "");
+    const r = await fetch(`${base}/api/method/aimatic.offline_pos.api.get_pos_closing_summary?opening_entry=${encodeURIComponent(openingEntry)}`, {
+      headers: { Authorization: `token ${s.apiKey}:${s.apiSecret}` }
+    });
+    if (!r.ok) return { success: false, summary: null, error: await getResponseError(r) };
+    const b = await r.json() as { message?: unknown };
+    const raw = asRecord(b.message);
+    const summary = asRecord(raw?.message) ?? raw;
+    return summary ? { success: true, summary: summary as unknown as ShiftSummary, error: null } : { success: false, summary: null, error: "Shift summary was not returned." };
+  } catch (e) {
+    return { success: false, summary: null, error: e instanceof Error ? e.message : "Unable to load server shift summary." };
+  }
 }
 
 // Submit the POS Closing Entry via the server (aimatic.offline_pos.api.close_pos_session). Online-only.
@@ -388,7 +564,7 @@ async function closeShift(input: Record<string, unknown>): Promise<{ success: bo
   const closingBalances = Array.isArray(input.closing_balances) ? input.closing_balances : [];
   const notes = textValue(input, "notes");
   // Snapshot the local expected/opening figures before the close so we can persist shift history on success.
-  const pre = getShiftSummary(openingEntry);
+  const pre = await getShiftSummary(openingEntry);
   try {
     const base = new URL(s.erpnextUrl).toString().replace(/\/+$/, "");
     const r = await fetch(`${base}/api/method/aimatic.offline_pos.api.close_pos_session`, {
@@ -402,7 +578,8 @@ async function closeShift(input: Record<string, unknown>): Promise<{ success: bo
     const response = asRecord(raw?.message) ?? raw ?? {};
     const closingEntry = textValue(response, "closing_entry") || textValue(response, "name") || textValue(asRecord(response.pos_closing_entry), "name");
     persistClosedShift(openingEntry, closingEntry, closingBalances, pre.summary, response);
-    return { success: true, closingEntry, response, error: null };
+    const deletedHeldSales = deleteAllHeldSales();
+    return { success: true, closingEntry, response: { ...response, deleted_held_sales: deletedHeldSales }, error: null };
   } catch (e) {
     return { success: false, closingEntry: "", response: null, error: e instanceof Error ? e.message : "Unable to close shift." };
   }
@@ -497,6 +674,53 @@ async function findPosInvoicePrintFormat(base: string, apiKey: string, apiSecret
 }
 
 // The receipt is an ERPNext Print Format (POS Invoice), not a custom API method — render it via the standard print view.
+function thermalReceiptCss(): string {
+  return `<style>
+    @page { size: 80mm auto; margin: 2mm; }
+    @media print {
+      html, body { width: 80mm !important; margin: 0 !important; padding: 0 !important; background: #fff !important; }
+      button, input, select, textarea, .btn, .print-toolbar, .page-head, .navbar, #navbar, .web-footer, footer,
+      .btn-print-preview, .print-preview-select, .print-preview-toolbar, .print-actions,
+      a[href*="download_pdf"], a[href*="pdf"] { display: none !important; }
+      .rc-item, .rc-totals, .rc-fbr, .rc-footer { break-inside: avoid; page-break-inside: avoid; }
+    }
+    html, body, .print-format, .pos-receipt {
+      font-family: Calibri, Arial, sans-serif !important;
+      color: #000 !important;
+      background: #fff !important;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+      font-variant-numeric: tabular-nums;
+    }
+    body { margin: 0 !important; padding: 0 !important; }
+    .print-format, .pos-receipt {
+      width: 80mm !important; max-width: 80mm !important; margin: 0 auto !important;
+      padding: 3mm 3mm 4mm !important; box-sizing: border-box !important;
+      font-size: 11px !important; line-height: 1.35 !important;
+    }
+    .rc-company { font-size: 18px !important; font-weight: 800 !important; color: #000 !important; }
+    .rc-title { font-size: 15px !important; font-weight: 800 !important; color: #000 !important; }
+    .rc-meta, .rc-meta-row, .rc-fbr-row, .rc-fbr-inv { font-size: 11px !important; color: #000 !important; font-weight: 700 !important; }
+    .rc-meta-lbl, .rc-item-code, .rc-item-nums .c-desc, .rc-terms, .rc-footer { color: #000 !important; }
+    .rc-col-hdr { display: grid !important; grid-template-columns: minmax(0,1fr) 16mm 20mm 22mm !important; gap: 1.5mm !important; font-size: 10px !important; color: #000 !important; font-weight: 800 !important; }
+    .rc-item-name { font-size: 11px !important; font-weight: 800 !important; color: #000 !important; overflow: visible !important; display: block !important; }
+    .rc-item-nums { display: grid !important; grid-template-columns: minmax(0,1fr) 16mm 20mm 22mm !important; gap: 1.5mm !important; font-size: 10px !important; color: #000 !important; font-weight: 700 !important; }
+    .rc-item-nums .c-num, .rc-col-hdr .c-num { width: auto !important; text-align: right !important; white-space: nowrap !important; }
+    .rc-item { padding: 2px 1px !important; border-bottom: 1px dotted #999 !important; }
+    .rc-item-code { display: none !important; }
+    .rc-item-tax { margin-top: 1px !important; padding: 1px 2px !important; border-left: 0 !important; background: transparent !important; font-size: 9.5px !important; line-height: 1.15 !important; color: #000 !important; font-weight: 800 !important; }
+    .rc-item-tax-3rd, .rc-item-disc { display: none !important; }
+    .rc-tot-row { font-size: 12px !important; color: #000 !important; font-weight: 700 !important; }
+    .rc-tot-row.grand { font-size: 16px !important; font-weight: 900 !important; color: #000 !important; }
+    .rc-tot-amt { white-space: nowrap !important; font-variant-numeric: tabular-nums; }
+    .rc-fbr-title { font-size: 12px !important; font-weight: 900 !important; color: #000 !important; }
+    .rc-fbr-inv b, .rc-fbr-row span:last-child { font-weight: 900 !important; color: #000 !important; }
+    .rc-footer { font-size: 10px !important; color: #000 !important; }
+    .rc-fbr-qr img, .receipt-qr-img { width: 100px !important; height: 100px !important; image-rendering: crisp-edges; }
+    .duplicate-copy, .return-copy { display: block !important; width: 100% !important; box-sizing: border-box !important; text-align: center !important; font: 900 15px Calibri, Arial, sans-serif !important; border: 2px solid #000 !important; color: #000 !important; padding: 5px !important; margin: 0 0 6px !important; letter-spacing: 1px !important; text-transform: uppercase !important; break-after: avoid !important; page-break-after: avoid !important; }
+  </style>`;
+}
+
 async function getPosReceipt(posInvoice: string): Promise<{ html: string | null; error: string | null }> {
   const s = loadSettings();
   if (!posInvoice.trim()) return { html: null, error: "Missing POS Invoice name." };
@@ -512,7 +736,7 @@ async function getPosReceipt(posInvoice: string): Promise<{ html: string | null;
     const html = await response.text();
     if (!html || !html.trim()) return { html: null, error: "Receipt HTML was not returned." };
     // The /printview page carries Frappe's print toolbar (Get PDF / Print / Menu / Letterhead) and page chrome — hide it so only the receipt shows.
-    const hideChrome = "<style>.print-toolbar,.page-head,.navbar,#navbar,.web-footer,footer,.btn-print-preview,.print-preview-select{display:none!important;}body{background:#fff!important;margin:0!important;}</style>";
+    const hideChrome = thermalReceiptCss();
     const clean = /<\/head>/i.test(html) ? html.replace(/<\/head>/i, `${hideChrome}</head>`) : hideChrome + html;
     cacheReceiptHtml(posInvoice, clean);
     return { html: clean, error: null };
@@ -547,8 +771,16 @@ async function printReceiptHtml(html: string): Promise<{ success: boolean; error
 async function getDuplicateReceipt(posInvoice: string): Promise<{ html: string | null; error: string | null }> {
   const base = await getPosReceipt(posInvoice);
   if (!base.html) return base;
-  const banner = `<div style="text-align:center;font:700 14px Arial,sans-serif;border:2px dashed #b91c1c;color:#b91c1c;padding:6px;margin:6px;letter-spacing:2px;">DUPLICATE COPY — Invoice ${posInvoice} — Reprinted ${new Date().toLocaleString()}</div>`;
-  const html = /<body[^>]*>/i.test(base.html) ? base.html.replace(/(<body[^>]*>)/i, `$1${banner}`) : banner + base.html;
+  const banner = `<div class="duplicate-copy">DUPLICATE COPY<br>Invoice ${posInvoice}<br>Reprinted ${new Date().toLocaleString()}</div>`;
+  let html = base.html;
+  if (/<div\b[^>]*class=["'][^"']*\bpos-receipt\b[^"']*["'][^>]*>/i.test(html)) {
+    html = html.replace(/(<div\b[^>]*class=["'][^"']*\bpos-receipt\b[^"']*["'][^>]*>)/i, `$1${banner}`);
+  } else if (/<div\b[^>]*class=["'][^"']*\bprint-format\b[^"']*["'][^>]*>/i.test(html)) {
+    html = html.replace(/(<div\b[^>]*class=["'][^"']*\bprint-format\b[^"']*["'][^>]*>)/i, `$1${banner}`);
+  } else {
+    html = /<body[^>]*>/i.test(html) ? html.replace(/(<body[^>]*>)/i, `$1<div class="pos-receipt">${banner}`) : `<div class="pos-receipt">${banner}${html}</div>`;
+    if (/<body[^>]*>/i.test(html)) html = html.replace(/<\/body>/i, "</div></body>");
+  }
   return { html, error: null };
 }
 
@@ -600,6 +832,14 @@ async function submitPosRefund(input: Record<string, unknown>): Promise<{ result
     try { parsed = JSON.parse(rawBody) as { message?: unknown }; } catch { /* non-JSON */ }
     const result = asRecord(parsed.message);
     if (!response.ok) return { result: result ?? null, error: formatResponseError(response.status, response.statusText, rawBody) };
+    if (result && result.success === true) {
+      // Record the refund locally so the shift summary can report a Refunds total (refunds aren't in pos_sales_history).
+      const invoice = asRecord(result.invoice) ?? {};
+      const returnInvoice = textValue(invoice, "name") || textValue(result, "name");
+      const amount = Math.abs(numValue(invoice, "grand_total") || numValue(invoice, "rounded_total") || numValue(result, "grand_total") || numValue(result, "refund_total") || 0);
+      const openingEntry = textValue(input, "pos_opening_entry") || getCartIdentity().openingEntry;
+      logRefund(returnInvoice, openingEntry, amount);
+    }
     return result ? { result, error: null } : { result: null, error: "Refund response was empty." };
   } catch (error) {
     return { result: null, error: error instanceof Error ? error.message : "Refund submission failed." };
@@ -1086,13 +1326,65 @@ function setupAutoUpdater(): void {
   autoUpdaterReady = true;
   autoUpdater.autoDownload = false;            // the in-app button controls download
   autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.autoRunAppAfterInstall = true;
   applyUpdateFeed();
   autoUpdater.on("checking-for-update", () => sendUpdateStatus("checking"));
-  autoUpdater.on("update-available", (info) => sendUpdateStatus("available", { version: info.version }));
+  autoUpdater.on("update-available", (info) => sendUpdateStatus("available", { version: info.version, notes: typeof info.releaseNotes === "string" ? info.releaseNotes : "" }));
   autoUpdater.on("update-not-available", (info) => sendUpdateStatus("not-available", { version: info.version }));
   autoUpdater.on("error", (err) => sendUpdateStatus("error", { error: err == null ? "unknown" : String(err.message || err) }));
   autoUpdater.on("download-progress", (p) => sendUpdateStatus("downloading", { percent: Math.round(p.percent), transferred: p.transferred, total: p.total, bytesPerSecond: p.bytesPerSecond }));
   autoUpdater.on("update-downloaded", (info) => sendUpdateStatus("downloaded", { version: info.version }));
+}
+
+// --- Release browser (pick any version) -----------------------------------
+const RELEASES_API = "https://api.github.com/repos/BeelBegins/Posapplication/releases";
+interface ReleaseEntry { tag: string; version: string; name: string; notes: string; publishedAt: string; prerelease: boolean; exeName: string; exeUrl: string; exeApiUrl: string; }
+function ghHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  const token = (getMeta("github_update_token") || "").trim();
+  const headers: Record<string, string> = { Accept: "application/vnd.github+json", "User-Agent": "erpnext-offline-pos", ...extra };
+  if (token) headers.Authorization = `token ${token}`;
+  return headers;
+}
+async function listReleases(): Promise<{ releases: ReleaseEntry[]; error: string | null }> {
+  try {
+    const response = await fetch(`${RELEASES_API}?per_page=30`, { headers: ghHeaders() });
+    if (!response.ok) return { releases: [], error: await getResponseError(response) };
+    const body = await response.json() as unknown[];
+    const releases: ReleaseEntry[] = [];
+    for (const raw of Array.isArray(body) ? body : []) {
+      const r = asRecord(raw); if (!r) continue;
+      const assets = Array.isArray(r.assets) ? r.assets.map(asRecord).filter((a): a is Record<string, unknown> => Boolean(a)) : [];
+      const exe = assets.find((a) => textValue(a, "name").toLowerCase().endsWith(".exe"));
+      if (!exe) continue; // only releases that actually carry a Windows installer
+      releases.push({
+        tag: textValue(r, "tag_name"), version: textValue(r, "tag_name").replace(/^v/i, ""),
+        name: textValue(r, "name") || textValue(r, "tag_name"), notes: textValue(r, "body"),
+        publishedAt: textValue(r, "published_at") || textValue(r, "created_at"), prerelease: Boolean(r.prerelease),
+        exeName: textValue(exe, "name"), exeUrl: textValue(exe, "browser_download_url"), exeApiUrl: textValue(exe, "url")
+      });
+    }
+    return { releases, error: null };
+  } catch (e) { return { releases: [], error: e instanceof Error ? e.message : "Unable to list releases." }; }
+}
+// Download a chosen release's installer and launch it (works for any version, incl. rollback).
+async function installRelease(input: Record<string, unknown>): Promise<{ ok: boolean; error: string | null }> {
+  const exeName = textValue(input, "exeName") || `pos-setup-${Date.now()}.exe`;
+  const token = (getMeta("github_update_token") || "").trim();
+  const url = token ? textValue(input, "exeApiUrl") : textValue(input, "exeUrl"); // private repos must use the asset API URL + token
+  if (!url) return { ok: false, error: "No installer URL for the selected release." };
+  try {
+    sendUpdateStatus("downloading", { percent: 0, version: textValue(input, "version") });
+    const response = await fetch(url, { headers: token ? ghHeaders({ Accept: "application/octet-stream" }) : { "User-Agent": "erpnext-offline-pos" } });
+    if (!response.ok) return { ok: false, error: await getResponseError(response) };
+    const buffer = Buffer.from(await response.arrayBuffer());
+    const target = path.join(app.getPath("temp"), exeName.replace(/[^\w.\- ]/g, "_"));
+    await writeFile(target, buffer);
+    sendUpdateStatus("downloaded", { version: textValue(input, "version"), manual: true });
+    const child = spawn(target, [], { detached: true, stdio: "ignore" });
+    child.unref();
+    setTimeout(() => app.exit(0), 800);           // step aside so the installer can replace and relaunch the app
+    return { ok: true, error: null };
+  } catch (e) { return { ok: false, error: e instanceof Error ? e.message : "Unable to download the selected release." }; }
 }
 
 function createMainWindow(): void {
@@ -1201,9 +1493,20 @@ app.whenReady().then(() => {
     try { await autoUpdater.downloadUpdate(); return { ok: true, error: null }; }
     catch (e) { const msg = e instanceof Error ? e.message : "Download failed"; sendUpdateStatus("error", { error: msg }); return { ok: false, error: msg }; }
   });
-  ipcMain.handle("update:install", () => { autoUpdater.quitAndInstall(); });
+  ipcMain.handle("update:install", () => {
+    sendUpdateStatus("installing");
+    autoUpdater.autoRunAppAfterInstall = true;
+    autoUpdater.quitAndInstall(false, true);
+    return { ok: true };
+  });
   ipcMain.handle("update:save-token", (_event, token) => { setMeta("github_update_token", String(token ?? "").trim()); applyUpdateFeed(); return { ok: true }; });
   ipcMain.handle("update:token-set", () => Boolean((getMeta("github_update_token") || "").trim()));
+  ipcMain.handle("releases:list", () => listReleases());
+  ipcMain.handle("releases:install", (_event, input) => installRelease(asRecord(input) ?? {}));
+  ipcMain.handle("admin:pin-status", () => adminStatus());
+  ipcMain.handle("admin:pin-verify", (_event, pin) => verifyAdminPin(String(pin ?? "")));
+  ipcMain.handle("admin:authorize-action", (_event, input) => authorizePosAdminAction(asRecord(input) ?? {}));
+  ipcMain.handle("admin:pin-set", (_event, input) => setAdminPin(asRecord(input) ?? {}));
   createMainWindow();
   setupAutoUpdater();
 

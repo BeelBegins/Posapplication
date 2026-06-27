@@ -249,6 +249,10 @@ export function initDatabase(): void {
     CREATE INDEX IF NOT EXISTS idx_held_sales_status ON held_sales(status);
     CREATE INDEX IF NOT EXISTS idx_sales_history_created ON pos_sales_history(created_at);
     CREATE INDEX IF NOT EXISTS idx_shift_history_closed ON pos_shift_history(closed_at);
+    CREATE TABLE IF NOT EXISTS pos_refund_log (
+      return_invoice TEXT PRIMARY KEY, opening_entry TEXT, amount REAL NOT NULL DEFAULT 0, created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_refund_log_opening ON pos_refund_log(opening_entry);
   `);
 
   const insertMeta = database.prepare(
@@ -321,6 +325,11 @@ export function getHeldSale(id: number): HeldSaleDetail | null {
   };
 }
 export function deleteHeldSale(id: number): void { if (!database) return; database.prepare("DELETE FROM held_sales WHERE id=?").run(id); }
+export function deleteAllHeldSales(): number {
+  if (!database) return 0;
+  const result = database.prepare("DELETE FROM held_sales WHERE status='Held'").run();
+  return Number(result.changes ?? 0);
+}
 export function renameHeldSale(id: number, name: string): void { if (!database) return; database.prepare("UPDATE held_sales SET display_name=?, updated_at=? WHERE id=?").run(name, new Date().toISOString(), id); }
 
 // ----- Sales history queries + reprint tracking (Phase 4) -----
@@ -395,6 +404,18 @@ export function getQueuedSales(): QueuedSale[] {
   const rows = database.prepare("SELECT * FROM pos_sales_history WHERE status='Queued' ORDER BY created_at ASC").all() as Record<string, unknown>[];
   return rows.map((r) => ({ terminalInvoiceId: String(r.terminal_invoice_id ?? ""), payload: parseObject(r.payload_json as string ?? null) ?? {}, response: parseObject(r.response_json as string ?? null), createdAt: String(r.created_at ?? "") }));
 }
+// ----- Refund log (for shift summary refund totals; refunds aren't in pos_sales_history) -----
+export function logRefund(returnInvoice: string, openingEntry: string, amount: number): void {
+  if (!database) return;
+  database.prepare("INSERT INTO pos_refund_log (return_invoice, opening_entry, amount, created_at) VALUES (?, ?, ?, ?) ON CONFLICT(return_invoice) DO UPDATE SET amount=excluded.amount, opening_entry=excluded.opening_entry")
+    .run(returnInvoice || `refund-${Date.now()}`, openingEntry, Math.abs(amount) || 0, new Date().toISOString());
+}
+export function getShiftRefundTotal(openingEntry: string): number {
+  if (!database || !openingEntry) return 0;
+  const row = database.prepare("SELECT COALESCE(SUM(amount),0) total FROM pos_refund_log WHERE opening_entry=?").get(openingEntry) as { total: number } | undefined;
+  return Number(row?.total) || 0;
+}
+
 export function getQueueCounts(): { queued: number; failed: number } {
   if (!database) return { queued: 0, failed: 0 };
   const queued = (database.prepare("SELECT COUNT(*) n FROM pos_sales_history WHERE status='Queued'").get() as { n: number }).n;

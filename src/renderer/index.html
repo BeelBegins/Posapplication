@@ -93,6 +93,11 @@
             <button id="install-update" type="button" hidden>Install &amp; Restart</button>
           </div>
           <p id="update-status" class="settings-message" role="status"></p>
+          <pre id="update-notes" class="update-notes" hidden></pre>
+          <div class="form-actions">
+            <button id="show-releases" type="button" class="secondary-button">Show available versions</button>
+          </div>
+          <div id="releases-list" class="op-list"></div>
           <details class="diagnostics-block">
             <summary>Private repo token (optional)</summary>
             <div class="diagnostics-body">
@@ -256,7 +261,7 @@
           </section>
           <section class="shift-card">
             <h3>Payment Reconciliation</h3>
-            <div class="close-recon-head"><span>Mode</span><span>Opening</span><span>Expected</span><span>Actual Closing</span><span>Difference</span></div>
+            <div class="close-recon-head"><span>Mode</span><span>Opening</span><span>Sale Payments</span><span>Refund Payments</span><span>Net Movement</span><span>Expected</span><span>Actual Closing</span><span>Difference</span></div>
             <div id="close-recon-rows" class="close-recon-rows"></div>
             <p class="shift-balance-total">Total Difference <strong id="close-total-difference">0.00</strong></p>
           </section>
@@ -264,6 +269,7 @@
         <p id="close-shift-message" class="settings-message" role="status"></p>
         <div class="shift-actions">
           <button id="close-shift-submit" type="button" class="primary-action">Submit Close Shift</button>
+          <button id="close-shift-print" type="button" class="secondary-button">Print Summary</button>
           <button id="close-shift-hold" type="button" class="secondary-button">Hold Current Cart</button>
           <button id="close-shift-cancel" type="button" class="secondary-button">Cancel</button>
           <button id="open-shift-history" type="button" class="secondary-button">Shift History</button>
@@ -375,7 +381,10 @@
           <label>Reason<input id="refund-reason" type="text" placeholder="Reason for return" /></label>
           <label>Refund Mode of Payment<select id="refund-mode"></select></label>
         </div>
-        <p>Estimated Refund Total <strong id="refund-total">0.00</strong></p>
+        <p>Merchandise Refund <strong id="refund-merchandise">0.00</strong></p>
+        <p>GST Refund <strong id="refund-gst">0.00</strong></p>
+        <p>Non-refundable FBR POS Fee <strong id="refund-fbr-fee">0.00</strong></p>
+        <p>Total Refund <strong id="refund-total">0.00</strong></p>
         <div class="form-actions">
           <button id="refund-full" type="button" class="secondary-button">Full Refund</button>
           <button id="refund-clear" type="button" class="secondary-button">Clear Quantities</button>
@@ -423,6 +432,34 @@
           <h3 id="name-dialog-title">Name</h3>
           <label><span id="name-dialog-label">Name</span><input id="name-dialog-input" type="text" /></label>
           <div class="form-actions"><button value="ok">OK</button><button id="name-dialog-cancel" value="cancel" type="button" class="secondary-button">Cancel</button></div>
+        </form>
+      </dialog>
+      <dialog id="admin-pin-dialog" class="customer-dialog admin-dialog">
+        <form id="admin-pin-form">
+          <h3 id="admin-pin-title">Admin PIN Required</h3>
+          <p id="admin-pin-note" class="card-meta"></p>
+          <label>Admin PIN<input id="admin-pin-input" type="password" inputmode="numeric" autocomplete="off" /></label>
+          <p id="admin-pin-message" class="settings-message"></p>
+          <div class="form-actions">
+            <button id="admin-pin-submit" type="submit">Continue</button>
+            <button id="admin-pin-forgot" type="button" class="secondary-button">Forgot Admin PIN?</button>
+            <button id="admin-pin-cancel" type="button" class="secondary-button">Cancel</button>
+          </div>
+        </form>
+      </dialog>
+      <dialog id="admin-supervisor-dialog" class="customer-dialog admin-dialog">
+        <form id="admin-supervisor-form">
+          <h3 id="admin-supervisor-title">Supervisor Verification</h3>
+          <p id="admin-supervisor-note" class="card-meta"></p>
+          <label>ERPNext Username / Email<input id="admin-supervisor-user" type="text" autocomplete="username" /></label>
+          <label>ERPNext Password<input id="admin-supervisor-password" type="password" autocomplete="current-password" /></label>
+          <label>New Admin PIN<input id="admin-new-pin" type="password" inputmode="numeric" autocomplete="off" /></label>
+          <label>Confirm New PIN<input id="admin-confirm-pin" type="password" inputmode="numeric" autocomplete="off" /></label>
+          <p id="admin-supervisor-message" class="settings-message"></p>
+          <div class="form-actions">
+            <button id="admin-supervisor-submit" type="submit">Save Admin PIN</button>
+            <button id="admin-supervisor-cancel" type="button" class="secondary-button">Cancel</button>
+          </div>
         </form>
       </dialog>
     </main>
