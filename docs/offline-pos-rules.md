@@ -1,0 +1,118 @@
+# Offline POS Rules
+
+Last updated: 2026-06-28
+
+## Goal
+
+Sales must continue when ERPNext is unavailable, if local cached data is enough.
+
+Offline mode is for sales only.
+
+## Offline Sale Allowed When
+
+ERPNext/server is offline or unreachable, and all local essentials exist:
+
+- Cached POS configuration exists.
+- Cached payment methods exist.
+- Local item and price data exists.
+- Customer/default customer exists.
+- Cart is not empty.
+- Item prices are available locally.
+- Payment is complete and prepared.
+
+Offline F9 / Complete Sale must not call `validateSession()`.
+
+Offline payment must not require live POS Opening Entry validation.
+
+## Offline Sale Blocked When
+
+- No cached POS configuration.
+- No payment methods.
+- No local item/price data.
+- No customer/default customer.
+- Empty cart.
+- Missing item price.
+- Payment is invalid or incomplete.
+
+## Online Sale Rules
+
+When server is online:
+
+- Active ERPNext POS Opening Entry is required.
+- If ERPNext says no shift, closed shift, outdated shift, or wrong user/profile, block sale.
+- Do not fake offline mode when ERPNext explicitly rejects the session while reachable.
+
+If server drops during validation or submit:
+
+- Treat as offline.
+- Queue once with the same `terminal_invoice_id`.
+
+## Offline Session ID
+
+If no real opening entry exists while offline, Electron creates/uses:
+
+```text
+OFFLINE-{terminalId}-{date}-{uuid}
+```
+
+The same offline batch ID is reused for the terminal/date.
+
+Queued sale payload stores:
+
+- `terminal_invoice_id`
+- `terminal_id`
+- `pos_profile`
+- `local_offline_session_id`
+- `opening_entry` as offline placeholder until sync assigns a real one
+- `created_at` through local sale history
+- `status = Queued`
+
+## Offline Header Text
+
+When offline and no live shift is shown:
+
+```text
+Offline Session - Sales Queued
+```
+
+Do not show `No active POS Opening Entry` as a blocker while offline.
+
+## Offline Receipt Text
+
+Offline receipt reuses the same structured receipt renderer/template path.
+
+Only FBR section text changes:
+
+- FBR Status: `Awaiting internet availability`
+- FBR Invoice No: `Pending`
+- FBR Response: `Will submit automatically when ERPNext is online`
+- QR: `Pending`
+
+Do not change item, tax, payment, total, or amount formatting for offline receipt.
+
+## Reconnect Sync
+
+When ERPNext is back online and queued sales exist:
+
+1. Create or reuse one ERPNext POS Opening Entry for the offline batch.
+2. Use zero opening balances unless a future workflow captures real balances.
+3. Assign the real opening entry to all queued sales in the same offline batch.
+4. Sync queued sales in order.
+5. Keep `terminal_invoice_id` unchanged.
+6. Do not auto-close the shift.
+7. User closes shift manually later.
+
+If sync fails:
+
+- Keep sale queued.
+- Show clear error.
+- Do not duplicate invoices.
+- Do not lose sales.
+
+## Still Online-Only
+
+- Refund
+- Close Shift
+- FBR final submission
+- Customer creation
+- Force sync/settings operations needing server
