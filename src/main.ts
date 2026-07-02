@@ -224,17 +224,16 @@ function textValue(record: Record<string, unknown> | null, key: string): string 
   return typeof record?.[key] === "string" ? record[key] as string : "";
 }
 
-const ADMIN_PIN_HASH_KEY = "admin_pin_hash_v1";
-const ADMIN_PIN_FAILED_KEY = "admin_pin_failed_attempts";
-const ADMIN_PIN_LOCK_UNTIL_KEY = "admin_pin_lock_until";
+const LEGACY_ADMIN_PIN_HASH_KEY = "admin_pin_hash_v1";
 const ADMIN_PIN_MIN_LENGTH = 4;
 const ADMIN_PIN_MAX_ATTEMPTS = 5;
 const ADMIN_PIN_LOCK_MS = 5 * 60_000;
 const ADMIN_PIN_DELAY_MS = 900;
 const ALLOW_HTTP_SUPERVISOR_AUTH = !app.isPackaged || process.env.POS_ALLOW_HTTP_SUPERVISOR_AUTH === "1";
 const DEV_ADMIN_AUTH_BYPASS = !app.isPackaged || process.env.POS_DEV_ADMIN_AUTH_BYPASS === "1";
-type AdminAction = "setup_pin" | "reset_pin" | "change_credentials" | "close_shift" | "settings" | "force_sync" | "diagnostics";
-let pendingAdminAuthorization: { tokenHash: string; action: AdminAction; terminalId: string; expiresAt: number } | null = null;
+type AdminAction = "setup_pin" | "reset_pin" | "change_credentials" | "start_shift" | "close_shift" | "settings" | "force_sync" | "diagnostics";
+type PinScope = "settings" | "shift";
+let pendingAdminAuthorization: { tokenHash: string; action: AdminAction; pinScope: PinScope; terminalId: string; expiresAt: number } | null = null;
 
 function hashSecret(value: string): string {
   return createHash("sha256").update(value).digest("hex");
@@ -253,24 +252,35 @@ function verifyPinHash(pin: string, stored: string): boolean {
   return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
 
-function adminPinConfigured(): boolean {
-  return Boolean(getMeta(ADMIN_PIN_HASH_KEY));
+function pinScopeFromAction(action: AdminAction | string, requestedScope?: string): PinScope {
+  if (requestedScope === "shift" || action === "start_shift" || action === "close_shift") return "shift";
+  return "settings";
 }
 
-function adminLockState(): { locked: boolean; lockUntil: number; secondsRemaining: number; failedAttempts: number } {
-  const lockUntil = Number(getMeta(ADMIN_PIN_LOCK_UNTIL_KEY) || 0);
+function pinHashKey(scope: PinScope): string { return `admin_pin_hash_v1_${scope}`; }
+function pinFailedKey(scope: PinScope): string { return `admin_pin_failed_attempts_${scope}`; }
+function pinLockKey(scope: PinScope): string { return `admin_pin_lock_until_${scope}`; }
+
+function adminPinConfigured(scope: PinScope): boolean {
+  return Boolean(getMeta(pinHashKey(scope)) || getMeta(LEGACY_ADMIN_PIN_HASH_KEY));
+}
+
+function adminLockState(scope: PinScope): { locked: boolean; lockUntil: number; secondsRemaining: number; failedAttempts: number } {
+  const lockUntil = Number(getMeta(pinLockKey(scope)) || 0);
   const now = Date.now();
   return {
     locked: lockUntil > now,
     lockUntil,
     secondsRemaining: lockUntil > now ? Math.ceil((lockUntil - now) / 1000) : 0,
-    failedAttempts: Number(getMeta(ADMIN_PIN_FAILED_KEY) || 0)
+    failedAttempts: Number(getMeta(pinFailedKey(scope)) || 0)
   };
 }
 
-function adminStatus(): { configured: boolean; locked: boolean; secondsRemaining: number; failedAttempts: number } {
-  const lock = adminLockState();
-  return { configured: adminPinConfigured(), locked: lock.locked, secondsRemaining: lock.secondsRemaining, failedAttempts: lock.failedAttempts };
+function adminStatus(input?: unknown): { configured: boolean; locked: boolean; secondsRemaining: number; failedAttempts: number; pinScope: PinScope } {
+  const record = asRecord(input) ?? {};
+  const scope = pinScopeFromAction(textValue(record, "action"), textValue(record, "pinScope"));
+  const lock = adminLockState(scope);
+  return { configured: adminPinConfigured(scope), locked: lock.locked, secondsRemaining: lock.secondsRemaining, failedAttempts: lock.failedAttempts, pinScope: scope };
 }
 
 function validatePinFormat(pin: string): string | null {
@@ -280,34 +290,47 @@ function validatePinFormat(pin: string): string | null {
   return null;
 }
 
-async function verifyAdminPin(pin: string): Promise<{ ok: boolean; error: string | null; locked?: boolean; secondsRemaining?: number }> {
-  const lock = adminLockState();
-  if (lock.locked) return { ok: false, error: `Admin PIN is locked. Try again in ${lock.secondsRemaining}s.`, locked: true, secondsRemaining: lock.secondsRemaining };
-  await new Promise((resolve) => setTimeout(resolve, ADMIN_PIN_DELAY_MS));
-  const stored = getMeta(ADMIN_PIN_HASH_KEY);
-  if (!stored) return { ok: false, error: "Admin PIN is not set." };
-  if (verifyPinHash(pin, stored)) {
-    setMeta(ADMIN_PIN_FAILED_KEY, "0");
-    setMeta(ADMIN_PIN_LOCK_UNTIL_KEY, "0");
-    return { ok: true, error: null };
+function supervisorAuthNetworkError(error: unknown): string {
+  const message = error instanceof Error ? error.message : "network error";
+  if (/certificate|cert_|ssl|tls/i.test(message)) {
+    return `Supervisor authorization failed: HTTPS certificate problem. Check SSL certificate validity for ERPNext URL. Details: ${message}`;
   }
-  const failed = Number(getMeta(ADMIN_PIN_FAILED_KEY) || 0) + 1;
-  setMeta(ADMIN_PIN_FAILED_KEY, String(failed));
-  if (failed >= ADMIN_PIN_MAX_ATTEMPTS) {
-    const until = Date.now() + ADMIN_PIN_LOCK_MS;
-    setMeta(ADMIN_PIN_LOCK_UNTIL_KEY, String(until));
-    return { ok: false, error: "Too many wrong PIN attempts. Admin PIN is locked for 5 minutes.", locked: true, secondsRemaining: Math.ceil(ADMIN_PIN_LOCK_MS / 1000) };
-  }
-  return { ok: false, error: `Wrong Admin PIN. ${ADMIN_PIN_MAX_ATTEMPTS - failed} attempt(s) remaining.` };
+  return `Supervisor authorization failed: ${message}`;
 }
 
-function consumePendingAdminAuthorization(token: string, action: AdminAction): { ok: boolean; error: string | null } {
+async function verifyAdminPin(input: Record<string, unknown>): Promise<{ ok: boolean; error: string | null; locked?: boolean; secondsRemaining?: number }> {
+  const pin = textValue(input, "pin");
+  const scope = pinScopeFromAction(textValue(input, "action"), textValue(input, "pinScope"));
+  const lock = adminLockState(scope);
+  const label = scope === "shift" ? "Shift PIN" : "Settings PIN";
+  if (lock.locked) return { ok: false, error: `${label} is locked. Try again in ${lock.secondsRemaining}s.`, locked: true, secondsRemaining: lock.secondsRemaining };
+  await new Promise((resolve) => setTimeout(resolve, ADMIN_PIN_DELAY_MS));
+  const stored = getMeta(pinHashKey(scope)) || getMeta(LEGACY_ADMIN_PIN_HASH_KEY);
+  if (!stored) return { ok: false, error: `${label} is not set.` };
+  if (verifyPinHash(pin, stored)) {
+    if (!getMeta(pinHashKey(scope))) setMeta(pinHashKey(scope), stored);
+    setMeta(pinFailedKey(scope), "0");
+    setMeta(pinLockKey(scope), "0");
+    return { ok: true, error: null };
+  }
+  const failed = Number(getMeta(pinFailedKey(scope)) || 0) + 1;
+  setMeta(pinFailedKey(scope), String(failed));
+  if (failed >= ADMIN_PIN_MAX_ATTEMPTS) {
+    const until = Date.now() + ADMIN_PIN_LOCK_MS;
+    setMeta(pinLockKey(scope), String(until));
+    return { ok: false, error: `Too many wrong PIN attempts. ${label} is locked for 5 minutes.`, locked: true, secondsRemaining: Math.ceil(ADMIN_PIN_LOCK_MS / 1000) };
+  }
+  return { ok: false, error: `Wrong ${label}. ${ADMIN_PIN_MAX_ATTEMPTS - failed} attempt(s) remaining.` };
+}
+
+function consumePendingAdminAuthorization(token: string, action: AdminAction, pinScope: PinScope): { ok: boolean; error: string | null } {
   const pending = pendingAdminAuthorization;
   pendingAdminAuthorization = null;
   const terminalId = loadSettings().terminalId;
   if (!pending) return { ok: false, error: "Supervisor authorization is missing or expired." };
   if (pending.expiresAt < Date.now()) return { ok: false, error: "Supervisor authorization expired." };
   if (pending.action !== action) return { ok: false, error: "Supervisor authorization was for a different action." };
+  if (pending.pinScope !== pinScope) return { ok: false, error: "Supervisor authorization was for a different PIN." };
   if (pending.terminalId !== terminalId) return { ok: false, error: "Supervisor authorization was for a different terminal." };
   if (pending.tokenHash !== hashSecret(token)) return { ok: false, error: "Supervisor authorization token is invalid." };
   return { ok: true, error: null };
@@ -316,6 +339,7 @@ function consumePendingAdminAuthorization(token: string, action: AdminAction): {
 async function authorizePosAdminAction(input: Record<string, unknown>): Promise<{ ok: boolean; token: string; error: string | null }> {
   const settings = loadSettings();
   const action = textValue(input, "action") as AdminAction;
+  const pinScope = pinScopeFromAction(action, textValue(input, "pinScope"));
   const username = textValue(input, "username");
   const password = textValue(input, "password");
   if (!settings.erpnextUrl || !settings.apiKey || !settings.apiSecret || !settings.terminalId) return { ok: false, token: "", error: "Terminal settings are required before supervisor authorization." };
@@ -323,7 +347,7 @@ async function authorizePosAdminAction(input: Record<string, unknown>): Promise<
   if (!username || !password) return { ok: false, token: "", error: "Supervisor username and password are required." };
   if (DEV_ADMIN_AUTH_BYPASS) {
     const token = randomUUID();
-    pendingAdminAuthorization = { tokenHash: hashSecret(token), action, terminalId: settings.terminalId, expiresAt: Date.now() + 5 * 60_000 };
+    pendingAdminAuthorization = { tokenHash: hashSecret(token), action, pinScope, terminalId: settings.terminalId, expiresAt: Date.now() + 5 * 60_000 };
     return { ok: true, token, error: null };
   }
   let base: URL;
@@ -347,10 +371,10 @@ async function authorizePosAdminAction(input: Record<string, unknown>): Promise<
       const serverError = textValue(payload, "error") || textValue(payload, "message") || textValue(asRecord(parsed) ?? {}, "exception") || textValue(asRecord(parsed) ?? {}, "_server_messages");
       return { ok: false, token: "", error: serverError ? `Supervisor authorization failed: ${serverError}` : "Supervisor authorization failed." };
     }
-    pendingAdminAuthorization = { tokenHash: hashSecret(token), action, terminalId: settings.terminalId, expiresAt: Date.now() + 5 * 60_000 };
+    pendingAdminAuthorization = { tokenHash: hashSecret(token), action, pinScope, terminalId: settings.terminalId, expiresAt: Date.now() + 5 * 60_000 };
     return { ok: true, token, error: null };
   } catch (error) {
-    return { ok: false, token: "", error: `Supervisor authorization failed: ${error instanceof Error ? error.message : "network error"}` };
+    return { ok: false, token: "", error: supervisorAuthNetworkError(error) };
   }
 }
 
@@ -358,21 +382,22 @@ async function setAdminPin(input: Record<string, unknown>): Promise<{ ok: boolea
   const pin = textValue(input, "pin");
   const confirmPin = textValue(input, "confirmPin");
   const action = textValue(input, "action") as AdminAction;
+  const pinScope = pinScopeFromAction(action, textValue(input, "pinScope"));
   const currentPin = textValue(input, "currentPin");
   const token = textValue(input, "token");
   const formatError = validatePinFormat(pin);
   if (formatError) return { ok: false, error: formatError };
   if (pin !== confirmPin) return { ok: false, error: "PIN confirmation does not match." };
-  if (action === "change_credentials" && adminPinConfigured()) {
-    const verified = await verifyAdminPin(currentPin);
+  if (action === "change_credentials" && adminPinConfigured(pinScope)) {
+    const verified = await verifyAdminPin({ pin: currentPin, action, pinScope });
     if (!verified.ok) return { ok: false, error: verified.error };
   } else {
-    const consumed = consumePendingAdminAuthorization(token, action);
+    const consumed = consumePendingAdminAuthorization(token, action, pinScope);
     if (!consumed.ok) return consumed;
   }
-  setMeta(ADMIN_PIN_HASH_KEY, pinHash(pin));
-  setMeta(ADMIN_PIN_FAILED_KEY, "0");
-  setMeta(ADMIN_PIN_LOCK_UNTIL_KEY, "0");
+  setMeta(pinHashKey(pinScope), pinHash(pin));
+  setMeta(pinFailedKey(pinScope), "0");
+  setMeta(pinLockKey(pinScope), "0");
   return { ok: true, error: null };
 }
 
@@ -609,10 +634,28 @@ function getCachedSessionSummary(): PosSessionSummary {
   return summarizePosSession(getCachedPosSession(loadSettings().posProfile));
 }
 
+function todayKey(): string {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}${month}${day}`;
+}
+
+function getOfflineBatchId(terminalId: string): string {
+  const key = `offline_batch_${terminalId}_${todayKey()}`;
+  const existing = getMeta(key);
+  if (existing) return existing;
+  const id = `OFFLINE-${terminalId}-${todayKey()}-${randomUUID()}`;
+  setMeta(key, id);
+  return id;
+}
+
 function getCartIdentity(): { terminalId: string; openingEntry: string } {
   const settings = loadSettings();
   const session = getCachedSessionSummary();
-  return { terminalId: settings.terminalId || "default-terminal", openingEntry: session.openingEntry || "no-opening-entry" };
+  const terminalId = settings.terminalId || "default-terminal";
+  return { terminalId, openingEntry: session.openingEntry || getOfflineBatchId(terminalId) };
 }
 function getTerminalInvoiceId():string{const id=getCartIdentity();return getOpenTerminalInvoice(id.terminalId,()=>`${id.terminalId}-${randomUUID()}`);}
 // Build the canonical sale submission payload (shared by online submit and offline queue).
@@ -620,11 +663,12 @@ function buildSalePayload(input: Record<string, unknown>): Record<string, unknow
   const settings = loadSettings();
   const id = String(input.terminal_invoice_id || getTerminalInvoiceId());
   const identity = getCartIdentity();
-  return { terminal_invoice_id: id, terminal_id: identity.terminalId, pos_profile: settings.posProfile, opening_entry: identity.openingEntry, customer: String(input.customer ?? ""), items: Array.isArray(input.items) ? input.items : [], payments: Array.isArray(input.payments) ? input.payments : [], coupon_code: String(input.coupon_code ?? ""), redeem_loyalty_points: Boolean(input.redeem_loyalty_points), loyalty_points: Number(input.loyalty_points ?? 0), estimated_total: Number(input.estimated_total ?? 0) };
+  const localOfflineSessionId = String(input.local_offline_session_id || (identity.openingEntry.startsWith("OFFLINE-") ? identity.openingEntry : ""));
+  return { terminal_invoice_id: id, terminal_id: identity.terminalId, pos_profile: settings.posProfile, opening_entry: identity.openingEntry, local_offline_session_id: localOfflineSessionId, customer: String(input.customer ?? ""), items: Array.isArray(input.items) ? input.items : [], payments: Array.isArray(input.payments) ? input.payments : [], coupon_code: String(input.coupon_code ?? ""), redeem_loyalty_points: Boolean(input.redeem_loyalty_points), loyalty_points: Number(input.loyalty_points ?? 0), estimated_total: Number(input.estimated_total ?? 0) };
 }
 // A local stand-in for the server response so the receipt + history have coherent data until the sale syncs.
 function buildProvisionalResponse(id: string, payload: Record<string, unknown>): Record<string, unknown> {
-  return { provisional: true, offline: true, queued: true, terminal_invoice_id: id, pos_invoice: "", posting_datetime: new Date().toISOString(), fbr_status: "Offline — FBR pending", estimated_total: numValue(payload, "estimated_total") };
+  return { provisional: true, offline: true, queued: true, terminal_invoice_id: id, pos_invoice: id, posting_datetime: new Date().toISOString(), fbr_status: "Awaiting internet availability", fbr_invoice_number: "Pending", fbr_response: "Will submit automatically when ERPNext is online", estimated_total: numValue(payload, "estimated_total") };
 }
 // Persist a completed-offline sale to the queue (status "Queued"); it replays to the server on reconnect.
 function queueSale(input: Record<string, unknown>): { success: boolean; response: Record<string, unknown> | null; error: string | null; queued: boolean } {
@@ -637,6 +681,19 @@ function queueSale(input: Record<string, unknown>): { success: boolean; response
 
 async function submitOnlineSale(input:Record<string,unknown>):Promise<{success:boolean;response:Record<string,unknown>|null;error:string|null;queued?:boolean}>{const settings=loadSettings();const payload=buildSalePayload(input);const id=String(payload.terminal_invoice_id);saveSaleHistory(id,"Submitting",payload);if(!settings.erpnextUrl||!settings.apiKey||!settings.apiSecret){saveSaleHistory(id,"Failed",payload);return {success:false,response:null,error:"ERPNext URL and API credentials are required."};}try{const base=new URL(settings.erpnextUrl).toString().replace(/\/+$/,"");const response=await fetch(`${base}/api/method/aimatic.offline_pos.api.submit_online_sale`,{method:"POST",headers:{Authorization:`token ${settings.apiKey}:${settings.apiSecret}`,"Content-Type":"application/json"},body:JSON.stringify(payload)});const rawBody=await response.text();let parsed:{message?:unknown;data?:unknown}={};try{parsed=JSON.parse(rawBody) as {message?:unknown;data?:unknown};}catch{/* non-JSON response */}const result=asRecord(parsed.message)??asRecord(parsed.data)??{};if(!response.ok){saveSaleHistory(id,"Failed",payload,result);return {success:false,response:result,error:formatResponseError(response.status,response.statusText,rawBody)};}saveSaleHistory(id,"Submitted",payload,result);return {success:true,response:result,error:null};}catch(error){/* Network failure mid-submit: auto-fall back to the offline queue rather than failing the sale. */const response=buildProvisionalResponse(id,payload);saveSaleHistory(id,"Queued",payload,response);return {success:true,response,error:null,queued:true};}}
 
+async function openingEntryForQueuedPayload(payload: Record<string, unknown>, cache: Map<string, string>): Promise<{ openingEntry: string | null; error: string | null }> {
+  const current = textValue(payload, "opening_entry");
+  const batch = textValue(payload, "local_offline_session_id");
+  if (!batch || !current.startsWith("OFFLINE-")) return { openingEntry: current || null, error: null };
+  if (cache.has(batch)) return { openingEntry: cache.get(batch) || null, error: null };
+  const result = await startPosSession({ opening_balances: [] });
+  if (!result.success || !result.session) return { openingEntry: null, error: result.error || "Unable to create POS Opening Entry for offline batch." };
+  const openingEntry = textValue(result.session, "opening_entry") || textValue(result.session, "name");
+  if (!openingEntry) return { openingEntry: null, error: "Server returned no POS Opening Entry for offline batch." };
+  cache.set(batch, openingEntry);
+  return { openingEntry, error: null };
+}
+
 // Replay queued offline sales to the server in order. Idempotent via terminal_invoice_id (server dedups).
 async function syncSaleQueue(): Promise<{ synced: number; failed: number; remaining: number; error: string | null }> {
   const settings = loadSettings();
@@ -644,20 +701,24 @@ async function syncSaleQueue(): Promise<{ synced: number; failed: number; remain
   if (!settings.erpnextUrl || !settings.apiKey || !settings.apiSecret) return { synced: 0, failed: 0, remaining: counts0.queued, error: "ERPNext URL and API credentials are required." };
   let base: string;
   try { base = new URL(settings.erpnextUrl).toString().replace(/\/+$/, ""); } catch { return { synced: 0, failed: 0, remaining: counts0.queued, error: "Invalid ERPNext URL." }; }
-  let synced = 0; let failed = 0;
+  let synced = 0; let failed = 0; let error: string | null = null;
+  const openingCache = new Map<string, string>();
   for (const sale of getQueuedSales()) {
-    const payload = sale.payload;
+    const payload = { ...sale.payload };
     try {
+      const opening = await openingEntryForQueuedPayload(payload, openingCache);
+      if (opening.error || !opening.openingEntry) { failed += 1; error = opening.error || "Unable to prepare POS Opening Entry for queued sale."; break; }
+      payload.opening_entry = opening.openingEntry;
       const response = await fetch(`${base}/api/method/aimatic.offline_pos.api.submit_online_sale`, { method: "POST", headers: { Authorization: `token ${settings.apiKey}:${settings.apiSecret}`, "Content-Type": "application/json" }, body: JSON.stringify(payload) });
       const rawBody = await response.text();
       let parsed: { message?: unknown; data?: unknown } = {};
       try { parsed = JSON.parse(rawBody) as { message?: unknown; data?: unknown }; } catch { /* non-JSON */ }
       const result = asRecord(parsed.message) ?? asRecord(parsed.data) ?? {};
-      if (!response.ok) { saveSaleHistory(sale.terminalInvoiceId, "Failed", payload, result); failed += 1; continue; } // real server rejection — flag, keep replaying the rest
+      if (!response.ok) { failed += 1; error = formatResponseError(response.status, response.statusText, rawBody); break; }
       saveSaleHistory(sale.terminalInvoiceId, "Submitted", payload, result); synced += 1;
-    } catch { break; /* still offline — stop and leave the remainder queued */ }
+    } catch (e) { error = e instanceof Error ? e.message : "Still offline."; break; }
   }
-  return { synced, failed, remaining: getQueueCounts().queued, error: null };
+  return { synced, failed, remaining: getQueueCounts().queued, error };
 }
 async function findPosInvoicePrintFormat(base: string, apiKey: string, apiSecret: string): Promise<string> {
   try {
@@ -1393,7 +1454,7 @@ function createMainWindow(): void {
     height: 720,
     minWidth: 760,
     minHeight: 560,
-    title: "ERPNext Online-First POS",
+    title: "Aimatic POS App",
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -1503,8 +1564,8 @@ app.whenReady().then(() => {
   ipcMain.handle("update:token-set", () => Boolean((getMeta("github_update_token") || "").trim()));
   ipcMain.handle("releases:list", () => listReleases());
   ipcMain.handle("releases:install", (_event, input) => installRelease(asRecord(input) ?? {}));
-  ipcMain.handle("admin:pin-status", () => adminStatus());
-  ipcMain.handle("admin:pin-verify", (_event, pin) => verifyAdminPin(String(pin ?? "")));
+  ipcMain.handle("admin:pin-status", (_event, input) => adminStatus(input));
+  ipcMain.handle("admin:pin-verify", (_event, input) => verifyAdminPin(asRecord(input) ?? {}));
   ipcMain.handle("admin:authorize-action", (_event, input) => authorizePosAdminAction(asRecord(input) ?? {}));
   ipcMain.handle("admin:pin-set", (_event, input) => setAdminPin(asRecord(input) ?? {}));
   createMainWindow();

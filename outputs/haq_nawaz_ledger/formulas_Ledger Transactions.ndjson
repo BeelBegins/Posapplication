@@ -1,0 +1,2 @@
+{"kind":"formula","sheet":"Ledger Transactions","address":"C96","formula":"=SUM(C5:C95)"}
+{"kind":"formula","sheet":"Ledger Transactions","address":"D96","formula":"=SUM(D5:D95)"}
