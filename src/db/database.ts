@@ -60,6 +60,20 @@ const settingKeys = ["erpnextUrl", "apiKey", "apiSecret", "terminalId", "posProf
 let database: Database.Database | null = null;
 let databasePath = "";
 
+export function normalizeErpnextUrl(value: string): string {
+  let cleaned = String(value ?? "")
+    .replace(/[\u0000-\u001F\u007F-\u009F\u200B-\u200D\uFEFF]/g, "")
+    .trim();
+  if (!cleaned) return "";
+  if (cleaned.startsWith("//")) cleaned = `https:${cleaned}`;
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(cleaned)) cleaned = `https://${cleaned}`;
+  try {
+    return new URL(cleaned).toString().replace(/\/+$/, "");
+  } catch {
+    return cleaned.replace(/\/+$/, "");
+  }
+}
+
 // ----- Versioned schema migration runner -----
 // Baseline schema (the CREATE TABLE IF NOT EXISTS block in initDatabase) is version 1.
 // Each migration here advances the schema by exactly one version and runs at most once,
@@ -709,7 +723,7 @@ export function saveSettings(settings: AppSettings): { saved: true } {
       if (key === "apiSecret" && !settings.apiSecret) {
         continue;
       }
-      saveSetting.run(key, settings[key]);
+      saveSetting.run(key, key === "erpnextUrl" ? normalizeErpnextUrl(settings[key]) : settings[key]);
     }
   });
 
@@ -751,6 +765,7 @@ export function loadSettings(): AppSettings {
     const row = getSetting.get(key) as { value: string } | undefined;
     settings[key] = row?.value ?? "";
   }
+  settings.erpnextUrl = normalizeErpnextUrl(settings.erpnextUrl);
 
   return settings;
 }

@@ -15,7 +15,7 @@ body { margin: 0; min-width: 320px; }
 #settings-screen { max-width: 1120px; margin: 0 auto; padding: 48px; }
 #pos-screen { height: 100vh; background: #eef3fa; display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; overflow: hidden; position: relative; }
 /* The hidden attribute must beat the ID-level display rules so only one screen shows at a time. */
-#pos-screen[hidden], #settings-screen[hidden], #start-shift-screen[hidden], #close-shift-screen[hidden], #shift-history-screen[hidden], #held-sales-screen[hidden], #sales-history-screen[hidden], #refund-screen[hidden] { display: none !important; }
+#pos-screen[hidden], #settings-screen[hidden], #cashier-login-screen[hidden], #start-shift-screen[hidden], #close-shift-screen[hidden], #shift-history-screen[hidden], #held-sales-screen[hidden], #sales-history-screen[hidden], #refund-screen[hidden] { display: none !important; }
 .icon-button { font-size: 1.2rem; line-height: 1; padding: 8px 12px; }
 .session-warning { padding: 8px 16px; background: #fef3c7; color: #92400e; font-size: 0.85rem; font-weight: 700; }
 .offline-banner { display: flex; align-items: center; gap: 14px; padding: 8px 16px; background: #fee2e2; color: #991b1b; font-size: 0.85rem; font-weight: 700; }
@@ -33,6 +33,18 @@ body { margin: 0; min-width: 320px; }
 .session-overlay-reason { margin: 0 0 6px; color: #243b61; font-weight: 700; }
 .session-overlay-note { margin: 0 0 18px; color: #6b778b; font-size: 0.85rem; }
 .session-overlay-actions { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
+
+/* --- Cashier login --- */
+.cashier-login-screen { min-height: 100vh; display: grid; place-items: center; padding: 32px; background: #eef3fa; }
+.cashier-login-card { width: min(520px, 94vw); padding: 28px; border: 1px solid #dce3ee; border-radius: 12px; background: #fff; box-shadow: 0 18px 48px rgb(21 34 56 / 12%); }
+.cashier-login-brand h2 { margin: 0 0 8px; color: #152238; font-size: 1.55rem; letter-spacing: 0; }
+.cashier-login-brand p:last-child { margin: 0 0 18px; color: #526178; line-height: 1.45; }
+.cashier-login-form { display: grid; gap: 12px; }
+.cashier-login-form label { display: grid; gap: 6px; color: #243b61; font-weight: 700; }
+.cashier-login-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 18px 0 12px; }
+.cashier-login-summary div { padding: 10px; border-radius: 8px; background: #f4f7fb; }
+.cashier-login-summary dt { color: #6b778b; font-size: 0.72rem; }
+.cashier-login-summary dd { margin: 4px 0 0; color: #243b61; font-weight: 800; overflow-wrap: anywhere; }
 
 /* --- Operational screens (Held Sales, Sales History) --- */
 .op-screen { height: 100vh; padding: 20px 28px; overflow-y: auto; background: #eef3fa; }
