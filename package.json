@@ -1,7 +1,7 @@
 {
   "name": "erpnext-offline-pos",
-  "version": "0.1.8",
-  "description": "Basic Electron shell for ERPNext Online-First POS",
+  "version": "0.1.14",
+  "description": "Aimatic POS App for ERPNext retail stores",
   "main": "dist/main.js",
   "scripts": {
     "start": "npm run build && set ELECTRON_RUN_AS_NODE=&& electron .",
@@ -34,7 +34,7 @@
   },
   "build": {
     "appId": "com.beelbegins.erpnextofflinepos",
-    "productName": "ERPNext Offline POS",
+    "productName": "Aimatic POS App",
     "publish": [
       {
         "provider": "github",

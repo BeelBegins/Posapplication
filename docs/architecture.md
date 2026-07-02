@@ -1,6 +1,6 @@
 # POS Architecture Notes
 
-Last updated: 2026-06-28
+Last updated: 2026-06-29
 
 ## Source Of Truth
 
@@ -52,7 +52,10 @@ Electron must never call FBR directly.
 - Keep Node integration disabled in renderer.
 - Keep preload APIs narrow.
 - Do not expose API secret or SQLite to renderer.
-- Do not store raw Admin PIN.
+- Do not store raw PIN values.
+- Use separate local PIN scopes:
+  - Settings PIN protects settings, credentials, diagnostics, and force sync.
+  - Shift PIN protects Start Shift and Close Shift.
 - Do not store supervisor passwords.
 - Do not hardcode shared production passwords.
 
