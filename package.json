@@ -1,6 +1,6 @@
 {
   "name": "erpnext-offline-pos",
-  "version": "0.1.14",
+  "version": "0.1.15",
   "description": "Aimatic POS App for ERPNext retail stores",
   "main": "dist/main.js",
   "scripts": {
@@ -9,7 +9,7 @@
     "obfuscate": "node scripts/obfuscate.cjs",
     "dist": "npm run build && electron-builder --win nsis",
     "dist:protected": "npm run build && npm run obfuscate && electron-builder --win nsis",
-    "release": "npm run build && dotenv -e .env -- electron-builder --win nsis --publish always && dotenv -e .env -- node scripts/publish-github-release.cjs",
+    "release": "npm run build && electron-builder --win nsis --publish never && dotenv -e .env -- node scripts/publish-github-release.cjs",
     "pack:dir": "npm run build && electron-builder --dir",
     "dev": "concurrently \"tsc --watch\" \"wait-on dist/main.js && set ELECTRON_RUN_AS_NODE=&& electron .\"",
     "rebuild": "electron-rebuild -f -w better-sqlite3",
@@ -64,7 +64,7 @@
           ]
         }
       ],
-      "artifactName": "${productName}-Setup-${version}.${ext}"
+      "artifactName": "Aimatic-POS-App-Setup-${version}.${ext}"
     },
     "nsis": {
       "oneClick": false,

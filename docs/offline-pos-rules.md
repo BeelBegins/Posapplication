@@ -1,12 +1,27 @@
 # Offline POS Rules
 
-Last updated: 2026-06-28
+Last updated: 2026-07-03
 
 ## Goal
 
 Sales must continue when ERPNext is unavailable, if local cached data is enough.
 
 Offline mode is for sales only.
+
+First-time cashier login requires online ERPNext verification.
+
+If ERPNext goes offline after cashier login, the runtime cashier session remains active for offline sales.
+
+If the app starts cold while offline, cashier can login with a locally saved Offline Cashier PIN.
+
+Offline Cashier PIN rules:
+
+- Created or updated only after successful online ERPNext cashier login.
+- ERPNext password is never stored.
+- Only salted `scrypt` PIN hash is stored.
+- PIN cache is scoped to terminal, POS Profile, and cashier user.
+- Wrong offline PIN attempts are delayed and locked after repeated failures.
+- If no offline PIN exists for that cashier, offline sales stay blocked until online cashier login succeeds.
 
 ## Offline Sale Allowed When
 

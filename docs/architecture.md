@@ -1,6 +1,6 @@
 # POS Architecture Notes
 
-Last updated: 2026-06-29
+Last updated: 2026-07-03
 
 ## Source Of Truth
 
@@ -56,6 +56,13 @@ Electron must never call FBR directly.
 - Use separate local PIN scopes:
   - Settings PIN protects settings, credentials, diagnostics, and force sync.
   - Shift PIN protects Start Shift and Close Shift.
+- Keep terminal API key/secret as background integration credentials.
+- Cashier login is a separate online ERPNext verification step.
+- Do not store cashier passwords.
+- Cold offline cashier login uses a local Offline Cashier PIN only after prior online ERPNext cashier verification.
+- Store only salted `scrypt` hashes for local PINs.
+- Offline Cashier PIN is scoped to terminal, POS Profile, and cashier user.
+- Do not display the terminal API user as the cashier.
 - Do not store supervisor passwords.
 - Do not hardcode shared production passwords.
 

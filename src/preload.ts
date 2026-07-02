@@ -28,6 +28,8 @@ contextBridge.exposeInMainWorld("posAPI", {
   loadSettings: () => ipcRenderer.invoke("settings:load") as Promise<RendererSettings>,
   testServer: () => ipcRenderer.invoke("server:test"),
   testLogin: () => ipcRenderer.invoke("auth:test"),
+  cashierLogin: (input: Record<string, unknown>) => ipcRenderer.invoke("cashier:login", input),
+  cashierOfflineLogin: (input: Record<string, unknown>) => ipcRenderer.invoke("cashier:offline-login", input),
   loadPosProfiles: () => ipcRenderer.invoke("pos-profiles:list"),
   loadPosProfile: () => ipcRenderer.invoke("pos-profile:load"),
   getPosProfileCacheStatus: () => ipcRenderer.invoke("pos-profile-cache:get-status"),

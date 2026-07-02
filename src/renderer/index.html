@@ -17,7 +17,7 @@
 
       <div class="settings-topbar">
         <span id="setup-overall-badge" class="status-badge warn">Setup Required</span>
-        <span class="topbar-user">User <strong id="setup-logged-user">—</strong></span>
+        <span class="topbar-user">API User <strong id="setup-logged-user">—</strong></span>
         <span id="setup-online-indicator" class="online-dot offline">Offline</span>
       </div>
       <ol id="setup-progress" class="setup-progress">
@@ -205,6 +205,33 @@
       </section>
       </section>
 
+      <section id="cashier-login-screen" class="app-screen cashier-login-screen" hidden>
+        <div class="cashier-login-card">
+          <div class="cashier-login-brand">
+            <p class="eyebrow">Aimatic POS App</p>
+            <h2>Cashier Login</h2>
+            <p>Sign in with your ERPNext cashier account to start operating this terminal.</p>
+          </div>
+          <form id="cashier-login-form" class="cashier-login-form" novalidate>
+            <label>Email / Username<input id="cashier-username" type="text" autocomplete="username" /></label>
+            <label id="cashier-password-row">ERPNext Password<input id="cashier-password" type="password" autocomplete="current-password" /></label>
+            <label id="cashier-offline-pin-row">Offline Cashier PIN<input id="cashier-offline-pin" type="password" inputmode="numeric" autocomplete="off" placeholder="4-12 digits" /></label>
+            <button id="cashier-login-submit" type="submit" class="primary-action">Login</button>
+          </form>
+          <p id="cashier-offline-note" class="card-meta">Set an offline PIN after online verification to allow this cashier to login when internet is unavailable.</p>
+          <dl class="cashier-login-summary">
+            <div><dt>Connection</dt><dd id="cashier-login-connection">Checking</dd></div>
+            <div><dt>Terminal</dt><dd id="cashier-login-terminal">—</dd></div>
+            <div><dt>POS Profile</dt><dd id="cashier-login-profile">—</dd></div>
+          </dl>
+          <p id="cashier-login-message" class="settings-message" role="status"></p>
+          <div class="form-actions">
+            <button id="cashier-login-settings" type="button" class="secondary-button">Settings</button>
+            <button id="cashier-login-retry" type="button" class="secondary-button">Retry Connection</button>
+          </div>
+        </div>
+      </section>
+
       <section id="start-shift-screen" class="app-screen shift-screen" hidden>
         <header class="op-header">
           <div><h2>Start Shift</h2><p class="shift-sub">Open a POS Opening Entry to begin selling.</p></div>
@@ -293,6 +320,7 @@
           <div><span>Sync</span><strong id="pos-sync-status">Pending</strong></div>
           <div><span>Shift Age</span><strong id="pos-session-age">—</strong></div>
           <div><span>Queue</span><strong id="pos-queue-status">—</strong></div>
+          <button id="cashier-logout" type="button" class="secondary-button header-action">Switch Cashier</button>
           <button id="pos-close-shift" type="button" class="secondary-button header-action">Close Shift</button>
           <button id="open-settings" type="button" class="secondary-button icon-button" title="Settings" aria-label="Settings">⚙</button>
         </header>

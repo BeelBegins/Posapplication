@@ -57,6 +57,7 @@ import {
   ,getCachedReceiptHtml
   ,getMeta
   ,setMeta
+  ,normalizeErpnextUrl
   ,logRefund
   ,getShiftRefundTotal
 } from "./db/database";
@@ -174,6 +175,21 @@ interface PosSessionSummary {
   lastSynced: string | null;
 }
 
+interface CashierLoginResult {
+  success: boolean;
+  user: string;
+  fullName: string;
+  roles: string[];
+  allowedPosProfiles: string[];
+  defaultPosProfile: string;
+  canStartShift: boolean;
+  canRefund: boolean;
+  canCloseShift: boolean;
+  offlineCached?: boolean;
+  offlineLogin?: boolean;
+  error: string | null;
+}
+
 // Builds an error message from an already-read body — use when the response body has been consumed elsewhere.
 function formatResponseError(status: number, statusText: string, rawBody: string): string {
   let body: Record<string, unknown> = {};
@@ -212,6 +228,170 @@ async function getResponseError(response: Response): Promise<string> {
   for (const key of ["exception", "exc_type", "exc"] as const) if (typeof body[key] === "string") messages.push(body[key] as string);
   const message = messages.find(Boolean) || rawBody || `HTTP ${response.status}: ${response.statusText}`;
   return `HTTP ${response.status}: ${message}`;
+}
+
+function missingCashierLoginEndpointMessage(): string {
+  return "Cashier login requires server endpoint aimatic.offline_pos.api.pos_cashier_login";
+}
+
+async function posCashierLogin(input: Record<string, unknown>): Promise<CashierLoginResult> {
+  const settings = loadSettings();
+  const username = textValue(input, "username");
+  const password = textValue(input, "password");
+  const offlinePin = textValue(input, "offlinePin");
+  const empty: CashierLoginResult = {
+    success: false, user: "", fullName: "", roles: [], allowedPosProfiles: [], defaultPosProfile: "",
+    canStartShift: false, canRefund: false, canCloseShift: false, error: null
+  };
+  if (!username || !password) return { ...empty, error: "Cashier username and password are required." };
+  if (!settings.erpnextUrl || !settings.apiKey || !settings.apiSecret || !settings.terminalId || !settings.posProfile) {
+    return { ...empty, error: "Terminal settings are required before cashier login." };
+  }
+  let base: URL;
+  try { base = new URL(normalizeErpnextUrl(settings.erpnextUrl)); } catch { return { ...empty, error: "ERPNext URL is invalid." }; }
+  const endpoint = `${base.toString().replace(/\/+$/, "")}/api/method/aimatic.offline_pos.api.pos_cashier_login`;
+  try {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: { Authorization: `token ${settings.apiKey}:${settings.apiSecret}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password, terminal_id: settings.terminalId, pos_profile: settings.posProfile })
+    });
+    const rawBody = await response.text();
+    let parsed: { message?: unknown } = {};
+    try { parsed = JSON.parse(rawBody) as { message?: unknown }; } catch { /* non-JSON */ }
+    const raw = asRecord(parsed.message);
+    const payload = asRecord(raw?.message) ?? raw ?? asRecord(parsed) ?? {};
+    if (!response.ok) {
+      const error = formatResponseError(response.status, response.statusText, rawBody);
+      if (response.status === 404 || /pos_cashier_login|not found|has no attribute|does not exist|Failed to get method/i.test(error)) {
+        return { ...empty, error: missingCashierLoginEndpointMessage() };
+      }
+      return { ...empty, error };
+    }
+    if (payload.success === false) return { ...empty, error: textValue(payload, "error") || "Cashier login failed." };
+    const user = textValue(payload, "user") || textValue(payload, "email") || username;
+    const fullName = textValue(payload, "full_name") || textValue(payload, "fullName") || user;
+    const roles = Array.isArray(payload.roles) ? payload.roles.map(String) : [];
+    const allowedPosProfiles = Array.isArray(payload.allowed_pos_profiles) ? payload.allowed_pos_profiles.map(String) : [];
+    const result: CashierLoginResult = {
+      success: true,
+      user,
+      fullName,
+      roles,
+      allowedPosProfiles,
+      defaultPosProfile: textValue(payload, "default_pos_profile"),
+      canStartShift: Boolean(payload.can_start_shift ?? true),
+      canRefund: Boolean(payload.can_refund ?? false),
+      canCloseShift: Boolean(payload.can_close_shift ?? false),
+      error: null
+    };
+    if (offlinePin) {
+      const saved = cacheCashierOfflinePin(result, offlinePin);
+      if (!saved.ok) return { ...empty, error: saved.error };
+      result.offlineCached = true;
+    }
+    return result;
+  } catch (error) {
+    return { ...empty, error: `Cashier login failed: ${error instanceof Error ? error.message : "network error"}` };
+  }
+}
+
+function cashierCacheKey(user: string): string {
+  const settings = loadSettings();
+  const identity = `${settings.terminalId.trim()}|${settings.posProfile.trim()}|${user.trim().toLowerCase()}`;
+  return `cashier_offline_v1_${hashSecret(identity)}`;
+}
+
+function cashierFailedKey(user: string): string {
+  return `${cashierCacheKey(user)}_failed`;
+}
+
+function cashierLockKey(user: string): string {
+  return `${cashierCacheKey(user)}_lock`;
+}
+
+function cacheCashierOfflinePin(cashier: CashierLoginResult, pin: string): { ok: boolean; error: string | null } {
+  const settings = loadSettings();
+  const formatError = validatePinFormat(pin);
+  if (formatError) return { ok: false, error: `Offline Cashier PIN: ${formatError}` };
+  if (!settings.terminalId || !settings.posProfile || !cashier.user) return { ok: false, error: "Terminal and POS Profile are required before saving offline cashier PIN." };
+  const cached = {
+    user: cashier.user,
+    fullName: cashier.fullName,
+    roles: cashier.roles,
+    allowedPosProfiles: cashier.allowedPosProfiles,
+    defaultPosProfile: cashier.defaultPosProfile,
+    canStartShift: cashier.canStartShift,
+    canRefund: cashier.canRefund,
+    canCloseShift: cashier.canCloseShift,
+    terminalId: settings.terminalId,
+    posProfile: settings.posProfile,
+    pinHash: pinHash(pin),
+    cachedAt: new Date().toISOString()
+  };
+  setMeta(cashierCacheKey(cashier.user), JSON.stringify(cached));
+  setMeta(cashierFailedKey(cashier.user), "0");
+  setMeta(cashierLockKey(cashier.user), "0");
+  return { ok: true, error: null };
+}
+
+async function cashierOfflineLogin(input: Record<string, unknown>): Promise<CashierLoginResult> {
+  const settings = loadSettings();
+  const username = textValue(input, "username");
+  const pin = textValue(input, "pin");
+  const empty: CashierLoginResult = {
+    success: false, user: "", fullName: "", roles: [], allowedPosProfiles: [], defaultPosProfile: "",
+    canStartShift: false, canRefund: false, canCloseShift: false, error: null
+  };
+  if (!username || !pin) return { ...empty, error: "Cashier username and offline PIN are required." };
+  if (!settings.terminalId || !settings.posProfile) return { ...empty, error: "Terminal settings are required before offline cashier login." };
+
+  const lockUntil = Number(getMeta(cashierLockKey(username)) || 0);
+  if (lockUntil > Date.now()) {
+    return { ...empty, error: `Offline cashier PIN is locked. Try again in ${Math.ceil((lockUntil - Date.now()) / 1000)}s.` };
+  }
+
+  await new Promise((resolve) => setTimeout(resolve, ADMIN_PIN_DELAY_MS));
+  const raw = getMeta(cashierCacheKey(username));
+  if (!raw) return { ...empty, error: "No offline cashier PIN is saved for this cashier on this terminal and POS Profile." };
+
+  let cached: Record<string, unknown>;
+  try {
+    cached = JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    return { ...empty, error: "Saved offline cashier PIN is damaged. Login online to reset it." };
+  }
+
+  const stored = textValue(cached, "pinHash");
+  if (textValue(cached, "terminalId") !== settings.terminalId || textValue(cached, "posProfile") !== settings.posProfile || !stored) {
+    return { ...empty, error: "Offline cashier PIN is not valid for this terminal or POS Profile." };
+  }
+
+  if (!verifyPinHash(pin, stored)) {
+    const failed = Number(getMeta(cashierFailedKey(username)) || 0) + 1;
+    setMeta(cashierFailedKey(username), String(failed));
+    if (failed >= ADMIN_PIN_MAX_ATTEMPTS) {
+      setMeta(cashierLockKey(username), String(Date.now() + ADMIN_PIN_LOCK_MS));
+      return { ...empty, error: "Too many wrong offline PIN attempts. Cashier login is locked for 5 minutes." };
+    }
+    return { ...empty, error: `Wrong offline Cashier PIN. ${ADMIN_PIN_MAX_ATTEMPTS - failed} attempt(s) remaining.` };
+  }
+
+  setMeta(cashierFailedKey(username), "0");
+  setMeta(cashierLockKey(username), "0");
+  return {
+    success: true,
+    user: textValue(cached, "user") || username,
+    fullName: textValue(cached, "fullName") || username,
+    roles: Array.isArray(cached.roles) ? cached.roles.map(String) : [],
+    allowedPosProfiles: Array.isArray(cached.allowedPosProfiles) ? cached.allowedPosProfiles.map(String) : [],
+    defaultPosProfile: textValue(cached, "defaultPosProfile"),
+    canStartShift: Boolean(cached.canStartShift),
+    canRefund: Boolean(cached.canRefund),
+    canCloseShift: Boolean(cached.canCloseShift),
+    offlineLogin: true,
+    error: null
+  };
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -351,7 +531,9 @@ async function authorizePosAdminAction(input: Record<string, unknown>): Promise<
     return { ok: true, token, error: null };
   }
   let base: URL;
-  try { base = new URL(settings.erpnextUrl); } catch { return { ok: false, token: "", error: "ERPNext URL is invalid." }; }
+  const normalizedUrl = normalizeErpnextUrl(settings.erpnextUrl);
+  try { base = new URL(normalizedUrl); } catch { return { ok: false, token: "", error: "ERPNext URL is invalid." }; }
+  console.info("[AdminAuth] ERPNext URL diagnostic", { normalizedUrl: base.toString().replace(/\/+$/, ""), protocol: base.protocol });
   if (base.protocol !== "https:" && !ALLOW_HTTP_SUPERVISOR_AUTH) {
     return { ok: false, token: "", error: "Supervisor authorization requires HTTPS ERPNext URL." };
   }
@@ -369,6 +551,9 @@ async function authorizePosAdminAction(input: Record<string, unknown>): Promise<
     const token = textValue(payload, "token");
     if (!response.ok || !token) {
       const serverError = textValue(payload, "error") || textValue(payload, "message") || textValue(asRecord(parsed) ?? {}, "exception") || textValue(asRecord(parsed) ?? {}, "_server_messages");
+      if (base.protocol === "https:" && /https is required|non-https|not https/i.test(serverError)) {
+        return { ok: false, token: "", error: "Server rejected supervisor authorization as non-HTTPS. Check ERPNext proxy/HTTPS forwarding configuration." };
+      }
       return { ok: false, token: "", error: serverError ? `Supervisor authorization failed: ${serverError}` : "Supervisor authorization failed." };
     }
     pendingAdminAuthorization = { tokenHash: hashSecret(token), action, pinScope, terminalId: settings.terminalId, expiresAt: Date.now() + 5 * 60_000 };
@@ -506,7 +691,7 @@ async function syncPosSession(): Promise<{ success: boolean; summary: PosSession
 }
 
 async function getActivePosSession(): Promise<{ success:boolean; session:Record<string,unknown>|null; error:string|null; diagnosticReason:string; apiUser:string; requestedPosProfile:string; entries:Record<string,unknown>[] }>{const s=loadSettings();if(!s.erpnextUrl||!s.apiKey||!s.apiSecret)return {success:false,session:null,error:"Online connection required to load POS session.",diagnosticReason:"Missing ERPNext URL or API credentials",apiUser:"",requestedPosProfile:s.posProfile,entries:[]};try{const base=new URL(s.erpnextUrl).toString().replace(/\/+$/,"");const r=await fetch(`${base}/api/method/aimatic.offline_pos.api.get_active_pos_session?pos_profile=${encodeURIComponent(s.posProfile)}`,{headers:{Authorization:`token ${s.apiKey}:${s.apiSecret}`}});if(!r.ok){const error=await getResponseError(r);return {success:false,session:null,error,diagnosticReason:error,apiUser:"",requestedPosProfile:s.posProfile,entries:[]};}const b=await r.json() as {message?:unknown};const outer=asRecord(b.message);const payload=asRecord(outer?.message)??outer??{};const session=asRecord(payload.session);const entries=(Array.isArray(payload.submitted_open_entries)?payload.submitted_open_entries:Array.isArray(payload.open_entries)?payload.open_entries:[]).map(asRecord).filter((x):x is Record<string,unknown>=>Boolean(x));const diagnosticReason=textValue(payload,"diagnostic_reason")||textValue(payload,"reason")||(session?"Active session returned":"No active POS Opening Entry returned by server");const apiUser=textValue(payload,"authenticated_user")||textValue(payload,"api_user");if(session){const entry=textValue(session,"opening_entry")||textValue(session,"name");if(entry)cachePosSession(entry,s.posProfile,textValue(session,"user"),session,new Date().toISOString());}return {success:true,session,error:null,diagnosticReason,apiUser,requestedPosProfile:textValue(payload,"requested_pos_profile")||textValue(payload,"pos_profile")||s.posProfile,entries};}catch(e){const error=e instanceof Error?e.message:"Unable to load POS session.";return {success:false,session:null,error,diagnosticReason:error,apiUser:"",requestedPosProfile:s.posProfile,entries:[]};}}
-async function startPosSession(input:Record<string,unknown>):Promise<{success:boolean;session:Record<string,unknown>|null;error:string|null}>{const s=loadSettings();if(!s.erpnextUrl||!s.apiKey||!s.apiSecret)return {success:false,session:null,error:"Online connection required to start shift"};try{const base=new URL(s.erpnextUrl).toString().replace(/\/+$/,"");const r=await fetch(`${base}/api/method/aimatic.offline_pos.api.start_pos_session`,{method:"POST",headers:{Authorization:`token ${s.apiKey}:${s.apiSecret}`,"Content-Type":"application/json"},body:JSON.stringify({pos_profile:s.posProfile,opening_balances:JSON.stringify(Array.isArray(input.opening_balances)?input.opening_balances:[])})});if(!r.ok)return {success:false,session:null,error:await getResponseError(r)};const b=await r.json() as {message?:unknown};const raw=asRecord(b.message);const session=asRecord(raw?.message)??raw;const entry=textValue(session,"opening_entry")||textValue(session,"name");if(!session||!entry)return {success:false,session:null,error:"Server returned no Opening Entry."};cachePosSession(entry,s.posProfile,textValue(session,"user"),session,new Date().toISOString());return {success:true,session,error:null};}catch(e){return {success:false,session:null,error:e instanceof Error?e.message:"Unable to start shift."};}}
+async function startPosSession(input:Record<string,unknown>):Promise<{success:boolean;session:Record<string,unknown>|null;error:string|null}>{const s=loadSettings();if(!s.erpnextUrl||!s.apiKey||!s.apiSecret)return {success:false,session:null,error:"Online connection required to start shift"};try{const base=new URL(s.erpnextUrl).toString().replace(/\/+$/,"");const cashierUser=textValue(input,"cashier_user");const r=await fetch(`${base}/api/method/aimatic.offline_pos.api.start_pos_session`,{method:"POST",headers:{Authorization:`token ${s.apiKey}:${s.apiSecret}`,"Content-Type":"application/json"},body:JSON.stringify({pos_profile:s.posProfile,opening_balances:JSON.stringify(Array.isArray(input.opening_balances)?input.opening_balances:[]),cashier_user:cashierUser})});if(!r.ok)return {success:false,session:null,error:await getResponseError(r)};const b=await r.json() as {message?:unknown};const raw=asRecord(b.message);const session=asRecord(raw?.message)??raw;const entry=textValue(session,"opening_entry")||textValue(session,"name");if(!session||!entry)return {success:false,session:null,error:"Server returned no Opening Entry."};cachePosSession(entry,s.posProfile,textValue(session,"user"),session,new Date().toISOString());return {success:true,session,error:null};}catch(e){return {success:false,session:null,error:e instanceof Error?e.message:"Unable to start shift."};}}
 
 interface ShiftPaymentRow { mode_of_payment: string; opening_amount: number; collected_amount: number; expected_amount: number; sale_amount?: number; refund_amount?: number; net_movement?: number; }
 interface ShiftSummary {
@@ -1490,6 +1675,8 @@ app.whenReady().then(() => {
   });
   ipcMain.handle("server:test", () => testServerReachability());
   ipcMain.handle("auth:test", () => testApiAuthentication());
+  ipcMain.handle("cashier:login", (_event, input) => posCashierLogin(asRecord(input) ?? {}));
+  ipcMain.handle("cashier:offline-login", (_event, input) => cashierOfflineLogin(asRecord(input) ?? {}));
   ipcMain.handle("pos-profiles:list", () => loadAvailablePosProfiles());
   ipcMain.handle("pos-profile:load", () => loadPosProfile());
   ipcMain.handle("pos-profile-cache:get-status", () => getPosProfileCacheStatus());
