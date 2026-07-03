@@ -20,6 +20,9 @@ Offline Cashier PIN rules:
 - ERPNext password is never stored.
 - Only salted `scrypt` PIN hash is stored.
 - PIN cache is scoped to terminal, POS Profile, and cashier user.
+- PIN cache also stores `can_offline_sale`, `last_online_verified_at`, and `offline_login_expires_at`.
+- Offline PIN login is blocked after `offline_login_expires_at`.
+- Offline PIN login is blocked if `can_offline_sale` is not true.
 - Wrong offline PIN attempts are delayed and locked after repeated failures.
 - If no offline PIN exists for that cashier, offline sales stay blocked until online cashier login succeeds.
 
@@ -77,9 +80,13 @@ Queued sale payload stores:
 - `terminal_invoice_id`
 - `terminal_id`
 - `pos_profile`
+- `cashier_user`
+- `cashier_full_name`
 - `local_offline_session_id`
 - `opening_entry` as offline placeholder until sync assigns a real one
-- `created_at` through local sale history
+- `offline_authenticated`
+- `offline_auth_method`
+- `created_at`
 - `status = Queued`
 
 ## Offline Header Text
@@ -109,13 +116,20 @@ Do not change item, tax, payment, total, or amount formatting for offline receip
 
 When ERPNext is back online and queued sales exist:
 
-1. Create or reuse one ERPNext POS Opening Entry for the offline batch.
-2. Use zero opening balances unless a future workflow captures real balances.
-3. Assign the real opening entry to all queued sales in the same offline batch.
-4. Sync queued sales in order.
-5. Keep `terminal_invoice_id` unchanged.
-6. Do not auto-close the shift.
-7. User closes shift manually later.
+1. Revalidate terminal API credentials.
+2. Create or reuse one ERPNext POS Opening Entry for the offline batch.
+3. Use zero opening balances unless a future workflow captures real balances.
+4. Assign the real opening entry to all queued sales in the same offline batch.
+5. Sync queued sales in order.
+6. Keep `terminal_invoice_id` unchanged.
+7. Do not auto-close the shift.
+8. User closes shift manually later.
+
+If server rejects a queued sale because the cashier is disabled or no longer allowed:
+
+- Mark the sale `Needs Supervisor Review`.
+- Stop syncing further sales.
+- Do not delete the sale.
 
 If sync fails:
 

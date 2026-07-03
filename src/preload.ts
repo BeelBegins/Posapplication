@@ -35,7 +35,7 @@ contextBridge.exposeInMainWorld("posAPI", {
   getPosProfileCacheStatus: () => ipcRenderer.invoke("pos-profile-cache:get-status"),
   syncPosConfiguration: () => ipcRenderer.invoke("pos-configuration:sync"),
   getCachedPosConfiguration: () => ipcRenderer.invoke("pos-configuration:get-cached"),
-  syncPosSession: () => ipcRenderer.invoke("pos-session:sync"),
+  syncPosSession: (input?: Record<string, unknown>) => ipcRenderer.invoke("pos-session:sync", input),
   getCachedPosSession: () => ipcRenderer.invoke("pos-session:get-cached")
   ,syncItemCatalog: (mode?: string) => ipcRenderer.invoke("catalog:sync", mode)
   ,getCatalogTotals: () => ipcRenderer.invoke("catalog:get-totals")
@@ -66,7 +66,7 @@ contextBridge.exposeInMainWorld("posAPI", {
   ,queueSale: (input: Record<string, unknown>) => ipcRenderer.invoke("sale:queue", input)
   ,syncSaleQueue: () => ipcRenderer.invoke("queue:sync")
   ,getQueueStatus: () => ipcRenderer.invoke("queue:status")
-  ,getActivePosSession: () => ipcRenderer.invoke("pos-session:active")
+  ,getActivePosSession: (input?: Record<string, unknown>) => ipcRenderer.invoke("pos-session:active", input)
   ,startPosSession: (input: Record<string, unknown>) => ipcRenderer.invoke("pos-session:start", input)
   ,onCompleteSaleShortcut: (callback: () => void) => ipcRenderer.on("pos:complete-sale-shortcut", () => callback())
   ,getReceipt: (posInvoice: string) => ipcRenderer.invoke("receipt:get", posInvoice)
@@ -83,7 +83,7 @@ contextBridge.exposeInMainWorld("posAPI", {
   ,setSaleStatus: (id: string, status: string) => ipcRenderer.invoke("sale:set-status", id, status)
   ,getInvoiceForRefund: (invoiceName: string) => ipcRenderer.invoke("refund:get-invoice", invoiceName)
   ,submitPosRefund: (input: Record<string, unknown>) => ipcRenderer.invoke("refund:submit", input)
-  ,getShiftSummary: (openingEntry?: string) => ipcRenderer.invoke("shift:summary", openingEntry)
+  ,getShiftSummary: (input?: Record<string, unknown>) => ipcRenderer.invoke("shift:summary", input)
   ,closeShift: (input: Record<string, unknown>) => ipcRenderer.invoke("shift:close", input)
   ,listShiftHistory: () => ipcRenderer.invoke("shift:history")
   ,getShiftHistory: (openingEntry: string) => ipcRenderer.invoke("shift:history-get", openingEntry)

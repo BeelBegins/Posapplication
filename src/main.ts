@@ -185,6 +185,9 @@ interface CashierLoginResult {
   canStartShift: boolean;
   canRefund: boolean;
   canCloseShift: boolean;
+  canOfflineSale: boolean;
+  offlineLoginExpiresAt: string;
+  requirePinSetup: boolean;
   offlineCached?: boolean;
   offlineLogin?: boolean;
   error: string | null;
@@ -239,9 +242,11 @@ async function posCashierLogin(input: Record<string, unknown>): Promise<CashierL
   const username = textValue(input, "username");
   const password = textValue(input, "password");
   const offlinePin = textValue(input, "offlinePin");
+  const offlinePinConfirm = textValue(input, "offlinePinConfirm");
   const empty: CashierLoginResult = {
     success: false, user: "", fullName: "", roles: [], allowedPosProfiles: [], defaultPosProfile: "",
-    canStartShift: false, canRefund: false, canCloseShift: false, error: null
+    canStartShift: false, canRefund: false, canCloseShift: false, canOfflineSale: false, offlineLoginExpiresAt: "",
+    requirePinSetup: false, error: null
   };
   if (!username || !password) return { ...empty, error: "Cashier username and password are required." };
   if (!settings.erpnextUrl || !settings.apiKey || !settings.apiSecret || !settings.terminalId || !settings.posProfile) {
@@ -273,6 +278,9 @@ async function posCashierLogin(input: Record<string, unknown>): Promise<CashierL
     const fullName = textValue(payload, "full_name") || textValue(payload, "fullName") || user;
     const roles = Array.isArray(payload.roles) ? payload.roles.map(String) : [];
     const allowedPosProfiles = Array.isArray(payload.allowed_pos_profiles) ? payload.allowed_pos_profiles.map(String) : [];
+    const canOfflineSale = payload.can_offline_sale === true;
+    const offlineLoginExpiresAt = textValue(payload, "offline_login_expires_at");
+    const requirePinSetup = payload.require_pin_setup === true || (canOfflineSale && !cashierCacheExists(user));
     const result: CashierLoginResult = {
       success: true,
       user,
@@ -283,12 +291,18 @@ async function posCashierLogin(input: Record<string, unknown>): Promise<CashierL
       canStartShift: Boolean(payload.can_start_shift ?? true),
       canRefund: Boolean(payload.can_refund ?? false),
       canCloseShift: Boolean(payload.can_close_shift ?? false),
+      canOfflineSale,
+      offlineLoginExpiresAt,
+      requirePinSetup,
       error: null
     };
+    if (canOfflineSale && requirePinSetup && !offlinePin) return { ...empty, requirePinSetup: true, error: "Create and confirm Offline Cashier PIN to enable offline selling for this cashier." };
+    if (offlinePin && offlinePin !== offlinePinConfirm) return { ...empty, requirePinSetup: true, error: "Offline Cashier PIN confirmation does not match." };
     if (offlinePin) {
       const saved = cacheCashierOfflinePin(result, offlinePin);
       if (!saved.ok) return { ...empty, error: saved.error };
       result.offlineCached = true;
+      result.requirePinSetup = false;
     }
     return result;
   } catch (error) {
@@ -300,6 +314,10 @@ function cashierCacheKey(user: string): string {
   const settings = loadSettings();
   const identity = `${settings.terminalId.trim()}|${settings.posProfile.trim()}|${user.trim().toLowerCase()}`;
   return `cashier_offline_v1_${hashSecret(identity)}`;
+}
+
+function cashierCacheExists(user: string): boolean {
+  return Boolean(getMeta(cashierCacheKey(user)));
 }
 
 function cashierFailedKey(user: string): string {
@@ -315,6 +333,8 @@ function cacheCashierOfflinePin(cashier: CashierLoginResult, pin: string): { ok:
   const formatError = validatePinFormat(pin);
   if (formatError) return { ok: false, error: `Offline Cashier PIN: ${formatError}` };
   if (!settings.terminalId || !settings.posProfile || !cashier.user) return { ok: false, error: "Terminal and POS Profile are required before saving offline cashier PIN." };
+  if (!cashier.canOfflineSale) return { ok: false, error: "This cashier is not allowed to use offline sales." };
+  if (!cashier.offlineLoginExpiresAt) return { ok: false, error: "Server did not return offline login expiry for this cashier." };
   const cached = {
     user: cashier.user,
     fullName: cashier.fullName,
@@ -324,10 +344,12 @@ function cacheCashierOfflinePin(cashier: CashierLoginResult, pin: string): { ok:
     canStartShift: cashier.canStartShift,
     canRefund: cashier.canRefund,
     canCloseShift: cashier.canCloseShift,
+    canOfflineSale: cashier.canOfflineSale,
+    lastOnlineVerifiedAt: new Date().toISOString(),
+    offlineLoginExpiresAt: cashier.offlineLoginExpiresAt,
     terminalId: settings.terminalId,
     posProfile: settings.posProfile,
-    pinHash: pinHash(pin),
-    cachedAt: new Date().toISOString()
+    pinHash: pinHash(pin)
   };
   setMeta(cashierCacheKey(cashier.user), JSON.stringify(cached));
   setMeta(cashierFailedKey(cashier.user), "0");
@@ -341,7 +363,8 @@ async function cashierOfflineLogin(input: Record<string, unknown>): Promise<Cash
   const pin = textValue(input, "pin");
   const empty: CashierLoginResult = {
     success: false, user: "", fullName: "", roles: [], allowedPosProfiles: [], defaultPosProfile: "",
-    canStartShift: false, canRefund: false, canCloseShift: false, error: null
+    canStartShift: false, canRefund: false, canCloseShift: false, canOfflineSale: false, offlineLoginExpiresAt: "",
+    requirePinSetup: false, error: null
   };
   if (!username || !pin) return { ...empty, error: "Cashier username and offline PIN are required." };
   if (!settings.terminalId || !settings.posProfile) return { ...empty, error: "Terminal settings are required before offline cashier login." };
@@ -353,7 +376,7 @@ async function cashierOfflineLogin(input: Record<string, unknown>): Promise<Cash
 
   await new Promise((resolve) => setTimeout(resolve, ADMIN_PIN_DELAY_MS));
   const raw = getMeta(cashierCacheKey(username));
-  if (!raw) return { ...empty, error: "No offline cashier PIN is saved for this cashier on this terminal and POS Profile." };
+  if (!raw) return { ...empty, error: "First cashier login requires internet. Login online once to enable offline selling for this cashier." };
 
   let cached: Record<string, unknown>;
   try {
@@ -365,6 +388,13 @@ async function cashierOfflineLogin(input: Record<string, unknown>): Promise<Cash
   const stored = textValue(cached, "pinHash");
   if (textValue(cached, "terminalId") !== settings.terminalId || textValue(cached, "posProfile") !== settings.posProfile || !stored) {
     return { ...empty, error: "Offline cashier PIN is not valid for this terminal or POS Profile." };
+  }
+  const allowedProfiles = Array.isArray(cached.allowedPosProfiles) ? cached.allowedPosProfiles.map(String) : [];
+  if (allowedProfiles.length && !allowedProfiles.includes(settings.posProfile)) return { ...empty, error: `Cashier is not allowed for POS Profile ${settings.posProfile}.` };
+  if (cached.canOfflineSale !== true) return { ...empty, error: "Cashier is not allowed to sell offline." };
+  const expiresAt = textValue(cached, "offlineLoginExpiresAt");
+  if (!expiresAt || Number.isNaN(Date.parse(expiresAt)) || Date.parse(expiresAt) <= Date.now()) {
+    return { ...empty, error: "Offline cashier login has expired. Login online once to renew offline selling for this cashier." };
   }
 
   if (!verifyPinHash(pin, stored)) {
@@ -389,6 +419,9 @@ async function cashierOfflineLogin(input: Record<string, unknown>): Promise<Cash
     canStartShift: Boolean(cached.canStartShift),
     canRefund: Boolean(cached.canRefund),
     canCloseShift: Boolean(cached.canCloseShift),
+    canOfflineSale: Boolean(cached.canOfflineSale),
+    offlineLoginExpiresAt: expiresAt,
+    requirePinSetup: false,
     offlineLogin: true,
     error: null
   };
@@ -649,49 +682,60 @@ function summarizePosSession(session: Record<string, unknown> | null): PosSessio
   };
 }
 
-async function syncPosSession(): Promise<{ success: boolean; summary: PosSessionSummary; error: string | null }> {
-  const settings = loadSettings();
-  if (!settings.erpnextUrl.trim() || !settings.apiKey.trim() || !settings.apiSecret.trim() || !settings.posProfile.trim()) {
-    return { success: false, summary: summarizePosSession(null), error: "ERPNext URL, API Key, API Secret, and POS Profile are required." };
-  }
+async function syncPosSession(input: Record<string, unknown> = {}): Promise<{ success: boolean; summary: PosSessionSummary; error: string | null }> {
+  const result = await getActivePosSession(input);
+  return { success: result.success, summary: summarizePosSession(result.session), error: result.error };
+}
+
+async function getActivePosSession(input: Record<string, unknown> = {}): Promise<{ success:boolean; session:Record<string,unknown>|null; error:string|null; diagnosticReason:string; apiUser:string; requestedPosProfile:string; entries:Record<string,unknown>[] }> {
+  const s = loadSettings();
+  const cashierUser = textValue(input, "cashier_user");
+  if (!s.erpnextUrl || !s.apiKey || !s.apiSecret) return { success:false, session:null, error:"Online connection required to load POS session.", diagnosticReason:"Missing ERPNext URL or API credentials", apiUser:"", requestedPosProfile:s.posProfile, entries:[] };
+  if (!cashierUser) return { success:false, session:null, error:"Cashier user is required to load POS session.", diagnosticReason:"Cashier user missing", apiUser:"", requestedPosProfile:s.posProfile, entries:[] };
   try {
-    const baseUrl = new URL(settings.erpnextUrl.trim()).toString().replace(/\/+$/, "");
-    const user = await getLoggedInUser(baseUrl, settings.apiKey, settings.apiSecret);
-    const filters = JSON.stringify([
-      ["pos_profile", "=", settings.posProfile],
-      ["user", "=", user],
-      ["status", "=", "Open"],
-      ["docstatus", "=", 1]
-    ]);
-    const query = new URLSearchParams({ filters, fields: '["name"]', order_by: "modified desc", limit_page_length: "1" });
-    const sessionController = new AbortController();
-    const sessionTimeout = setTimeout(() => sessionController.abort(), 5_000);
-    const response = await fetch(`${baseUrl}/api/resource/POS%20Opening%20Entry?${query.toString()}`, {
-      headers: { Authorization: `token ${settings.apiKey}:${settings.apiSecret}` },
-      signal: sessionController.signal
-    });
-    clearTimeout(sessionTimeout);
-    if (!response.ok) {
-      throw new Error(await getResponseError(response));
+    const base = new URL(s.erpnextUrl).toString().replace(/\/+$/, "");
+    const query = new URLSearchParams({ pos_profile: s.posProfile, cashier_user: cashierUser });
+    const r = await fetch(`${base}/api/method/aimatic.offline_pos.api.get_active_pos_session?${query.toString()}`, { headers:{ Authorization:`token ${s.apiKey}:${s.apiSecret}` } });
+    if (!r.ok) {
+      const error = await getResponseError(r);
+      return { success:false, session:null, error, diagnosticReason:error, apiUser:"", requestedPosProfile:s.posProfile, entries:[] };
     }
-    const body = await response.json() as { data?: unknown };
-    const entry = Array.isArray(body.data) ? asRecord(body.data[0]) : null;
-    const openingEntry = textValue(entry, "name");
-    if (!openingEntry) {
-      return { success: true, summary: summarizePosSession(null), error: null };
+    const b = await r.json() as { message?: unknown };
+    const outer = asRecord(b.message);
+    const payload = asRecord(outer?.message) ?? outer ?? {};
+    const session = asRecord(payload.session);
+    const entries = (Array.isArray(payload.submitted_open_entries) ? payload.submitted_open_entries : Array.isArray(payload.open_entries) ? payload.open_entries : []).map(asRecord).filter((x): x is Record<string, unknown> => Boolean(x));
+    const diagnosticReason = textValue(payload, "diagnostic_reason") || textValue(payload, "reason") || (session ? "Active session returned" : "No active POS Opening Entry returned by server");
+    const apiUser = textValue(payload, "authenticated_user") || textValue(payload, "api_user");
+    if (session) {
+      const entry = textValue(session, "opening_entry") || textValue(session, "name");
+      if (entry) cachePosSession(entry, s.posProfile, textValue(session, "user") || cashierUser, session, new Date().toISOString());
     }
-    const document = await fetchErpResource(baseUrl, settings.apiKey, settings.apiSecret, "POS Opening Entry", openingEntry);
-    const syncedAt = new Date().toISOString();
-    const cachedSession = { ...document, synced_at: syncedAt };
-    cachePosSession(openingEntry, settings.posProfile, user, cachedSession, syncedAt);
-    return { success: true, summary: summarizePosSession(cachedSession), error: null };
-  } catch (error) {
-    return { success: false, summary: summarizePosSession(null), error: error instanceof Error ? error.message : "POS Session Sync Failed." };
+    return { success:true, session, error:null, diagnosticReason, apiUser, requestedPosProfile:textValue(payload, "requested_pos_profile") || textValue(payload, "pos_profile") || s.posProfile, entries };
+  } catch (e) {
+    const error = e instanceof Error ? e.message : "Unable to load POS session.";
+    return { success:false, session:null, error, diagnosticReason:error, apiUser:"", requestedPosProfile:s.posProfile, entries:[] };
   }
 }
 
-async function getActivePosSession(): Promise<{ success:boolean; session:Record<string,unknown>|null; error:string|null; diagnosticReason:string; apiUser:string; requestedPosProfile:string; entries:Record<string,unknown>[] }>{const s=loadSettings();if(!s.erpnextUrl||!s.apiKey||!s.apiSecret)return {success:false,session:null,error:"Online connection required to load POS session.",diagnosticReason:"Missing ERPNext URL or API credentials",apiUser:"",requestedPosProfile:s.posProfile,entries:[]};try{const base=new URL(s.erpnextUrl).toString().replace(/\/+$/,"");const r=await fetch(`${base}/api/method/aimatic.offline_pos.api.get_active_pos_session?pos_profile=${encodeURIComponent(s.posProfile)}`,{headers:{Authorization:`token ${s.apiKey}:${s.apiSecret}`}});if(!r.ok){const error=await getResponseError(r);return {success:false,session:null,error,diagnosticReason:error,apiUser:"",requestedPosProfile:s.posProfile,entries:[]};}const b=await r.json() as {message?:unknown};const outer=asRecord(b.message);const payload=asRecord(outer?.message)??outer??{};const session=asRecord(payload.session);const entries=(Array.isArray(payload.submitted_open_entries)?payload.submitted_open_entries:Array.isArray(payload.open_entries)?payload.open_entries:[]).map(asRecord).filter((x):x is Record<string,unknown>=>Boolean(x));const diagnosticReason=textValue(payload,"diagnostic_reason")||textValue(payload,"reason")||(session?"Active session returned":"No active POS Opening Entry returned by server");const apiUser=textValue(payload,"authenticated_user")||textValue(payload,"api_user");if(session){const entry=textValue(session,"opening_entry")||textValue(session,"name");if(entry)cachePosSession(entry,s.posProfile,textValue(session,"user"),session,new Date().toISOString());}return {success:true,session,error:null,diagnosticReason,apiUser,requestedPosProfile:textValue(payload,"requested_pos_profile")||textValue(payload,"pos_profile")||s.posProfile,entries};}catch(e){const error=e instanceof Error?e.message:"Unable to load POS session.";return {success:false,session:null,error,diagnosticReason:error,apiUser:"",requestedPosProfile:s.posProfile,entries:[]};}}
-async function startPosSession(input:Record<string,unknown>):Promise<{success:boolean;session:Record<string,unknown>|null;error:string|null}>{const s=loadSettings();if(!s.erpnextUrl||!s.apiKey||!s.apiSecret)return {success:false,session:null,error:"Online connection required to start shift"};try{const base=new URL(s.erpnextUrl).toString().replace(/\/+$/,"");const cashierUser=textValue(input,"cashier_user");const r=await fetch(`${base}/api/method/aimatic.offline_pos.api.start_pos_session`,{method:"POST",headers:{Authorization:`token ${s.apiKey}:${s.apiSecret}`,"Content-Type":"application/json"},body:JSON.stringify({pos_profile:s.posProfile,opening_balances:JSON.stringify(Array.isArray(input.opening_balances)?input.opening_balances:[]),cashier_user:cashierUser})});if(!r.ok)return {success:false,session:null,error:await getResponseError(r)};const b=await r.json() as {message?:unknown};const raw=asRecord(b.message);const session=asRecord(raw?.message)??raw;const entry=textValue(session,"opening_entry")||textValue(session,"name");if(!session||!entry)return {success:false,session:null,error:"Server returned no Opening Entry."};cachePosSession(entry,s.posProfile,textValue(session,"user"),session,new Date().toISOString());return {success:true,session,error:null};}catch(e){return {success:false,session:null,error:e instanceof Error?e.message:"Unable to start shift."};}}
+async function startPosSession(input:Record<string,unknown>):Promise<{success:boolean;session:Record<string,unknown>|null;error:string|null}>{
+  const s=loadSettings();
+  if(!s.erpnextUrl||!s.apiKey||!s.apiSecret)return {success:false,session:null,error:"Online connection required to start shift"};
+  const cashierUser=textValue(input,"cashier_user");
+  if(!cashierUser)return {success:false,session:null,error:"Cashier user is required to start shift"};
+  try{
+    const base=new URL(s.erpnextUrl).toString().replace(/\/+$/,"");
+    const r=await fetch(`${base}/api/method/aimatic.offline_pos.api.start_pos_session`,{method:"POST",headers:{Authorization:`token ${s.apiKey}:${s.apiSecret}`,"Content-Type":"application/json"},body:JSON.stringify({pos_profile:s.posProfile,opening_balances:JSON.stringify(Array.isArray(input.opening_balances)?input.opening_balances:[]),cashier_user:cashierUser,local_offline_session_id:textValue(input,"local_offline_session_id")})});
+    if(!r.ok)return {success:false,session:null,error:await getResponseError(r)};
+    const b=await r.json() as {message?:unknown};
+    const raw=asRecord(b.message);
+    const session=asRecord(raw?.message)??raw;
+    const entry=textValue(session,"opening_entry")||textValue(session,"name");
+    if(!session||!entry)return {success:false,session:null,error:"Server returned no Opening Entry."};
+    cachePosSession(entry,s.posProfile,textValue(session,"user")||cashierUser,session,new Date().toISOString());
+    return {success:true,session,error:null};
+  }catch(e){return {success:false,session:null,error:e instanceof Error?e.message:"Unable to start shift."};}
+}
 
 interface ShiftPaymentRow { mode_of_payment: string; opening_amount: number; collected_amount: number; expected_amount: number; sale_amount?: number; refund_amount?: number; net_movement?: number; }
 interface ShiftSummary {
@@ -746,13 +790,18 @@ function getLocalShiftSummary(openingEntry?: string): { success: boolean; summar
   return { success: true, summary, error: null };
 }
 
-async function getShiftSummary(openingEntry?: string): Promise<{ success: boolean; summary: ShiftSummary | null; error: string | null }> {
+async function getShiftSummary(input: string | Record<string, unknown> = {}): Promise<{ success: boolean; summary: ShiftSummary | null; error: string | null }> {
   const s = loadSettings();
+  const request = typeof input === "string" ? { opening_entry: input } : input;
+  const openingEntry = textValue(request, "opening_entry");
+  const cashierUser = textValue(request, "cashier_user");
   if (!s.erpnextUrl || !s.apiKey || !s.apiSecret) return getLocalShiftSummary(openingEntry);
   if (!openingEntry) return { success: false, summary: null, error: "Opening Entry is required." };
+  if (!cashierUser) return { success: false, summary: null, error: "Cashier user is required to load closing summary." };
   try {
     const base = new URL(s.erpnextUrl).toString().replace(/\/+$/, "");
-    const r = await fetch(`${base}/api/method/aimatic.offline_pos.api.get_pos_closing_summary?opening_entry=${encodeURIComponent(openingEntry)}`, {
+    const query = new URLSearchParams({ opening_entry: openingEntry, cashier_user: cashierUser });
+    const r = await fetch(`${base}/api/method/aimatic.offline_pos.api.get_pos_closing_summary?${query.toString()}`, {
       headers: { Authorization: `token ${s.apiKey}:${s.apiSecret}` }
     });
     if (!r.ok) return { success: false, summary: null, error: await getResponseError(r) };
@@ -770,17 +819,19 @@ async function closeShift(input: Record<string, unknown>): Promise<{ success: bo
   const s = loadSettings();
   if (!s.erpnextUrl || !s.apiKey || !s.apiSecret) return { success: false, closingEntry: "", response: null, error: "Online connection required to close shift." };
   const openingEntry = textValue(input, "opening_entry");
+  const cashierUser = textValue(input, "cashier_user");
   if (!openingEntry) return { success: false, closingEntry: "", response: null, error: "Opening Entry is required to close the shift." };
+  if (!cashierUser) return { success: false, closingEntry: "", response: null, error: "Cashier user is required to close the shift." };
   const closingBalances = Array.isArray(input.closing_balances) ? input.closing_balances : [];
   const notes = textValue(input, "notes");
   // Snapshot the local expected/opening figures before the close so we can persist shift history on success.
-  const pre = await getShiftSummary(openingEntry);
+  const pre = await getShiftSummary({ opening_entry: openingEntry, cashier_user: cashierUser });
   try {
     const base = new URL(s.erpnextUrl).toString().replace(/\/+$/, "");
     const r = await fetch(`${base}/api/method/aimatic.offline_pos.api.close_pos_session`, {
       method: "POST",
       headers: { Authorization: `token ${s.apiKey}:${s.apiSecret}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ opening_entry: openingEntry, closing_balances: JSON.stringify(closingBalances), notes })
+      body: JSON.stringify({ opening_entry: openingEntry, cashier_user: cashierUser, closing_balances: JSON.stringify(closingBalances), notes })
     });
     if (!r.ok) return { success: false, closingEntry: "", response: null, error: await getResponseError(r) };
     const b = await r.json() as { message?: unknown };
@@ -849,7 +900,25 @@ function buildSalePayload(input: Record<string, unknown>): Record<string, unknow
   const id = String(input.terminal_invoice_id || getTerminalInvoiceId());
   const identity = getCartIdentity();
   const localOfflineSessionId = String(input.local_offline_session_id || (identity.openingEntry.startsWith("OFFLINE-") ? identity.openingEntry : ""));
-  return { terminal_invoice_id: id, terminal_id: identity.terminalId, pos_profile: settings.posProfile, opening_entry: identity.openingEntry, local_offline_session_id: localOfflineSessionId, customer: String(input.customer ?? ""), items: Array.isArray(input.items) ? input.items : [], payments: Array.isArray(input.payments) ? input.payments : [], coupon_code: String(input.coupon_code ?? ""), redeem_loyalty_points: Boolean(input.redeem_loyalty_points), loyalty_points: Number(input.loyalty_points ?? 0), estimated_total: Number(input.estimated_total ?? 0) };
+  return {
+    terminal_invoice_id: id,
+    terminal_id: identity.terminalId,
+    pos_profile: settings.posProfile,
+    opening_entry: identity.openingEntry,
+    local_offline_session_id: localOfflineSessionId,
+    cashier_user: String(input.cashier_user ?? ""),
+    cashier_full_name: String(input.cashier_full_name ?? ""),
+    offline_authenticated: Boolean(input.offline_authenticated),
+    offline_auth_method: String(input.offline_auth_method ?? ""),
+    created_at: String(input.created_at ?? new Date().toISOString()),
+    customer: String(input.customer ?? ""),
+    items: Array.isArray(input.items) ? input.items : [],
+    payments: Array.isArray(input.payments) ? input.payments : [],
+    coupon_code: String(input.coupon_code ?? ""),
+    redeem_loyalty_points: Boolean(input.redeem_loyalty_points),
+    loyalty_points: Number(input.loyalty_points ?? 0),
+    estimated_total: Number(input.estimated_total ?? 0)
+  };
 }
 // A local stand-in for the server response so the receipt + history have coherent data until the sale syncs.
 function buildProvisionalResponse(id: string, payload: Record<string, unknown>): Record<string, unknown> {
@@ -870,13 +939,20 @@ async function openingEntryForQueuedPayload(payload: Record<string, unknown>, ca
   const current = textValue(payload, "opening_entry");
   const batch = textValue(payload, "local_offline_session_id");
   if (!batch || !current.startsWith("OFFLINE-")) return { openingEntry: current || null, error: null };
-  if (cache.has(batch)) return { openingEntry: cache.get(batch) || null, error: null };
-  const result = await startPosSession({ opening_balances: [] });
+  const cashierUser = textValue(payload, "cashier_user");
+  if (!cashierUser) return { openingEntry: null, error: "Queued sale is missing cashier_user." };
+  const cacheKey = `${batch}|${cashierUser}`;
+  if (cache.has(cacheKey)) return { openingEntry: cache.get(cacheKey) || null, error: null };
+  const result = await startPosSession({ opening_balances: [], cashier_user: cashierUser, local_offline_session_id: batch });
   if (!result.success || !result.session) return { openingEntry: null, error: result.error || "Unable to create POS Opening Entry for offline batch." };
   const openingEntry = textValue(result.session, "opening_entry") || textValue(result.session, "name");
   if (!openingEntry) return { openingEntry: null, error: "Server returned no POS Opening Entry for offline batch." };
-  cache.set(batch, openingEntry);
+  cache.set(cacheKey, openingEntry);
   return { openingEntry, error: null };
+}
+
+function isCashierPermissionSyncError(message: string): boolean {
+  return /cashier|user|employee|permission|disabled|not allowed|not permitted|pos profile/i.test(message);
 }
 
 // Replay queued offline sales to the server in order. Idempotent via terminal_invoice_id (server dedups).
@@ -884,6 +960,8 @@ async function syncSaleQueue(): Promise<{ synced: number; failed: number; remain
   const settings = loadSettings();
   const counts0 = getQueueCounts();
   if (!settings.erpnextUrl || !settings.apiKey || !settings.apiSecret) return { synced: 0, failed: 0, remaining: counts0.queued, error: "ERPNext URL and API credentials are required." };
+  const auth = await testApiAuthentication();
+  if (!auth.success) return { synced: 0, failed: 0, remaining: counts0.queued, error: "Terminal API credentials could not be revalidated." };
   let base: string;
   try { base = new URL(settings.erpnextUrl).toString().replace(/\/+$/, ""); } catch { return { synced: 0, failed: 0, remaining: counts0.queued, error: "Invalid ERPNext URL." }; }
   let synced = 0; let failed = 0; let error: string | null = null;
@@ -899,7 +977,15 @@ async function syncSaleQueue(): Promise<{ synced: number; failed: number; remain
       let parsed: { message?: unknown; data?: unknown } = {};
       try { parsed = JSON.parse(rawBody) as { message?: unknown; data?: unknown }; } catch { /* non-JSON */ }
       const result = asRecord(parsed.message) ?? asRecord(parsed.data) ?? {};
-      if (!response.ok) { failed += 1; error = formatResponseError(response.status, response.statusText, rawBody); break; }
+      if (!response.ok) {
+        failed += 1;
+        error = formatResponseError(response.status, response.statusText, rawBody);
+        if (isCashierPermissionSyncError(error)) {
+          setSaleHistoryStatus(sale.terminalInvoiceId, "Needs Supervisor Review");
+          error = `${error}. Queued sale marked Needs Supervisor Review.`;
+        }
+        break;
+      }
       saveSaleHistory(sale.terminalInvoiceId, "Submitted", payload, result); synced += 1;
     } catch (e) { error = e instanceof Error ? e.message : "Still offline."; break; }
   }
@@ -1682,9 +1768,9 @@ app.whenReady().then(() => {
   ipcMain.handle("pos-profile-cache:get-status", () => getPosProfileCacheStatus());
   ipcMain.handle("pos-configuration:sync", () => syncPosConfiguration());
   ipcMain.handle("pos-configuration:get-cached", () => getCachedPosConfiguration());
-  ipcMain.handle("pos-session:sync", () => getActivePosSession());
+  ipcMain.handle("pos-session:sync", (_event, input) => syncPosSession(asRecord(input) ?? {}));
   ipcMain.handle("pos-session:get-cached", () => getCachedSessionSummary());
-  ipcMain.handle("pos-session:active", () => getActivePosSession());
+  ipcMain.handle("pos-session:active", (_event, input) => getActivePosSession(asRecord(input) ?? {}));
   ipcMain.handle("pos-session:start", (_event,input) => startPosSession(asRecord(input)??{}));
   ipcMain.handle("catalog:sync", (event, mode) => syncItemCatalog((message) => event.sender.send("catalog:progress", message), mode === "full" ? "full" : "auto"));
   ipcMain.handle("catalog:get-totals", () => getCatalogTotals());
@@ -1728,7 +1814,7 @@ app.whenReady().then(() => {
   ipcMain.handle("sale:set-status", (_event, id, status) => setSaleHistoryStatus(String(id), String(status)));
   ipcMain.handle("refund:get-invoice", (_event, invoiceName) => getInvoiceForRefund(String(invoiceName)));
   ipcMain.handle("refund:submit", (_event, input) => submitPosRefund(asRecord(input) ?? {}));
-  ipcMain.handle("shift:summary", (_event, openingEntry) => getShiftSummary(openingEntry ? String(openingEntry) : undefined));
+  ipcMain.handle("shift:summary", (_event, input) => getShiftSummary(asRecord(input) ?? (typeof input === "string" ? input : {})));
   ipcMain.handle("shift:close", (_event, input) => closeShift(asRecord(input) ?? {}));
   ipcMain.handle("shift:history", () => getShiftHistoryList());
   ipcMain.handle("shift:history-get", (_event, openingEntry) => getShiftHistory(String(openingEntry ?? "")));
