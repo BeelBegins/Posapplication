@@ -62,6 +62,7 @@ Electron must never call FBR directly.
 - Cold offline cashier login uses a local Offline Cashier PIN only after prior online ERPNext cashier verification.
 - Store only salted `scrypt` hashes for local PINs.
 - Offline Cashier PIN is scoped to terminal, POS Profile, and cashier user.
+- Offline cashier cache stores cashier identity, allowed POS Profiles, permission flags, last online verification time, offline login expiry, and local PIN hash.
 - Do not display the terminal API user as the cashier.
 - Do not store supervisor passwords.
 - Do not hardcode shared production passwords.

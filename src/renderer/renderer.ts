@@ -19,7 +19,7 @@ interface PosAPI {
   getPosProfileCacheStatus: () => Promise<{ isReady: boolean; lastSynced: string | null }>;
   syncPosConfiguration: () => Promise<{ success: boolean; summary: PosConfigurationSummary | null; error: string | null }>;
   getCachedPosConfiguration: () => Promise<PosConfigurationSummary | null>;
-  syncPosSession: () => Promise<{ success: boolean; summary: PosSessionSummary; error: string | null }>;
+  syncPosSession: (input?: Record<string, unknown>) => Promise<{ success: boolean; summary: PosSessionSummary; error: string | null }>;
   getCachedPosSession: () => Promise<PosSessionSummary>;
   syncItemCatalog: (mode?: "auto" | "full") => Promise<{ success: boolean; totals: CatalogTotals; barcodeError: string | null; error: string | null }>;
   syncFbrConfig: (mode?: "auto" | "full") => Promise<{ success: boolean; state: { serviceFee: number }; error: string | null }>;
@@ -47,7 +47,7 @@ interface PosAPI {
   syncSaleQueue: () => Promise<{synced:number;failed:number;remaining:number;error:string|null}>;
   getQueueStatus: () => Promise<{queued:number;failed:number}>;
   onCompleteSaleShortcut: (callback: () => void) => void;
-  getActivePosSession: () => Promise<{success:boolean;session:Record<string,unknown>|null;error:string|null;diagnosticReason:string;apiUser:string;requestedPosProfile:string;entries:Record<string,unknown>[]}>;
+  getActivePosSession: (input?: Record<string,unknown>) => Promise<{success:boolean;session:Record<string,unknown>|null;error:string|null;diagnosticReason:string;apiUser:string;requestedPosProfile:string;entries:Record<string,unknown>[]}>;
   startPosSession: (input: Record<string,unknown>) => Promise<{success:boolean;session:Record<string,unknown>|null;error:string|null}>;
   getCustomerBenefits: (customerName: string) => Promise<{ loyaltyProgram: string | null; availablePoints: number; conversionFactor: number; error: string | null }>;
   validateCoupon: (couponCode: string) => Promise<{ couponName: string | null; discountAmount: number; error: string | null }>;
@@ -67,7 +67,7 @@ interface PosAPI {
   setSaleStatus: (id: string, status: string) => Promise<void>;
   getInvoiceForRefund: (invoiceName: string) => Promise<{ data: Record<string, unknown> | null; error: string | null }>;
   submitPosRefund: (input: Record<string, unknown>) => Promise<{ result: Record<string, unknown> | null; error: string | null }>;
-  getShiftSummary: (openingEntry?: string) => Promise<{ success: boolean; summary: ShiftSummary | null; error: string | null }>;
+  getShiftSummary: (input?: Record<string, unknown>) => Promise<{ success: boolean; summary: ShiftSummary | null; error: string | null }>;
   closeShift: (input: Record<string, unknown>) => Promise<{ success: boolean; closingEntry: string; response: Record<string, unknown> | null; error: string | null }>;
   listShiftHistory: () => Promise<ShiftHistoryRow[]>;
   getShiftHistory: (openingEntry: string) => Promise<ShiftHistoryRow | null>;
@@ -89,7 +89,7 @@ interface PosAPI {
 interface ReleaseEntry { tag: string; version: string; name: string; notes: string; publishedAt: string; prerelease: boolean; exeName: string; exeUrl: string; exeApiUrl: string; }
 
 interface ShiftPaymentRow { mode_of_payment: string; opening_amount: number; collected_amount: number; expected_amount: number; sale_amount?: number; refund_amount?: number; net_movement?: number; }
-interface CashierLoginResult { success: boolean; user: string; fullName: string; roles: string[]; allowedPosProfiles: string[]; defaultPosProfile: string; canStartShift: boolean; canRefund: boolean; canCloseShift: boolean; offlineCached?: boolean; offlineLogin?: boolean; error: string | null; }
+interface CashierLoginResult { success: boolean; user: string; fullName: string; roles: string[]; allowedPosProfiles: string[]; defaultPosProfile: string; canStartShift: boolean; canRefund: boolean; canCloseShift: boolean; canOfflineSale: boolean; offlineLoginExpiresAt: string; requirePinSetup: boolean; offlineCached?: boolean; offlineLogin?: boolean; error: string | null; }
 interface CashierSession extends CashierLoginResult { loginTime: string; }
 interface ShiftSummary { openingEntry: string; posProfile: string; user: string; company: string; periodStart: string; postingDate: string; status: string; payments: ShiftPaymentRow[]; invoiceCount: number; netSales: number; refunds: number; totalOpening: number; totalExpected: number; isEstimate: boolean; }
 interface ShiftHistoryRow { openingEntry: string; closingEntry: string | null; posProfile: string; cashier: string; company: string; openedAt: string | null; closedAt: string | null; openingCash: number; expectedCash: number; actualCash: number; difference: number; netSales: number; status: string; summary: Record<string, unknown> | null; createdAt: string; }
@@ -455,6 +455,7 @@ function showScreen(screen: PosScreen): void {
   if (screen === "pos") focusCart(true);
 }
 function cashierDisplay(): string { return cashierSession ? (cashierSession.fullName || cashierSession.user) : ""; }
+function cashierRequest(): Record<string, unknown> { return cashierSession ? { cashier_user: cashierSession.user } : {}; }
 function sameUser(a: string, b: string): boolean { return a.trim().toLowerCase() === b.trim().toLowerCase(); }
 function updatePosHeader(): void { const set = (id: string, value: string) => { const e = document.querySelector<HTMLElement>(id); if (e) e.textContent = value || "—"; }; set("#pos-branch", (document.querySelector<HTMLInputElement>("#branch")?.value ?? "")); set("#pos-profile-name", document.querySelector<HTMLSelectElement>("#pos-profile")?.value ?? ""); set("#pos-terminal", document.querySelector<HTMLInputElement>("#terminal-id")?.value ?? ""); set("#pos-cashier", cashierDisplay()); set("#pos-opening-entry", document.querySelector<HTMLElement>("#session-opening-entry")?.textContent ?? ""); }
 function showCustomer(): void { const e=document.querySelector<HTMLElement>("#pos-customer"); if(e)e.textContent=selectedCustomer?`${selectedCustomer.customer_name || selectedCustomer.name}${navigator.onLine?"":" (Cached)"}`:"—"; }
@@ -558,6 +559,8 @@ async function startShift(): Promise<void> {
   const button = document.querySelector<HTMLButtonElement>("#start-shift");
   if (startShiftInFlight) return;                                          // prevent duplicate submission
   if (!cashierSession) { if (message) message.textContent = "Cashier login is required before starting shift."; showScreen("cashier-login"); return; }
+  if (cashierSession.offlineLogin) { if (message) message.textContent = "Start Shift requires online cashier login."; return; }
+  if (!cashierSession.canStartShift) { if (message) message.textContent = "This cashier is not allowed to start shift."; return; }
   if (!isOnline()) { if (message) message.textContent = "Online connection required to start shift"; return; }
   const balances = [...document.querySelectorAll<HTMLInputElement>("#shift-opening-amounts input")]
     .map((input) => ({ mode_of_payment: input.dataset.mode ?? "", opening_amount: Number(input.value) || 0 }))
@@ -664,6 +667,9 @@ async function printShiftSummary(): Promise<void> {
 
 async function showCloseShift(): Promise<void> {
   const message = document.querySelector<HTMLElement>("#close-shift-message");
+  if (!cashierSession) { cartMessage("Cashier login required."); await showCashierLogin("Cashier login required."); return; }
+  if (!cashierSession.canCloseShift) { cartMessage("This cashier is not allowed to close shift."); showScreen("pos"); return; }
+  if (cashierSession?.offlineLogin) { cartMessage("Close Shift requires online cashier login."); showScreen("pos"); return; }
   if (!isOnline()) { if (message) message.textContent = "Online connection required to close shift"; showSessionInvalid("Server is offline"); return; }
   // Validate there is an active shift before opening the form.
   if (!(await validateSession("close-shift"))) { showScreen("pos"); showSessionInvalid(sessionState.reason); return; }
@@ -671,7 +677,7 @@ async function showCloseShift(): Promise<void> {
   // Drain any queued offline sales first so expected totals (server POS Invoices) include them.
   await syncQueueNow();
   const queue = await window.posAPI.getQueueStatus().catch(() => ({ queued: 0, failed: 0 }));
-  const result = await window.posAPI.getShiftSummary(sessionState.openingEntry);
+  const result = await window.posAPI.getShiftSummary({ opening_entry: sessionState.openingEntry, cashier_user: cashierSession.user });
   if (!result.success || !result.summary) { showScreen("pos"); cartMessage(result.error ?? "Unable to load shift summary"); return; }
   closeShiftSummary = result.summary;
   const s = result.summary;
@@ -709,6 +715,8 @@ async function submitCloseShift(): Promise<void> {
   const message = document.querySelector<HTMLElement>("#close-shift-message");
   const button = document.querySelector<HTMLButtonElement>("#close-shift-submit");
   if (closeShiftInFlight) return;
+  if (!cashierSession) { if (message) message.textContent = "Cashier login required."; return; }
+  if (!cashierSession.canCloseShift) { if (message) message.textContent = "This cashier is not allowed to close shift."; return; }
   if (!isOnline()) { if (message) message.textContent = "Online connection required to close shift"; return; }
   if (!closeShiftSummary) { if (message) message.textContent = "Shift summary not loaded"; return; }
   // Re-validate the session immediately before submitting.
@@ -724,6 +732,7 @@ async function submitCloseShift(): Promise<void> {
   try {
     const result = await window.posAPI.closeShift({
       opening_entry: closeShiftSummary.openingEntry,
+      cashier_user: cashierSession?.user ?? "",
       closing_balances: rows.map((r) => ({ mode_of_payment: r.mode, opening_amount: r.opening, expected_amount: r.expected, closing_amount: money2(r.actual), difference: money2(r.actual - r.expected) })),
       notes: document.querySelector<HTMLTextAreaElement>("#close-notes")?.value ?? ""
     });
@@ -1094,7 +1103,9 @@ async function submitCurrentSale():Promise<void>{
   if(submissionInProgress)return;
   if(document.querySelector<HTMLDialogElement>("#receipt-dialog")?.open)return; // already submitted; awaiting receipt close
   if(!cashierSession){cartMessage("Cashier login required.");await showCashierLogin("Cashier login required.");return;}
+  if(cashierSession.offlineLogin&&!cashierSession.canOfflineSale){cartMessage("Cashier is not allowed to sell offline.");return;}
   let online=isOnline();
+  if(online&&cashierSession.offlineLogin){cartMessage("Online cashier login required for live sales.");await showCashierLogin("Internet is online. Login with ERPNext cashier password to continue live sales.");return;}
   // F9 gate: online requires a live POS session; offline uses local cache/payment checks only.
   if(online&&!(await validateSession("submit"))){
     const reachability=await window.posAPI.testServer().catch(()=>({connected:false}));
@@ -1106,6 +1117,12 @@ async function submitCurrentSale():Promise<void>{
     }
   }
   if(!online){
+    if(!cashierSession.offlineLogin){
+      cartMessage("Offline sale requires cashier PIN login.");
+      await showCashierLogin("Enter cashier username and offline PIN before selling offline.");
+      updateCompleteSaleState();
+      return;
+    }
     const offlineBlocker=await offlineLocalBlocker(true);
     if(offlineBlocker){cartMessage(offlineBlocker);updateCompleteSaleState();return;}
   }
@@ -1118,7 +1135,7 @@ async function submitCurrentSale():Promise<void>{
   if(!terminalInvoiceId)terminalInvoiceId=await window.posAPI.getTerminalInvoiceId();
   submissionInProgress=true;cartMessage(online?"Submitting Sale…":"Saving offline sale…");updateCompleteSaleState();
   // Submission payload unchanged; terminal_invoice_id is preserved across retries (only regenerated after Close & Start New Sale).
-  const salePayload={terminal_invoice_id:terminalInvoiceId,terminal_id:terminal,pos_profile:profile,opening_entry:opening,customer:customer.name,items:cartLines.map(x=>({item_code:x.itemCode,qty:x.quantity,uom:x.uom,barcode:x.barcode??undefined})),payments:paymentRows.map(x=>({mode_of_payment:x.method,amount:x.amount})),coupon_code:appliedBenefits.couponCode,redeem_loyalty_points:appliedBenefits.loyaltyPoints>0,loyalty_points:appliedBenefits.loyaltyPoints,estimated_total:fbrTotalsView().payable};
+  const salePayload={terminal_invoice_id:terminalInvoiceId,terminal_id:terminal,pos_profile:profile,opening_entry:opening,customer:customer.name,items:cartLines.map(x=>({item_code:x.itemCode,qty:x.quantity,uom:x.uom,barcode:x.barcode??undefined})),payments:paymentRows.map(x=>({mode_of_payment:x.method,amount:x.amount})),coupon_code:appliedBenefits.couponCode,redeem_loyalty_points:appliedBenefits.loyaltyPoints>0,loyalty_points:appliedBenefits.loyaltyPoints,estimated_total:fbrTotalsView().payable,cashier_user:cashierSession.user,cashier_full_name:cashierSession.fullName||cashierSession.user,offline_authenticated:!online&&cashierSession.offlineLogin===true,offline_auth_method:!online&&cashierSession.offlineLogin===true?"cashier_pin":""};
   // Offline → queue locally with a provisional receipt; online → submit (a mid-submit drop auto-queues server-side).
   const result=online?await window.posAPI.submitSale(salePayload):await window.posAPI.queueSale(salePayload);
   submissionInProgress=false;
@@ -1611,6 +1628,9 @@ function refundHasRemaining(data:Record<string,unknown>|null=refundData):boolean
 // Entry point from Sales History (an original submitted sale). Loads authoritative data from the server.
 async function openRefund(posInvoice:string):Promise<void>{
   if(!posInvoice){cartMessage("No invoice selected");return;}
+  if(!cashierSession){const hm=document.querySelector<HTMLElement>("#history-message");if(hm)hm.textContent="Cashier login required.";await showCashierLogin("Cashier login required.");return;}
+  if(!cashierSession.canRefund){const hm=document.querySelector<HTMLElement>("#history-message");if(hm)hm.textContent="This cashier is not allowed to refund.";return;}
+  if(cashierSession?.offlineLogin){const hm=document.querySelector<HTMLElement>("#history-message");if(hm)hm.textContent="Refund requires online cashier login.";return;}
   if(!isOnline()){const hm=document.querySelector<HTMLElement>("#history-message");if(hm)hm.textContent="Online connection required for refunds.";return;}
   const hm=document.querySelector<HTMLElement>("#history-message");if(hm)hm.textContent="Loading invoice…";
   const result=await window.posAPI.getInvoiceForRefund(posInvoice);
@@ -1747,6 +1767,8 @@ function clearRefundQty():void{ document.querySelectorAll<HTMLInputElement>(".re
 async function submitRefund():Promise<void>{
   if(refundSubmitting||!refundData)return;
   const msg=document.querySelector<HTMLElement>("#refund-message");
+  if(!cashierSession){if(msg)msg.textContent="Cashier login required.";return;}
+  if(!cashierSession.canRefund){if(msg)msg.textContent="This cashier is not allowed to refund.";return;}
   if(!isOnline()){if(msg)msg.textContent="Online connection required to submit a refund.";return;}
   if(!(await validateSession("refund"))){if(msg)msg.textContent=sessionState.reason||"POS session is not active.";return;}
   // Clamp any value typed but not yet blurred, then collect selected rows (qty>0) by original row id.
@@ -1779,7 +1801,7 @@ async function submitRefund():Promise<void>{
   }
   refundSubmitting=true;if(msg)msg.textContent="Submitting Refund…";
   // terminal_refund_id is NOT regenerated on retry — idempotency is server-enforced.
-  const payload={terminal_refund_id:refundTerminalId,original_invoice:refundData.original_invoice,pos_opening_entry:sessionState.openingEntry,reason,items,payments:[{mode_of_payment:mode,amount:0}]};
+  const payload={terminal_refund_id:refundTerminalId,original_invoice:refundData.original_invoice,pos_opening_entry:sessionState.openingEntry,cashier_user:cashierSession.user,cashier_full_name:cashierSession.fullName||cashierSession.user,offline_authenticated:false,offline_auth_method:"",local_offline_session_id:"",reason,items,payments:[{mode_of_payment:mode,amount:0}]};
   const result=await window.posAPI.submitPosRefund(payload);
   refundSubmitting=false;if(btn)btn.disabled=false;
   const res=result.result;
@@ -1845,6 +1867,7 @@ async function openPayment():Promise<void>{
   // F6 gate: validate the POS session, then require the current cart version to be server-validated.
   if(!cashierSession){cartMessage("Cashier login required.");await showCashierLogin("Cashier login required.");return;}
   let online=isOnline();
+  if(online&&cashierSession.offlineLogin){cartMessage("Online cashier login required for live sales.");await showCashierLogin("Internet is online. Login with ERPNext cashier password to continue live sales.");return;}
   if(online&&shiftClosed){cartMessage("Shift is closed — start a new shift");return;}
   if(!cartLines.length){cartMessage("Cart is empty");return;}
   if(online){
@@ -1864,6 +1887,11 @@ async function openPayment():Promise<void>{
     if(pending){showPreviewStatus("Validating…");await pending;}
     if(validatedCartVersion!==currentCartVersion){cartMessage(previewError?`Cannot open payment — ${previewError}`:"Cart is not server validated yet");return;}
   }else{
+    if(!cashierSession.offlineLogin){
+      cartMessage("Offline sale requires cashier PIN login.");
+      await showCashierLogin("Enter cashier username and offline PIN before selling offline.");
+      return;
+    }
     if(validatedCartVersion!==currentCartVersion&&!activePreviewPromise)scheduleCartPreview();
     if(activePreviewPromise)await activePreviewPromise;
     const blocker=await offlineLocalBlocker(false);
@@ -1983,7 +2011,8 @@ async function validateSession(trigger: string): Promise<boolean> {
 async function runSessionValidation(_trigger: string): Promise<boolean> {
   sessionState.lastChecked = Date.now();
   if (!isOnline()) { renderSessionInfo(); return sessionState.valid; } // offline: keep last known-good, don't invalidate
-  const result = await window.posAPI.getActivePosSession();
+  if (!cashierSession) return failSession("Cashier login required.");
+  const result = await window.posAPI.getActivePosSession(cashierRequest());
   showSessionDiagnostics(result);
   if (result.apiUser) authenticatedUser = result.apiUser;
   const selectedProfile = document.querySelector<HTMLSelectElement>("#pos-profile")?.value || sessionState.posProfile;
@@ -2003,7 +2032,7 @@ async function runSessionValidation(_trigger: string): Promise<boolean> {
   if (docstatus !== null && docstatus !== 1) return failSession("Opening Entry is not submitted (docstatus ≠ 1)");
   if (status !== "Open") return failSession(`Shift status is ${status}`);
   if (selectedProfile && profile && profile !== selectedProfile) return failSession(`Active shift uses POS Profile ${profile}, not ${selectedProfile}`);
-  if (cashierSession && user && !sameUser(user, cashierSession.user)) return failSession("Server start_pos_session must support cashier_user/cashier_auth_token so POS Opening Entry is created for the actual cashier, not the terminal API user.");
+  if (cashierSession && user && !sameUser(user, cashierSession.user)) return failSession(`Active shift belongs to ${user}, not ${cashierSession.user}.`);
   if (selectedCompany && company && company !== selectedCompany) return failSession(`Active shift company ${company} does not match ${selectedCompany}`);
   if (sessionState.openingEntry && name !== sessionState.openingEntry) {
     // A different open entry is returned — never switch silently.
@@ -2334,11 +2363,13 @@ async function showCashierLogin(message = ""): Promise<void> {
   setText("#cashier-login-connection", online ? "Online" : "Offline");
   const passwordRow = document.querySelector<HTMLElement>("#cashier-password-row");
   const offlinePinRow = document.querySelector<HTMLElement>("#cashier-offline-pin-row");
+  const offlinePinConfirmRow = document.querySelector<HTMLElement>("#cashier-offline-pin-confirm-row");
   const offlineNote = document.querySelector<HTMLElement>("#cashier-offline-note");
   if (passwordRow) passwordRow.hidden = !online;
   if (offlinePinRow) offlinePinRow.hidden = false;
+  if (offlinePinConfirmRow) offlinePinConfirmRow.hidden = !online;
   if (offlineNote) offlineNote.textContent = online
-    ? "Optional: set or update this cashier's offline PIN after online verification."
+    ? "Enter and confirm a 4-12 digit Offline Cashier PIN to enable offline login for this cashier."
     : "Use the offline PIN saved after a previous online cashier login.";
   const msg = document.querySelector<HTMLElement>("#cashier-login-message");
   if (msg) msg.textContent = message || (online ? "Enter ERPNext cashier credentials." : "Enter cashier username and offline PIN.");
@@ -2380,23 +2411,27 @@ async function submitCashierLogin(): Promise<void> {
   const usernameInput = document.querySelector<HTMLInputElement>("#cashier-username");
   const passwordInput = document.querySelector<HTMLInputElement>("#cashier-password");
   const offlinePinInput = document.querySelector<HTMLInputElement>("#cashier-offline-pin");
+  const offlinePinConfirmInput = document.querySelector<HTMLInputElement>("#cashier-offline-pin-confirm");
   const button = document.querySelector<HTMLButtonElement>("#cashier-login-submit");
   const msg = document.querySelector<HTMLElement>("#cashier-login-message");
   const username = usernameInput?.value.trim() ?? "";
   const password = passwordInput?.value ?? "";
   const offlinePin = offlinePinInput?.value ?? "";
+  const offlinePinConfirm = offlinePinConfirmInput?.value ?? "";
   const online = isOnline();
   if (!username) { if (msg) msg.textContent = "Enter cashier username."; return; }
   if (online && !password) { if (msg) msg.textContent = "Enter cashier username and password."; return; }
+  if (online && offlinePin && offlinePin !== offlinePinConfirm) { if (msg) msg.textContent = "Offline Cashier PIN confirmation does not match."; return; }
   if (!online && !offlinePin) { if (msg) msg.textContent = "Enter cashier username and offline PIN."; return; }
   if (button) button.disabled = true;
   if (msg) msg.textContent = online ? "Verifying cashier..." : "Checking offline cashier PIN...";
   try {
     const result = online
-      ? await window.posAPI.cashierLogin({ username, password, offlinePin })
+      ? await window.posAPI.cashierLogin({ username, password, offlinePin, offlinePinConfirm })
       : await window.posAPI.cashierOfflineLogin({ username, pin: offlinePin });
     if (passwordInput) passwordInput.value = "";
     if (offlinePinInput) offlinePinInput.value = "";
+    if (offlinePinConfirmInput) offlinePinConfirmInput.value = "";
     if (!result.success) { if (msg) msg.textContent = result.error ?? "Cashier login failed."; return; }
     const selectedProfile = document.querySelector<HTMLSelectElement>("#pos-profile")?.value ?? "";
     if (result.allowedPosProfiles.length && selectedProfile && !result.allowedPosProfiles.includes(selectedProfile)) {
@@ -2405,13 +2440,14 @@ async function submitCashierLogin(): Promise<void> {
     }
     cashierSession = { ...result, loginTime: new Date().toISOString() };
     if (msg) msg.textContent = result.offlineLogin
-      ? `Offline cashier login accepted for ${cashierDisplay()}.`
+      ? "Offline cashier login active — sales will be queued until ERPNext is online."
       : `Logged in as ${cashierDisplay()}${result.offlineCached ? " and saved offline PIN." : ""}.`;
     updatePosHeader();
     await continueAfterCashierLogin();
   } finally {
     if (passwordInput) passwordInput.value = "";
     if (offlinePinInput) offlinePinInput.value = "";
+    if (offlinePinConfirmInput) offlinePinConfirmInput.value = "";
     if (button) button.disabled = false;
   }
 }
@@ -2780,7 +2816,7 @@ window.addEventListener("DOMContentLoaded", () => {
     }
     try {
       await window.posAPI.saveSettings(getSettingsFromForm());
-      const result = await window.posAPI.syncPosSession();
+      const result = await window.posAPI.syncPosSession(cashierRequest());
       showPosSessionSummary(result.summary);
       showSettingsMessage(result.success
         ? (result.summary.sessionStatus === "Open" ? "POS Session Synced" : "No active POS Opening Entry")
