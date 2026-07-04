@@ -239,7 +239,7 @@ function missingCashierLoginEndpointMessage(): string {
 
 async function posCashierLogin(input: Record<string, unknown>): Promise<CashierLoginResult> {
   const settings = loadSettings();
-  const username = textValue(input, "username");
+  const username = normalizeCashierUser(textValue(input, "username"));
   const password = textValue(input, "password");
   const offlinePin = textValue(input, "offlinePin");
   const offlinePinConfirm = textValue(input, "offlinePinConfirm");
@@ -274,13 +274,13 @@ async function posCashierLogin(input: Record<string, unknown>): Promise<CashierL
       return { ...empty, error };
     }
     if (payload.success === false) return { ...empty, error: textValue(payload, "error") || "Cashier login failed." };
-    const user = textValue(payload, "user") || textValue(payload, "email") || username;
+    const user = normalizeCashierUser(textValue(payload, "user") || textValue(payload, "email") || username);
     const fullName = textValue(payload, "full_name") || textValue(payload, "fullName") || user;
     const roles = Array.isArray(payload.roles) ? payload.roles.map(String) : [];
     const allowedPosProfiles = Array.isArray(payload.allowed_pos_profiles) ? payload.allowed_pos_profiles.map(String) : [];
     const canOfflineSale = payload.can_offline_sale === true;
     const offlineLoginExpiresAt = textValue(payload, "offline_login_expires_at");
-    const requirePinSetup = payload.require_pin_setup === true || (canOfflineSale && !cashierCacheExists(user));
+    const requirePinSetup = canOfflineSale && !cashierCacheExists(user);
     const result: CashierLoginResult = {
       success: true,
       user,
@@ -304,20 +304,62 @@ async function posCashierLogin(input: Record<string, unknown>): Promise<CashierL
       result.offlineCached = true;
       result.requirePinSetup = false;
     }
+    rememberCashierUser(user);
     return result;
   } catch (error) {
     return { ...empty, error: `Cashier login failed: ${error instanceof Error ? error.message : "network error"}` };
   }
 }
 
+function normalizeIdentityPart(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function normalizeCashierUser(user: string): string {
+  return normalizeIdentityPart(user);
+}
+
 function cashierCacheKey(user: string): string {
   const settings = loadSettings();
-  const identity = `${settings.terminalId.trim()}|${settings.posProfile.trim()}|${user.trim().toLowerCase()}`;
+  const identity = `${normalizeIdentityPart(settings.terminalId)}|${normalizeIdentityPart(settings.posProfile)}|${normalizeCashierUser(user)}`;
   return `cashier_offline_v1_${hashSecret(identity)}`;
 }
 
+function legacyCashierCacheKey(user: string): string {
+  const settings = loadSettings();
+  const identity = `${settings.terminalId.trim()}|${settings.posProfile.trim()}|${normalizeCashierUser(user)}`;
+  return `cashier_offline_v1_${hashSecret(identity)}`;
+}
+
+function getCashierCacheRaw(user: string): string | null {
+  return getMeta(cashierCacheKey(user)) || getMeta(legacyCashierCacheKey(user));
+}
+
+function rememberedCashiersKey(): string {
+  const settings = loadSettings();
+  return `cashier_remembered_v1_${hashSecret(`${normalizeIdentityPart(settings.terminalId)}|${normalizeIdentityPart(settings.posProfile)}`)}`;
+}
+
+function rememberedCashiers(): string[] {
+  const raw = getMeta(rememberedCashiersKey());
+  if (!raw) return [];
+  try {
+    const values = JSON.parse(raw) as unknown[];
+    return Array.isArray(values) ? values.map(String).map((x) => x.trim()).filter(Boolean).slice(0, 5) : [];
+  } catch {
+    return [];
+  }
+}
+
+function rememberCashierUser(user: string): void {
+  const normalized = normalizeCashierUser(user);
+  if (!normalized) return;
+  const current = rememberedCashiers().filter((x) => x.toLowerCase() !== normalized);
+  setMeta(rememberedCashiersKey(), JSON.stringify([normalized, ...current].slice(0, 5)));
+}
+
 function cashierCacheExists(user: string): boolean {
-  return Boolean(getMeta(cashierCacheKey(user)));
+  return Boolean(getCashierCacheRaw(user));
 }
 
 function cashierFailedKey(user: string): string {
@@ -336,7 +378,7 @@ function cacheCashierOfflinePin(cashier: CashierLoginResult, pin: string): { ok:
   if (!cashier.canOfflineSale) return { ok: false, error: "This cashier is not allowed to use offline sales." };
   if (!cashier.offlineLoginExpiresAt) return { ok: false, error: "Server did not return offline login expiry for this cashier." };
   const cached = {
-    user: cashier.user,
+    user: normalizeCashierUser(cashier.user),
     fullName: cashier.fullName,
     roles: cashier.roles,
     allowedPosProfiles: cashier.allowedPosProfiles,
@@ -347,19 +389,20 @@ function cacheCashierOfflinePin(cashier: CashierLoginResult, pin: string): { ok:
     canOfflineSale: cashier.canOfflineSale,
     lastOnlineVerifiedAt: new Date().toISOString(),
     offlineLoginExpiresAt: cashier.offlineLoginExpiresAt,
-    terminalId: settings.terminalId,
-    posProfile: settings.posProfile,
+    terminalId: settings.terminalId.trim(),
+    posProfile: settings.posProfile.trim(),
     pinHash: pinHash(pin)
   };
-  setMeta(cashierCacheKey(cashier.user), JSON.stringify(cached));
-  setMeta(cashierFailedKey(cashier.user), "0");
-  setMeta(cashierLockKey(cashier.user), "0");
+  const user = normalizeCashierUser(cashier.user);
+  setMeta(cashierCacheKey(user), JSON.stringify(cached));
+  setMeta(cashierFailedKey(user), "0");
+  setMeta(cashierLockKey(user), "0");
   return { ok: true, error: null };
 }
 
 async function cashierOfflineLogin(input: Record<string, unknown>): Promise<CashierLoginResult> {
   const settings = loadSettings();
-  const username = textValue(input, "username");
+  const username = normalizeCashierUser(textValue(input, "username"));
   const pin = textValue(input, "pin");
   const empty: CashierLoginResult = {
     success: false, user: "", fullName: "", roles: [], allowedPosProfiles: [], defaultPosProfile: "",
@@ -375,7 +418,7 @@ async function cashierOfflineLogin(input: Record<string, unknown>): Promise<Cash
   }
 
   await new Promise((resolve) => setTimeout(resolve, ADMIN_PIN_DELAY_MS));
-  const raw = getMeta(cashierCacheKey(username));
+  const raw = getCashierCacheRaw(username);
   if (!raw) return { ...empty, error: "First cashier login requires internet. Login online once to enable offline selling for this cashier." };
 
   let cached: Record<string, unknown>;
@@ -386,11 +429,11 @@ async function cashierOfflineLogin(input: Record<string, unknown>): Promise<Cash
   }
 
   const stored = textValue(cached, "pinHash");
-  if (textValue(cached, "terminalId") !== settings.terminalId || textValue(cached, "posProfile") !== settings.posProfile || !stored) {
+  if (normalizeIdentityPart(textValue(cached, "terminalId")) !== normalizeIdentityPart(settings.terminalId) || normalizeIdentityPart(textValue(cached, "posProfile")) !== normalizeIdentityPart(settings.posProfile) || !stored) {
     return { ...empty, error: "Offline cashier PIN is not valid for this terminal or POS Profile." };
   }
   const allowedProfiles = Array.isArray(cached.allowedPosProfiles) ? cached.allowedPosProfiles.map(String) : [];
-  if (allowedProfiles.length && !allowedProfiles.includes(settings.posProfile)) return { ...empty, error: `Cashier is not allowed for POS Profile ${settings.posProfile}.` };
+  if (allowedProfiles.length && !allowedProfiles.map(normalizeIdentityPart).includes(normalizeIdentityPart(settings.posProfile))) return { ...empty, error: `Cashier is not allowed for POS Profile ${settings.posProfile}.` };
   if (cached.canOfflineSale !== true) return { ...empty, error: "Cashier is not allowed to sell offline." };
   const expiresAt = textValue(cached, "offlineLoginExpiresAt");
   if (!expiresAt || Number.isNaN(Date.parse(expiresAt)) || Date.parse(expiresAt) <= Date.now()) {
@@ -409,6 +452,7 @@ async function cashierOfflineLogin(input: Record<string, unknown>): Promise<Cash
 
   setMeta(cashierFailedKey(username), "0");
   setMeta(cashierLockKey(username), "0");
+  rememberCashierUser(textValue(cached, "user") || username);
   return {
     success: true,
     user: textValue(cached, "user") || username,
@@ -435,6 +479,36 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function textValue(record: Record<string, unknown> | null, key: string): string {
   return typeof record?.[key] === "string" ? record[key] as string : "";
+}
+
+function sameIdentity(a: string, b: string): boolean {
+  return a.trim().toLowerCase() === b.trim().toLowerCase();
+}
+
+function unwrapFrappePayload(value: unknown): Record<string, unknown> {
+  const root = asRecord(value) ?? {};
+  const first = asRecord(root.message) ?? root;
+  return asRecord(first.message) ?? first;
+}
+
+function sessionFromPayload(payload: Record<string, unknown>): Record<string, unknown> | null {
+  const nested = asRecord(payload.session) ?? asRecord(payload.pos_opening_entry) ?? asRecord(payload.opening_entry_doc);
+  if (nested) return nested;
+  return textValue(payload, "opening_entry") || textValue(payload, "name") ? payload : null;
+}
+
+function matchingOpenEntry(entries: Record<string, unknown>[], posProfile: string, cashierUser: string): Record<string, unknown> | null {
+  const matches = entries.filter((entry) => {
+    const status = textValue(entry, "status") || "Open";
+    const docstatus = entry.docstatus === undefined || entry.docstatus === null || entry.docstatus === "" ? 1 : Number(entry.docstatus);
+    const profile = textValue(entry, "pos_profile");
+    const user = textValue(entry, "user");
+    return status === "Open"
+      && docstatus === 1
+      && (!profile || sameIdentity(profile, posProfile))
+      && (!user || sameIdentity(user, cashierUser));
+  });
+  return matches.length === 1 ? matches[0] : null;
 }
 
 const LEGACY_ADMIN_PIN_HASH_KEY = "admin_pin_hash_v1";
@@ -700,11 +774,10 @@ async function getActivePosSession(input: Record<string, unknown> = {}): Promise
       const error = await getResponseError(r);
       return { success:false, session:null, error, diagnosticReason:error, apiUser:"", requestedPosProfile:s.posProfile, entries:[] };
     }
-    const b = await r.json() as { message?: unknown };
-    const outer = asRecord(b.message);
-    const payload = asRecord(outer?.message) ?? outer ?? {};
-    const session = asRecord(payload.session);
+    const b = await r.json() as Record<string, unknown>;
+    const payload = unwrapFrappePayload(b);
     const entries = (Array.isArray(payload.submitted_open_entries) ? payload.submitted_open_entries : Array.isArray(payload.open_entries) ? payload.open_entries : []).map(asRecord).filter((x): x is Record<string, unknown> => Boolean(x));
+    const session = sessionFromPayload(payload) ?? matchingOpenEntry(entries, s.posProfile, cashierUser);
     const diagnosticReason = textValue(payload, "diagnostic_reason") || textValue(payload, "reason") || (session ? "Active session returned" : "No active POS Opening Entry returned by server");
     const apiUser = textValue(payload, "authenticated_user") || textValue(payload, "api_user");
     if (session) {
@@ -726,10 +799,22 @@ async function startPosSession(input:Record<string,unknown>):Promise<{success:bo
   try{
     const base=new URL(s.erpnextUrl).toString().replace(/\/+$/,"");
     const r=await fetch(`${base}/api/method/aimatic.offline_pos.api.start_pos_session`,{method:"POST",headers:{Authorization:`token ${s.apiKey}:${s.apiSecret}`,"Content-Type":"application/json"},body:JSON.stringify({pos_profile:s.posProfile,opening_balances:JSON.stringify(Array.isArray(input.opening_balances)?input.opening_balances:[]),cashier_user:cashierUser,local_offline_session_id:textValue(input,"local_offline_session_id")})});
-    if(!r.ok)return {success:false,session:null,error:await getResponseError(r)};
-    const b=await r.json() as {message?:unknown};
-    const raw=asRecord(b.message);
-    const session=asRecord(raw?.message)??raw;
+    if(!r.ok){
+      const body = await r.clone().json().catch(() => null) as unknown;
+      const payload = unwrapFrappePayload(body);
+      const entries = (Array.isArray(payload.submitted_open_entries) ? payload.submitted_open_entries : Array.isArray(payload.open_entries) ? payload.open_entries : []).map(asRecord).filter((x): x is Record<string, unknown> => Boolean(x));
+      const session = sessionFromPayload(payload) ?? matchingOpenEntry(entries, s.posProfile, cashierUser);
+      const entry = textValue(session, "opening_entry") || textValue(session, "name");
+      if (session && entry) {
+        cachePosSession(entry, s.posProfile, textValue(session, "user") || cashierUser, session, new Date().toISOString());
+        return { success: true, session, error: null };
+      }
+      return {success:false,session:null,error:await getResponseError(r)};
+    }
+    const b=await r.json() as Record<string,unknown>;
+    const payload=unwrapFrappePayload(b);
+    const entries=(Array.isArray(payload.submitted_open_entries)?payload.submitted_open_entries:Array.isArray(payload.open_entries)?payload.open_entries:[]).map(asRecord).filter((x):x is Record<string,unknown>=>Boolean(x));
+    const session=sessionFromPayload(payload)??matchingOpenEntry(entries,s.posProfile,cashierUser);
     const entry=textValue(session,"opening_entry")||textValue(session,"name");
     if(!session||!entry)return {success:false,session:null,error:"Server returned no Opening Entry."};
     cachePosSession(entry,s.posProfile,textValue(session,"user")||cashierUser,session,new Date().toISOString());
@@ -887,11 +972,21 @@ function getOfflineBatchId(terminalId: string): string {
   return id;
 }
 
-function getCartIdentity(): { terminalId: string; openingEntry: string } {
+function isOfflineBatchId(value: string): boolean {
+  return value.trim().toUpperCase().startsWith("OFFLINE-");
+}
+
+function realOpeningEntry(value: string): string {
+  const openingEntry = value.trim();
+  return isOfflineBatchId(openingEntry) ? "" : openingEntry;
+}
+
+function getCartIdentity(): { terminalId: string; openingEntry: string; offlineBatchId: string } {
   const settings = loadSettings();
   const session = getCachedSessionSummary();
   const terminalId = settings.terminalId || "default-terminal";
-  return { terminalId, openingEntry: session.openingEntry || getOfflineBatchId(terminalId) };
+  const openingEntry = realOpeningEntry(session.openingEntry || "");
+  return { terminalId, openingEntry, offlineBatchId: openingEntry ? "" : getOfflineBatchId(terminalId) };
 }
 function getTerminalInvoiceId():string{const id=getCartIdentity();return getOpenTerminalInvoice(id.terminalId,()=>`${id.terminalId}-${randomUUID()}`);}
 // Build the canonical sale submission payload (shared by online submit and offline queue).
@@ -899,12 +994,17 @@ function buildSalePayload(input: Record<string, unknown>): Record<string, unknow
   const settings = loadSettings();
   const id = String(input.terminal_invoice_id || getTerminalInvoiceId());
   const identity = getCartIdentity();
-  const localOfflineSessionId = String(input.local_offline_session_id || (identity.openingEntry.startsWith("OFFLINE-") ? identity.openingEntry : ""));
+  const requestedOpening = String(input.opening_entry || identity.openingEntry || "");
+  const offlineAuthenticated = Boolean(input.offline_authenticated);
+  const openingEntry = offlineAuthenticated ? "" : realOpeningEntry(requestedOpening);
+  let localOfflineSessionId = String(input.local_offline_session_id || "").trim();
+  if (!localOfflineSessionId && isOfflineBatchId(requestedOpening)) localOfflineSessionId = requestedOpening.trim();
+  if (!localOfflineSessionId && offlineAuthenticated) localOfflineSessionId = identity.offlineBatchId || getOfflineBatchId(identity.terminalId);
   return {
     terminal_invoice_id: id,
     terminal_id: identity.terminalId,
     pos_profile: settings.posProfile,
-    opening_entry: identity.openingEntry,
+    opening_entry: openingEntry,
     local_offline_session_id: localOfflineSessionId,
     cashier_user: String(input.cashier_user ?? ""),
     cashier_full_name: String(input.cashier_full_name ?? ""),
@@ -937,8 +1037,9 @@ async function submitOnlineSale(input:Record<string,unknown>):Promise<{success:b
 
 async function openingEntryForQueuedPayload(payload: Record<string, unknown>, cache: Map<string, string>): Promise<{ openingEntry: string | null; error: string | null }> {
   const current = textValue(payload, "opening_entry");
-  const batch = textValue(payload, "local_offline_session_id");
-  if (!batch || !current.startsWith("OFFLINE-")) return { openingEntry: current || null, error: null };
+  const batch = textValue(payload, "local_offline_session_id") || (isOfflineBatchId(current) ? current : "");
+  if (current && !isOfflineBatchId(current)) return { openingEntry: current, error: null };
+  if (!batch) return { openingEntry: null, error: "Queued sale is missing local_offline_session_id and real POS Opening Entry." };
   const cashierUser = textValue(payload, "cashier_user");
   if (!cashierUser) return { openingEntry: null, error: "Queued sale is missing cashier_user." };
   const cacheKey = `${batch}|${cashierUser}`;
@@ -971,6 +1072,7 @@ async function syncSaleQueue(): Promise<{ synced: number; failed: number; remain
     try {
       const opening = await openingEntryForQueuedPayload(payload, openingCache);
       if (opening.error || !opening.openingEntry) { failed += 1; error = opening.error || "Unable to prepare POS Opening Entry for queued sale."; break; }
+      if (isOfflineBatchId(opening.openingEntry)) { failed += 1; error = "Offline batch ID could not be converted to a real POS Opening Entry."; break; }
       payload.opening_entry = opening.openingEntry;
       const response = await fetch(`${base}/api/method/aimatic.offline_pos.api.submit_online_sale`, { method: "POST", headers: { Authorization: `token ${settings.apiKey}:${settings.apiSecret}`, "Content-Type": "application/json" }, body: JSON.stringify(payload) });
       const rawBody = await response.text();
@@ -1763,6 +1865,7 @@ app.whenReady().then(() => {
   ipcMain.handle("auth:test", () => testApiAuthentication());
   ipcMain.handle("cashier:login", (_event, input) => posCashierLogin(asRecord(input) ?? {}));
   ipcMain.handle("cashier:offline-login", (_event, input) => cashierOfflineLogin(asRecord(input) ?? {}));
+  ipcMain.handle("cashier:remembered", () => rememberedCashiers());
   ipcMain.handle("pos-profiles:list", () => loadAvailablePosProfiles());
   ipcMain.handle("pos-profile:load", () => loadPosProfile());
   ipcMain.handle("pos-profile-cache:get-status", () => getPosProfileCacheStatus());

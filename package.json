@@ -1,6 +1,6 @@
 {
   "name": "erpnext-offline-pos",
-  "version": "0.1.18",
+  "version": "0.1.22",
   "description": "Aimatic POS App for ERPNext retail stores",
   "main": "dist/main.js",
   "scripts": {
