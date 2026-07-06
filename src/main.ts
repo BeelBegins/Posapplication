@@ -1203,7 +1203,7 @@ function thermalReceiptCss(): string {
     .rc-fbr-title { font-size: 12px !important; font-weight: 900 !important; color: #000 !important; }
     .rc-fbr-inv b, .rc-fbr-row span:last-child { font-weight: 900 !important; color: #000 !important; }
     .rc-footer { font-size: 10px !important; color: #000 !important; }
-    .rc-fbr-qr img, .receipt-qr-img { width: 100px !important; height: 100px !important; image-rendering: crisp-edges; }
+    .rc-fbr-qr img, .rc-gv-qr img, .receipt-qr-img { width: 70px !important; height: 70px !important; image-rendering: crisp-edges; }
     .duplicate-copy, .return-copy { display: block !important; width: 100% !important; box-sizing: border-box !important; text-align: center !important; font: 900 15px Calibri, Arial, sans-serif !important; border: 2px solid #000 !important; color: #000 !important; padding: 5px !important; margin: 0 0 6px !important; letter-spacing: 1px !important; text-transform: uppercase !important; break-after: avoid !important; page-break-after: avoid !important; }
   </style>`;
 }
