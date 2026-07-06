@@ -1015,6 +1015,7 @@ function buildSalePayload(input: Record<string, unknown>): Record<string, unknow
     items: Array.isArray(input.items) ? input.items : [],
     payments: Array.isArray(input.payments) ? input.payments : [],
     coupon_code: String(input.coupon_code ?? ""),
+    gift_voucher_code: String(input.gift_voucher_code ?? ""),
     redeem_loyalty_points: Boolean(input.redeem_loyalty_points),
     loyalty_points: Number(input.loyalty_points ?? 0),
     estimated_total: Number(input.estimated_total ?? 0)
@@ -1397,6 +1398,7 @@ async function previewCart(input: Record<string, unknown>): Promise<{ preview: R
     if (input.coupon_code) payload.coupon_code = String(input.coupon_code);
     if (input.redeem_loyalty_points) payload.redeem_loyalty_points = input.redeem_loyalty_points;
     if (input.loyalty_points) payload.loyalty_points = input.loyalty_points;
+    if (input.gift_voucher_code) payload.gift_voucher_code = String(input.gift_voucher_code);
     const response = await fetch(`${base}/api/method/aimatic.offline_pos.api.preview_cart`, {
       method: "POST",
       headers: { Authorization: `token ${settings.apiKey}:${settings.apiSecret}`, "Content-Type": "application/json" },
@@ -1739,6 +1741,52 @@ async function validateCoupon(couponCode: string): Promise<{ couponName: string 
   }
 }
 
+async function listCustomerGiftVouchers(customerName: string): Promise<{ vouchers: Record<string, unknown>[]; error: string | null }> {
+  const settings = loadSettings();
+  if (!settings.erpnextUrl || !settings.apiKey || !settings.apiSecret || !customerName) {
+    return { vouchers: [], error: "Online connection required to load gift vouchers." };
+  }
+  try {
+    const baseUrl = new URL(settings.erpnextUrl.trim()).toString().replace(/\/+$/, "");
+    const company = textValue(asRecord(getPosBootstrap(settings.posProfile)?.pos_profile), "company");
+    const query = new URLSearchParams({ customer: customerName });
+    if (company) query.set("company", company);
+    const response = await fetch(`${baseUrl}/api/method/aimatic.gift_voucher.api.list_customer_gift_vouchers?${query.toString()}`, {
+      headers: { Authorization: `token ${settings.apiKey}:${settings.apiSecret}` }
+    });
+    if (!response.ok) return { vouchers: [], error: await getResponseError(response) };
+    const body = await response.json() as Record<string, unknown>;
+    const payload = unwrapFrappePayload(body);
+    const raw = Array.isArray(payload.vouchers) ? payload.vouchers : Array.isArray(payload) ? payload : Array.isArray(body.message) ? body.message : [];
+    const vouchers = raw.map(asRecord).filter((x): x is Record<string, unknown> => Boolean(x));
+    return { vouchers, error: null };
+  } catch (error) {
+    return { vouchers: [], error: error instanceof Error ? error.message : "Unable to load gift vouchers." };
+  }
+}
+
+async function validateGiftVoucherCode(voucherCode: string, customerName: string): Promise<{ voucher: Record<string, unknown> | null; error: string | null }> {
+  const settings = loadSettings();
+  const code = voucherCode.trim();
+  if (!settings.erpnextUrl || !settings.apiKey || !settings.apiSecret || !code || !customerName) {
+    return { voucher: null, error: "Online connection required to validate gift voucher." };
+  }
+  try {
+    const baseUrl = new URL(settings.erpnextUrl.trim()).toString().replace(/\/+$/, "");
+    const response = await fetch(`${baseUrl}/api/method/aimatic.gift_voucher.api.validate_gift_voucher_code`, {
+      method: "POST",
+      headers: { Authorization: `token ${settings.apiKey}:${settings.apiSecret}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ voucher_code: code, customer: customerName })
+    });
+    if (!response.ok) return { voucher: null, error: await getResponseError(response) };
+    const body = await response.json() as Record<string, unknown>;
+    const payload = unwrapFrappePayload(body);
+    return { voucher: payload, error: null };
+  } catch (error) {
+    return { voucher: null, error: error instanceof Error ? error.message : "Invalid gift voucher code." };
+  }
+}
+
 type FbrCalculatedRow = { success: true; item_code: string; quantity: number; inclusiveAmount: number; taxRate: number; salesTax: number; valueExcludingTax: number; retailPrice: number; isThirdSchedule: boolean } | { success: false; item_code: string; error: string };
 function isSuccessfulFbrRow(row: FbrCalculatedRow): row is Extract<FbrCalculatedRow, { success: true }> { return row.success === true; }
 function calculateFbrCart(input:Record<string,unknown>):Record<string,unknown>{const items=Array.isArray(input.items)?input.items.map(asRecord).filter((x):x is Record<string,unknown>=>x!==null):[];const configs=getFbrItemConfigs(items.map(x=>String(x.item_code??"")));const state=getFbrSyncState();const rows:FbrCalculatedRow[]=items.map(item=>{const code=String(item.item_code??"");const c=configs[code];if(!c)return{success:false,item_code:code,error:`FBR Tax Category is missing for ${code}`};if(c.enabled===0)return{success:false,item_code:code,error:`FBR Tax Category is disabled for ${code}`};try{const result=calculateFbrItem({itemCode:code,qty:Number(item.qty)||0,rate:Number(item.rate)||0,amount:Number(item.amount)||undefined,taxRate:Number(c.tax_rate)||0,isExempt:Boolean(c.is_exempt),isZeroRated:Boolean(c.is_zero_rated),isThirdSchedule:Boolean(c.is_third_schedule||c.custom_is_3rd_schedule),mrp:Number(c.custom_mrp)?Number(c.custom_mrp)*(Number(item.conversion_factor)||1):undefined,taxCategory:String(c.custom_fbr_tax_category||""),hsCode:String(c.custom_fbr_hs_code||"")});return{success:true,item_code:code,quantity:result.quantity,inclusiveAmount:result.inclusiveAmount,taxRate:result.taxRate,salesTax:result.salesTax,valueExcludingTax:result.valueExcludingTax,retailPrice:result.retailPrice,isThirdSchedule:result.isThirdSchedule};}catch(e){return{success:false,item_code:code,error:e instanceof Error?e.message:"FBR calculation failed"};}});const validRows=rows.filter(isSuccessfulFbrRow);const valid=validRows.map(r=>({itemCode:r.item_code,qty:r.quantity,rate:Number((items.find(i=>String(i.item_code)===r.item_code)?.rate)||0),amount:r.inclusiveAmount,taxRate:r.taxRate,isThirdSchedule:r.isThirdSchedule,mrp:r.retailPrice/(r.quantity||1)}));const totals=calculateFbrInvoice(valid,state.serviceFee);const errorRows=rows.filter((row):row is Extract<FbrCalculatedRow,{success:false}>=>row.success===false);return{success:true,rows,totals,errors:errorRows.map(row=>row.error)};}
@@ -1898,6 +1946,8 @@ app.whenReady().then(() => {
   ipcMain.handle("benefits:save", (_event, benefits) => { const id = getCartIdentity(); const data = asRecord(benefits); if (data) saveBenefitsDraft(`${id.terminalId}::${id.openingEntry}`, data); });
   ipcMain.handle("benefits:customer", (_event, customerName) => getCustomerBenefits(String(customerName)));
   ipcMain.handle("benefits:validate-coupon", (_event, couponCode) => validateCoupon(String(couponCode)));
+  ipcMain.handle("benefits:gift-vouchers", (_event, customerName) => listCustomerGiftVouchers(String(customerName)));
+  ipcMain.handle("benefits:validate-gift-voucher", (_event, voucherCode, customerName) => validateGiftVoucherCode(String(voucherCode), String(customerName)));
   ipcMain.handle("sale:terminal-id", () => getTerminalInvoiceId());
   ipcMain.handle("sale:submit", (_event,input) => submitOnlineSale(asRecord(input)??{}));
   ipcMain.handle("sale:queue", (_event,input) => queueSale(asRecord(input)??{}));

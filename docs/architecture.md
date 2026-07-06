@@ -1,6 +1,6 @@
 # POS Architecture Notes
 
-Last updated: 2026-07-03
+Last updated: 2026-07-04
 
 ## Source Of Truth
 
@@ -10,6 +10,7 @@ ERPNext is authoritative for:
 - Stock
 - Accounting
 - POS Invoice submission
+- Loyalty and gift voucher redemption validation
 - Refund / return submission
 - FBR final submission
 - POS Opening Entry and POS Closing Entry
@@ -41,7 +42,26 @@ Electron must never call FBR directly.
 
 - `src/renderer/renderer.ts`
   - POS UI state and workflows.
-  - Cart, customer, payment, receipt, sales history, refund screen.
+- Cart, customer, payment, receipt, sales history, refund screen.
+- Benefits workflow for loyalty points, coupons, and gift vouchers.
+
+## Benefits And Gift Vouchers
+
+- `preview_cart` accepts optional `gift_voucher_code`.
+- Electron displays `gift_voucher_amount`, `gift_voucher_error`, and collects only server `amount_due` when present.
+- Invoice grand total remains the receipt/history invoice total. `amount_due` is only the customer collection amount after loyalty and gift voucher settlement.
+- Sale submit payment rows must cover the collectable payable amount, not the invoice grand total, when loyalty or gift voucher settlement applies.
+- Electron passes `gift_voucher_code` to `submit_online_sale`.
+- Electron must not add a `Gift Voucher` payment row. ERPNext appends that server-side.
+- Gift voucher validation and redemption are online-only.
+- Active customer vouchers are read through `aimatic.gift_voucher.api.list_customer_gift_vouchers`.
+- Typed/scanned voucher codes can be checked through `aimatic.gift_voucher.api.validate_gift_voucher_code`.
+
+## Shift Reconciliation
+
+- Refund payment rows are negative movement.
+- Close Shift expected amount per mode is opening plus sales minus refunds.
+- Client display normalizes server summary rows so `sale_amount`, `refund_amount`, `net_movement`, and `expected_amount` stay consistent.
 
 - `src/db/database.ts`
   - SQLite schema and persistence helpers.

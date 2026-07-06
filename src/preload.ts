@@ -62,6 +62,8 @@ contextBridge.exposeInMainWorld("posAPI", {
   ,saveBenefitsDraft: (benefits: Record<string, unknown>) => ipcRenderer.invoke("benefits:save", benefits)
   ,getCustomerBenefits: (customerName: string) => ipcRenderer.invoke("benefits:customer", customerName)
   ,validateCoupon: (couponCode: string) => ipcRenderer.invoke("benefits:validate-coupon", couponCode)
+  ,listCustomerGiftVouchers: (customerName: string) => ipcRenderer.invoke("benefits:gift-vouchers", customerName)
+  ,validateGiftVoucherCode: (voucherCode: string, customerName: string) => ipcRenderer.invoke("benefits:validate-gift-voucher", voucherCode, customerName)
   ,getTerminalInvoiceId: () => ipcRenderer.invoke("sale:terminal-id")
   ,submitSale: (input: Record<string, unknown>) => ipcRenderer.invoke("sale:submit", input)
   ,queueSale: (input: Record<string, unknown>) => ipcRenderer.invoke("sale:queue", input)
