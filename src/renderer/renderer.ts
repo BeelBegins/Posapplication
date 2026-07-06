@@ -52,6 +52,8 @@ interface PosAPI {
   startPosSession: (input: Record<string,unknown>) => Promise<{success:boolean;session:Record<string,unknown>|null;error:string|null}>;
   getCustomerBenefits: (customerName: string) => Promise<{ loyaltyProgram: string | null; availablePoints: number; conversionFactor: number; error: string | null }>;
   validateCoupon: (couponCode: string) => Promise<{ couponName: string | null; discountAmount: number; error: string | null }>;
+  listCustomerGiftVouchers: (customerName: string) => Promise<{ vouchers: GiftVoucher[]; error: string | null }>;
+  validateGiftVoucherCode: (voucherCode: string, customerName: string) => Promise<{ voucher: GiftVoucher | null; error: string | null }>;
   loadBenefitsDraft: () => Promise<AppliedBenefits | null>;
   saveBenefitsDraft: (benefits: AppliedBenefits) => Promise<void>;
   getReceipt: (posInvoice: string) => Promise<{ html: string | null; error: string | null }>;
@@ -102,7 +104,18 @@ interface SalesHistoryRow { terminalInvoiceId: string; posInvoice: string | null
 interface AppliedBenefits {
   loyaltyPoints: number;
   couponCode: string;
+  giftVoucherCode?: string;
   cartKey?: string;
+}
+
+interface GiftVoucher {
+  name?: string;
+  voucher_code?: string;
+  amount?: number;
+  issue_date?: string;
+  expiry_date?: string;
+  branch?: string;
+  minimum_redemption_value?: number;
 }
 
 interface PosProfileDetails {
@@ -391,8 +404,13 @@ let startShiftInFlight = false;
 let closeShiftInFlight = false;
 let shiftClosed = false;          // set after a successful Close Shift; blocks F6/F9 until a new shift is started
 let queueSyncInFlight = false;    // guards overlapping offline-queue sync runs
-let appliedBenefits: AppliedBenefits = { loyaltyPoints: 0, couponCode: "" };
+function emptyBenefits(): AppliedBenefits { return { loyaltyPoints: 0, couponCode: "", giftVoucherCode: "" }; }
+function normalizeBenefits(value: AppliedBenefits | Record<string, unknown> | null | undefined): AppliedBenefits {
+  return { loyaltyPoints: Number(value?.loyaltyPoints) || 0, couponCode: String(value?.couponCode ?? ""), giftVoucherCode: String(value?.giftVoucherCode ?? "") };
+}
+let appliedBenefits: AppliedBenefits = emptyBenefits();
 let customerBenefits = { loyaltyProgram: "", availablePoints: 0, conversionFactor: 1 };
+let customerGiftVouchers: GiftVoucher[] = [];
 let benefitsOutdated = false;
 const slashSearchEnabled = true;
 let scannerFocusUntil = 0;
@@ -493,7 +511,7 @@ function showCustomer(): void { const e=document.querySelector<HTMLElement>("#po
 function customerInput(): HTMLInputElement | null { return document.querySelector<HTMLInputElement>("#customer-search"); }
 async function selectCustomer(customer: CustomerResult): Promise<void> { const result=await window.posAPI.loadCustomer(customer.name); selectedCustomer=customer; showCustomer(); // mark payment and benefits allocation outdated when customer changes
   if (paymentRows.length) paymentsOutdated = true;
-  appliedBenefits={loyaltyPoints:0,couponCode:""}; benefitsOutdated=true;
+  appliedBenefits=emptyBenefits(); customerGiftVouchers=[]; benefitsOutdated=true;
   customerBenefits={loyaltyProgram:"",availablePoints:0,conversionFactor:1};
   void loadCustomerBenefits();
   scheduleCartPreview(); const data=result.customer; const detail=document.querySelector<HTMLElement>("#customer-detail"); if(detail)detail.textContent=data?`${String(data.customer_name??customer.customer_name)} | ${String(data.mobile_no??"")} | ${String(data.customer_group??"")} | ${String(data.loyalty_program??"")}${result.cached?" (Cached)":""}`:result.error??"Customer unavailable"; document.querySelector<HTMLDialogElement>("#customer-dialog")?.close(); focusCart(); }
@@ -516,6 +534,7 @@ async function offlineLocalBlocker(requirePayment = false): Promise<string | nul
   if (!selectedCustomer) return "Missing Customer.";
   if (!cartLines.length) return "Cart is empty.";
   if (cartLines.some((line) => line.sellingPrice === null || line.sellingPrice === undefined)) return "Missing local item price.";
+  if (appliedBenefits.giftVoucherCode) return "Gift voucher redemption requires ERPNext online validation. Remove voucher to sell offline.";
   if (requirePayment && remainingAmount() > 0.0001) return "Payment is incomplete.";
   if (requirePayment && paymentPreparedVersion !== currentCartVersion) return "Payment not prepared for current cart.";
   if (requirePayment && paymentsOutdated) return "Payment draft is outdated.";
@@ -647,6 +666,33 @@ async function refreshFromStartShift(): Promise<void> {
 
 // --- Close Shift -------------------------------------------------------------
 let closeShiftSummary: ShiftSummary | null = null;
+function shiftNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() && !Number.isNaN(Number(value))) return Number(value);
+  return null;
+}
+function normalizeShiftSummary(summary: ShiftSummary): ShiftSummary {
+  const payments = summary.payments.map((p) => {
+    const opening = money2(shiftNumber(p.opening_amount) ?? 0);
+    const collected = money2(shiftNumber(p.collected_amount) ?? 0);
+    const saleRaw = shiftNumber(p.sale_amount);
+    const refundRaw = shiftNumber(p.refund_amount);
+    const sale = money2(saleRaw ?? Math.max(collected, 0));
+    let refund = money2(refundRaw ?? Math.min(collected, 0));
+    if (refund > 0) refund = -refund;
+    const net = money2((saleRaw !== null || refundRaw !== null) ? sale + refund : (shiftNumber(p.net_movement) ?? (sale + refund)));
+    const expected = money2(opening + net);
+    return { ...p, opening_amount: opening, collected_amount: net, sale_amount: sale, refund_amount: refund, net_movement: net, expected_amount: expected };
+  });
+  return {
+    ...summary,
+    payments,
+    netSales: money2(payments.reduce((sum, p) => sum + (p.sale_amount ?? 0), 0)),
+    refunds: money2(payments.reduce((sum, p) => sum + (p.refund_amount ?? 0), 0)),
+    totalOpening: money2(payments.reduce((sum, p) => sum + p.opening_amount, 0)),
+    totalExpected: money2(payments.reduce((sum, p) => sum + p.expected_amount, 0))
+  };
+}
 function reconRows(): { mode: string; expected: number; opening: number; actual: number }[] {
   return [...document.querySelectorAll<HTMLElement>("#close-recon-rows .close-recon-row")].map((row) => ({
     mode: row.dataset.mode ?? "",
@@ -725,8 +771,8 @@ async function showCloseShift(): Promise<void> {
   const queue = await window.posAPI.getQueueStatus().catch(() => ({ queued: 0, failed: 0 }));
   const result = await window.posAPI.getShiftSummary({ opening_entry: sessionState.openingEntry, cashier_user: cashierSession.user });
   if (!result.success || !result.summary) { showScreen("pos"); cartMessage(result.error ?? "Unable to load shift summary"); return; }
-  closeShiftSummary = result.summary;
-  const s = result.summary;
+  closeShiftSummary = normalizeShiftSummary(result.summary);
+  const s = closeShiftSummary;
   setText("#close-opening-entry", s.openingEntry);
   setText("#close-cashier", s.user);
   setText("#close-profile", s.posProfile);
@@ -739,7 +785,8 @@ async function showCloseShift(): Promise<void> {
     ? `Warning: ${queue.queued} offline sale(s) could not be synced and are NOT included in expected totals. Sync the queue before closing if possible.`
     : `Review counted amounts carefully. Submit Close Shift will create the ERPNext POS Closing Entry, close this shift, print the summary, delete ${heldCount} held sale(s), and require a new shift before selling again.`;
   const box = document.querySelector<HTMLElement>("#close-recon-rows");
-  if (box) box.replaceChildren(...s.payments.map((p) => {
+  const normalizedSummary = closeShiftSummary;
+  if (box && normalizedSummary) box.replaceChildren(...normalizedSummary.payments.map((p) => {
     const row = document.createElement("div"); row.className = "close-recon-row";
     row.dataset.mode = p.mode_of_payment; row.dataset.opening = String(p.opening_amount); row.dataset.expected = String(p.expected_amount);
     const mode = document.createElement("span"); mode.textContent = p.mode_of_payment;
@@ -975,13 +1022,14 @@ async function runCartPreview(version: number): Promise<void> {
   await new Promise<void>((resolve) => { cartPreviewTimer = window.setTimeout(resolve, 350); });
   if (version !== currentCartVersion) return;
 
-  // 3) Validate the exact cart / customer / coupon / loyalty state with the server.
+  // 3) Validate the exact cart / customer / coupon / loyalty / voucher state with the server.
   const previewInput: Record<string, unknown> = {
     customer: selectedCustomer?.name ?? "",
     items: cartLines.map((line) => ({ item_code: line.itemCode, uom: line.uom, qty: line.quantity }))
   };
   if (appliedBenefits.loyaltyPoints > 0) { previewInput.redeem_loyalty_points = appliedBenefits.loyaltyPoints; previewInput.loyalty_points = appliedBenefits.loyaltyPoints; }
   if (appliedBenefits.couponCode) previewInput.coupon_code = appliedBenefits.couponCode;
+  if (appliedBenefits.giftVoucherCode) previewInput.gift_voucher_code = appliedBenefits.giftVoucherCode;
 
   const result = await window.posAPI.previewCart(previewInput);
   if (version !== currentCartVersion) return; // ignore stale responses
@@ -997,7 +1045,9 @@ async function runCartPreview(version: number): Promise<void> {
   }
 
   const preview: Record<string, unknown> = normalizePreviewResponse(result.preview) ?? result.preview;
-  const differs = fbrTotalsDiffer(localFbrTotals, preview);
+  const previewTotals = asTotalsRecord(preview.totals);
+  const merged: Record<string, unknown> = { ...preview, ...(previewTotals ?? {}) };
+  const differs = fbrTotalsDiffer(localFbrTotals, merged);
 
   // Apply server item FBR values (per-line price/rate).
   const items = Array.isArray(preview.items) ? preview.items : [];
@@ -1012,8 +1062,7 @@ async function runCartPreview(version: number): Promise<void> {
   }
 
   // Apply server totals — keep the server's own fields and supplement the display keys from the FBR totals.
-  const merged: Record<string, unknown> = { ...preview };
-  const serverFbr = extractFbrTotals(preview);
+  const serverFbr = extractFbrTotals(merged);
   if ("merchandise_total" in serverFbr && merged.subtotal === undefined) merged.subtotal = serverFbr.merchandise_total;
   if ("value_excluding_tax" in serverFbr && merged.net_total === undefined) merged.net_total = serverFbr.value_excluding_tax;
   if ("total_sales_tax" in serverFbr && merged.total_taxes_and_charges === undefined) merged.total_taxes_and_charges = serverFbr.total_sales_tax;
@@ -1050,7 +1099,7 @@ function taxRowAmount(pattern: RegExp): number | null {
   return found ? money2(sum) : null;
 }
 
-interface FbrTotalsView { merchandise: number; saleBeforeTax: number; salesTax: number; serviceFee: number; loyaltyAmount: number; grandTotal: number; payable: number; }
+interface FbrTotalsView { merchandise: number; saleBeforeTax: number; salesTax: number; serviceFee: number; loyaltyAmount: number; giftVoucherAmount: number; giftVoucherError: string; grandTotal: number; payable: number; }
 function fbrTotalsView(): FbrTotalsView {
   const linesSum = money2(cartLines.reduce((sum, line) => sum + (line.sellingPrice ?? 0) * line.quantity, 0));
   // Goods are tax-inclusive: trust the line-total sum / local FBR engine — the preview's doc totals come back as 0.
@@ -1061,9 +1110,14 @@ function fbrTotalsView(): FbrTotalsView {
   const serviceFee = taxRowAmount(/service fee|pos fee/i) ?? previewNumber(localFbrTotals, "fbr_pos_service_fee") ?? 0;
   const saleBeforeTax = previewNumber(localFbrTotals, "value_excluding_tax") ?? money2(merchandise - salesTax);
   const loyaltyAmount = previewNumber(serverTotals, "loyalty_amount", "loyalty_points_redeemed", "loyaltyAmount") ?? 0;
-  const grandTotal = money2(merchandise + serviceFee); // FBR POS service fee is added on top of the tax-inclusive goods total
-  const payable = Math.max(0, money2(grandTotal - loyaltyAmount));
-  return { merchandise, saleBeforeTax, salesTax, serviceFee, loyaltyAmount, grandTotal, payable };
+  const giftVoucherAmount = previewNumber(serverTotals, "gift_voucher_amount") ?? 0;
+  const giftVoucherError = String(serverTotals?.gift_voucher_error ?? "");
+  const localGrandTotal = money2(merchandise + serviceFee); // FBR POS service fee is added on top of the tax-inclusive goods total
+  const serverGrandTotal = previewNumber(serverTotals, "rounded_total", "grand_total");
+  const grandTotal = Math.max(0, money2(serverGrandTotal !== null && serverGrandTotal > 0 ? serverGrandTotal : localGrandTotal));
+  const amountDue = previewNumber(serverTotals, "amount_due");
+  const payable = Math.max(0, money2(amountDue ?? (grandTotal - loyaltyAmount - giftVoucherAmount)));
+  return { merchandise, saleBeforeTax, salesTax, serviceFee, loyaltyAmount, giftVoucherAmount, giftVoucherError, grandTotal, payable };
 }
 function payableAmount():number{ return fbrTotalsView().payable; }
 async function persistPayments():Promise<void>{await window.posAPI.savePaymentDraft(paymentRows);}
@@ -1121,12 +1175,14 @@ function blockedSaleReason():string|null{
   const terminal=document.querySelector<HTMLInputElement>("#terminal-id")?.value??"";
   const profile=document.querySelector<HTMLSelectElement>("#pos-profile")?.value??"";
   const online=isOnline();
+  const giftVoucherError=fbrTotalsView().giftVoucherError;
   return (online&&shiftClosed)?"Shift is closed — start a new shift"
     :(online&&!sessionState.valid)?(sessionState.reason||"POS session is no longer active")
     :(online&&(!opening||opening==="No active POS Opening Entry"))?"No active POS Opening Entry"
     :(online&&isPreviousDateSession())?"Shift was opened on a previous date. Close shift before new sales"
     :!cartLines.length?"Cart is empty"
     :(online&&validatedCartVersion!==currentCartVersion)?(previewError?`Cart not validated — ${previewError}`:"Validating cart…")
+    :(online&&appliedBenefits.giftVoucherCode&&giftVoucherError)?giftVoucherError
     :remainingAmount()>0.0001?"Payment is incomplete"
     :paymentPreparedVersion!==currentCartVersion?"Payment not prepared for current cart"
     :paymentsOutdated?"Payment draft is outdated"
@@ -1182,7 +1238,7 @@ async function submitCurrentSale():Promise<void>{
   if(!terminalInvoiceId)terminalInvoiceId=await window.posAPI.getTerminalInvoiceId();
   submissionInProgress=true;cartMessage(online?"Submitting Sale…":"Saving offline sale…");updateCompleteSaleState();
   // Submission payload unchanged; terminal_invoice_id is preserved across retries (only regenerated after Close & Start New Sale).
-  const salePayload={terminal_invoice_id:terminalInvoiceId,terminal_id:terminal,pos_profile:profile,opening_entry:opening,customer:customer.name,items:cartLines.map(x=>({item_code:x.itemCode,qty:x.quantity,uom:x.uom,barcode:x.barcode??undefined})),payments:paymentRows.map(x=>({mode_of_payment:x.method,amount:x.amount})),coupon_code:appliedBenefits.couponCode,redeem_loyalty_points:appliedBenefits.loyaltyPoints>0,loyalty_points:appliedBenefits.loyaltyPoints,estimated_total:fbrTotalsView().payable,cashier_user:cashierSession.user,cashier_full_name:cashierSession.fullName||cashierSession.user,offline_authenticated:!online&&cashierSession.offlineLogin===true,offline_auth_method:!online&&cashierSession.offlineLogin===true?"cashier_pin":""};
+  const salePayload={terminal_invoice_id:terminalInvoiceId,terminal_id:terminal,pos_profile:profile,opening_entry:opening,customer:customer.name,items:cartLines.map(x=>({item_code:x.itemCode,qty:x.quantity,uom:x.uom,barcode:x.barcode??undefined})),payments:paymentRows.map(x=>({mode_of_payment:x.method,amount:x.amount})),coupon_code:appliedBenefits.couponCode,gift_voucher_code:appliedBenefits.giftVoucherCode,redeem_loyalty_points:appliedBenefits.loyaltyPoints>0,loyalty_points:appliedBenefits.loyaltyPoints,estimated_total:fbrTotalsView().payable,cashier_user:cashierSession.user,cashier_full_name:cashierSession.fullName||cashierSession.user,offline_authenticated:!online&&cashierSession.offlineLogin===true,offline_auth_method:!online&&cashierSession.offlineLogin===true?"cashier_pin":""};
   // Offline → queue locally with a provisional receipt; online → submit (a mid-submit drop auto-queues server-side).
   const result=online?await window.posAPI.submitSale(salePayload):await window.posAPI.queueSale(salePayload);
   submissionInProgress=false;
@@ -1248,7 +1304,7 @@ async function openReceiptPreview(response:Record<string,unknown>,provisional=fa
   setCartText("#receipt-before-tax",totals.saleBeforeTax.toFixed(2));
   setCartText("#receipt-sales-tax",totals.salesTax.toFixed(2));
   setCartText("#receipt-service-fee",totals.serviceFee.toFixed(2));
-  setCartText("#receipt-grand-total",totals.payable.toFixed(2));
+  setCartText("#receipt-grand-total",totals.grandTotal.toFixed(2));
   const payBox=document.querySelector<HTMLElement>("#receipt-payments");
   if(payBox)payBox.replaceChildren(...paymentRows.map(row=>{const p=document.createElement("p");const label=document.createElement("span");label.textContent=row.method;const value=document.createElement("strong");value.textContent=row.amount.toFixed(2);p.append(label,value);return p;}));
   setCartText("#receipt-change",changeDue.toFixed(2));
@@ -1408,7 +1464,7 @@ async function printReceiptNow():Promise<void>{
 
 // Clears the active sale UI/state and issues a fresh terminal_invoice_id for the next sale.
 async function clearActiveSale(message:string):Promise<void>{
-  cartLines=[];selectedCartIndex=-1;paymentRows=[];appliedBenefits={loyaltyPoints:0,couponCode:""};changeDue=0;
+  cartLines=[];selectedCartIndex=-1;paymentRows=[];appliedBenefits=emptyBenefits();changeDue=0;
   await persistCart();await persistPayments();await saveBenefitsDraft();
   serverTotals=null;localFbrTotals=null;serverTaxRows=null;
   validatedCartVersion=-1;paymentPreparedVersion=-1;previewStatus="idle";previewError="";
@@ -1470,7 +1526,7 @@ async function holdCurrentSale():Promise<void>{
       cart:cartLines,payments:paymentRows,benefits:{...appliedBenefits},
       totals:{grandTotal:totals.grandTotal,salesTax:totals.salesTax,serviceFee:totals.serviceFee,payable:totals.payable},
       validationSnapshot:{currentCartVersion,validatedCartVersion,paymentPreparedVersion,previewStatus},
-      itemCount:cartLines.length,estimatedTotal:totals.payable
+      itemCount:cartLines.length,estimatedTotal:totals.grandTotal
     });
     // Free the held terminal id so the next sale gets a fresh UUID; the held record keeps the original.
     await window.posAPI.setSaleStatus(heldTerminalId,"Held");
@@ -1512,7 +1568,7 @@ async function resumeHeldSale(id:number):Promise<void>{
   selectedCartIndex=cartLines.length?0:-1;
   paymentRows=Array.isArray(held.payments)?held.payments as PaymentRow[]:[];
   const benefits=held.benefits??{};
-  appliedBenefits={loyaltyPoints:Number(benefits.loyaltyPoints)||0,couponCode:String(benefits.couponCode??"")};
+  appliedBenefits=normalizeBenefits(benefits);
   terminalInvoiceId=held.terminalInvoiceId;
   if(held.customer){selectedCustomer={name:held.customer,customer_name:held.customerName||held.customer,customer_group:"",mobile_no:"",email_id:"",tax_id:""};showCustomer();}
   // Reset validation; saved payments are outdated until re-prepared.
@@ -1895,7 +1951,49 @@ async function showRefundReceipt(res:Record<string,unknown>):Promise<void>{
   if(returnName)await retrieveReceipt(returnName);
 }
 
-async function loadCustomerBenefits():Promise<void>{if(!selectedCustomer)return;if(!isOnline()){customerBenefits={loyaltyProgram:"",availablePoints:0,conversionFactor:1};return;}try{const result=await window.posAPI.getCustomerBenefits(selectedCustomer.name);customerBenefits={loyaltyProgram:result.loyaltyProgram??"",availablePoints:result.availablePoints,conversionFactor:result.conversionFactor};}catch{customerBenefits={loyaltyProgram:"",availablePoints:0,conversionFactor:1};}}
+async function loadCustomerBenefits():Promise<void>{
+  if(!selectedCustomer)return;
+  if(!isOnline()){customerBenefits={loyaltyProgram:"",availablePoints:0,conversionFactor:1};customerGiftVouchers=[];return;}
+  try{
+    const [result,vouchers]=await Promise.all([
+      window.posAPI.getCustomerBenefits(selectedCustomer.name),
+      window.posAPI.listCustomerGiftVouchers(selectedCustomer.name).catch(()=>({vouchers:[],error:null}))
+    ]);
+    customerBenefits={loyaltyProgram:result.loyaltyProgram??"",availablePoints:result.availablePoints,conversionFactor:result.conversionFactor};
+    customerGiftVouchers=vouchers.vouchers??[];
+  }catch{customerBenefits={loyaltyProgram:"",availablePoints:0,conversionFactor:1};customerGiftVouchers=[];}
+}
+
+function giftVoucherLabel(voucher: GiftVoucher): string {
+  const code = String(voucher.voucher_code ?? voucher.name ?? "");
+  const amount = Number(voucher.amount) || 0;
+  const expiry = voucher.expiry_date ? ` | Exp ${voucher.expiry_date}` : "";
+  const branch = voucher.branch ? ` | ${voucher.branch}` : "";
+  return `${code} | ${amount.toFixed(2)}${expiry}${branch}`;
+}
+
+function renderGiftVoucherList(): void {
+  const list = document.querySelector<HTMLElement>("#benefits-gift-voucher-list");
+  if (!list) return;
+  if (!customerGiftVouchers.length) {
+    const empty = document.createElement("p");
+    empty.className = "card-meta";
+    empty.textContent = isOnline() ? "No active gift vouchers for this customer." : "";
+    list.replaceChildren(empty);
+    return;
+  }
+  list.replaceChildren(...customerGiftVouchers.map((voucher) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "secondary-button search-result";
+    button.textContent = giftVoucherLabel(voucher);
+    button.onclick = () => {
+      const input = document.querySelector<HTMLInputElement>("#benefits-gift-voucher-code");
+      if (input) { input.value = String(voucher.voucher_code ?? voucher.name ?? ""); input.focus(); }
+    };
+    return button;
+  }));
+}
 
 async function renderBenefits():Promise<void>{const dialog=document.querySelector<HTMLDialogElement>("#benefits-dialog");if(!dialog)return;const online=isOnline();const customerNameElem=document.querySelector<HTMLElement>("#benefits-customer");if(customerNameElem)customerNameElem.textContent=selectedCustomer?.customer_name??"—";const offlineMsg=document.querySelector<HTMLElement>("#benefits-offline-message");if(offlineMsg)offlineMsg.hidden=online;const loyaltySection=document.querySelector<HTMLElement>("#benefits-loyalty-section");const voucherSection=document.querySelector<HTMLElement>("#benefits-voucher-section");if(loyaltySection)loyaltySection.style.pointerEvents=online?"auto":"none";if(voucherSection)voucherSection.style.pointerEvents=online?"auto":"none";const programElem=document.querySelector<HTMLElement>("#benefits-loyalty-program");if(programElem)programElem.textContent=customerBenefits.loyaltyProgram||"—";const pointsElem=document.querySelector<HTMLElement>("#benefits-available-points");if(pointsElem)pointsElem.textContent=String(customerBenefits.availablePoints);const conversionElem=document.querySelector<HTMLElement>("#benefits-conversion-factor");if(conversionElem)conversionElem.textContent=String(customerBenefits.conversionFactor);const redeemInput=document.querySelector<HTMLInputElement>("#benefits-redeem-points");const maxBtn=document.querySelector<HTMLButtonElement>("#benefits-max-points");const couponInput=document.querySelector<HTMLInputElement>("#benefits-coupon-code");const applyBtn=document.querySelector<HTMLButtonElement>("#benefits-apply");const removeBtn=document.querySelector<HTMLButtonElement>("#benefits-remove");if(redeemInput){redeemInput.disabled=!online||!customerBenefits.loyaltyProgram;}if(maxBtn){maxBtn.disabled=!online||!customerBenefits.loyaltyProgram;}if(couponInput){couponInput.disabled=!online;}if(applyBtn){applyBtn.disabled=!online;}if(removeBtn){removeBtn.disabled=appliedBenefits.loyaltyPoints===0&&!appliedBenefits.couponCode;}const loyaltyValue=customerBenefits.conversionFactor>0?customerBenefits.availablePoints/customerBenefits.conversionFactor:0;const loyaltyElem=document.querySelector<HTMLElement>("#benefits-loyalty-value");if(loyaltyElem)loyaltyElem.textContent=loyaltyValue.toFixed(2); const redeemedPts=previewNumber(serverTotals,"redeemed_loyalty_points");const loyaltyAmt=previewNumber(serverTotals,"loyalty_amount"); const redeemedRow=document.querySelector<HTMLElement>("#benefits-redeemed-row");if(redeemedRow)redeemedRow.hidden=redeemedPts===null||redeemedPts===0; const redeemedElem=document.querySelector<HTMLElement>("#benefits-redeemed-points");if(redeemedElem)redeemedElem.textContent=redeemedPts!==null?String(redeemedPts):"0"; const loyaltyAmtRow=document.querySelector<HTMLElement>("#benefits-loyalty-amount-row");if(loyaltyAmtRow)loyaltyAmtRow.hidden=loyaltyAmt===null||loyaltyAmt===0; const loyaltyAmtElem=document.querySelector<HTMLElement>("#benefits-loyalty-amount");if(loyaltyAmtElem)loyaltyAmtElem.textContent=loyaltyAmt!==null?loyaltyAmt.toFixed(2):"0.00"; const appliedElem=document.querySelector<HTMLElement>("#benefits-applied");if(appliedElem){const parts:string[]=[];if(appliedBenefits.loyaltyPoints>0)parts.push(`Loyalty: ${appliedBenefits.loyaltyPoints} pts`);if(appliedBenefits.couponCode)parts.push(`Coupon: ${appliedBenefits.couponCode}`);appliedElem.textContent=parts.length?`Applied: ${parts.join(" + ")}`:"";}dialog.showModal();window.setTimeout(()=>document.querySelector<HTMLInputElement>("#benefits-redeem-points")?.focus(),0);}
 
@@ -1906,6 +2004,60 @@ async function removeBenefits():Promise<void>{appliedBenefits={loyaltyPoints:0,c
 async function saveBenefitsDraft():Promise<void>{const draft:AppliedBenefits={...appliedBenefits,cartKey:cartLines.map(l=>l.itemCode).join("|")+"|"+cartLines.map(l=>l.quantity).join("|")};await window.posAPI.saveBenefitsDraft(draft);}
 
 async function openBenefits():Promise<void>{await loadCustomerBenefits();appliedBenefits=await window.posAPI.loadBenefitsDraft()??{loyaltyPoints:0,couponCode:""};const redeemInput=document.querySelector<HTMLInputElement>("#benefits-redeem-points");if(redeemInput)redeemInput.value=String(appliedBenefits.loyaltyPoints);const couponInput=document.querySelector<HTMLInputElement>("#benefits-coupon-code");if(couponInput)couponInput.value=appliedBenefits.couponCode;await renderBenefits();}
+
+async function renderBenefitsModern():Promise<void>{
+  const dialog=document.querySelector<HTMLDialogElement>("#benefits-dialog");if(!dialog)return;
+  const online=isOnline();
+  const customerNameElem=document.querySelector<HTMLElement>("#benefits-customer");if(customerNameElem)customerNameElem.textContent=selectedCustomer?.customer_name??"â€”";
+  const offlineMsg=document.querySelector<HTMLElement>("#benefits-offline-message");if(offlineMsg)offlineMsg.hidden=online;
+  const loyaltySection=document.querySelector<HTMLElement>("#benefits-loyalty-section");const voucherSection=document.querySelector<HTMLElement>("#benefits-voucher-section");
+  if(loyaltySection)loyaltySection.style.pointerEvents=online?"auto":"none";if(voucherSection)voucherSection.style.pointerEvents=online?"auto":"none";
+  const programElem=document.querySelector<HTMLElement>("#benefits-loyalty-program");if(programElem)programElem.textContent=customerBenefits.loyaltyProgram||"â€”";
+  const pointsElem=document.querySelector<HTMLElement>("#benefits-available-points");if(pointsElem)pointsElem.textContent=String(customerBenefits.availablePoints);
+  const conversionElem=document.querySelector<HTMLElement>("#benefits-conversion-factor");if(conversionElem)conversionElem.textContent=String(customerBenefits.conversionFactor);
+  const redeemInput=document.querySelector<HTMLInputElement>("#benefits-redeem-points");const maxBtn=document.querySelector<HTMLButtonElement>("#benefits-max-points");
+  const couponInput=document.querySelector<HTMLInputElement>("#benefits-coupon-code");const giftInput=document.querySelector<HTMLInputElement>("#benefits-gift-voucher-code");
+  const applyBtn=document.querySelector<HTMLButtonElement>("#benefits-apply");const removeBtn=document.querySelector<HTMLButtonElement>("#benefits-remove");
+  if(redeemInput){redeemInput.disabled=!online||!customerBenefits.loyaltyProgram;}if(maxBtn){maxBtn.disabled=!online||!customerBenefits.loyaltyProgram;}
+  if(couponInput){couponInput.disabled=!online;}if(giftInput){giftInput.disabled=!online;}if(applyBtn){applyBtn.disabled=!online;}
+  if(removeBtn){removeBtn.disabled=appliedBenefits.loyaltyPoints===0&&!appliedBenefits.couponCode&&!appliedBenefits.giftVoucherCode;}
+  const loyaltyValue=customerBenefits.conversionFactor>0?customerBenefits.availablePoints/customerBenefits.conversionFactor:0;const loyaltyElem=document.querySelector<HTMLElement>("#benefits-loyalty-value");if(loyaltyElem)loyaltyElem.textContent=loyaltyValue.toFixed(2);
+  const redeemedPts=previewNumber(serverTotals,"redeemed_loyalty_points");const loyaltyAmt=previewNumber(serverTotals,"loyalty_amount");
+  const redeemedRow=document.querySelector<HTMLElement>("#benefits-redeemed-row");if(redeemedRow)redeemedRow.hidden=redeemedPts===null||redeemedPts===0;
+  const redeemedElem=document.querySelector<HTMLElement>("#benefits-redeemed-points");if(redeemedElem)redeemedElem.textContent=redeemedPts!==null?String(redeemedPts):"0";
+  const loyaltyAmtRow=document.querySelector<HTMLElement>("#benefits-loyalty-amount-row");if(loyaltyAmtRow)loyaltyAmtRow.hidden=loyaltyAmt===null||loyaltyAmt===0;
+  const loyaltyAmtElem=document.querySelector<HTMLElement>("#benefits-loyalty-amount");if(loyaltyAmtElem)loyaltyAmtElem.textContent=loyaltyAmt!==null?loyaltyAmt.toFixed(2):"0.00";
+  renderGiftVoucherList();
+  const totals=fbrTotalsView();
+  const giftStatus=document.querySelector<HTMLElement>("#benefits-gift-voucher-status");if(giftStatus)giftStatus.textContent=appliedBenefits.giftVoucherCode?(totals.giftVoucherError||`Gift voucher amount: ${totals.giftVoucherAmount.toFixed(2)}`):"";
+  const appliedElem=document.querySelector<HTMLElement>("#benefits-applied");
+  if(appliedElem){const parts:string[]=[];if(appliedBenefits.loyaltyPoints>0)parts.push(`Loyalty: ${appliedBenefits.loyaltyPoints} pts`);if(appliedBenefits.couponCode)parts.push(`Coupon: ${appliedBenefits.couponCode}`);if(appliedBenefits.giftVoucherCode)parts.push(`Gift Voucher: ${appliedBenefits.giftVoucherCode}`);appliedElem.textContent=parts.length?`Applied: ${parts.join(" + ")}`:"";}
+  dialog.showModal();window.setTimeout(()=>document.querySelector<HTMLInputElement>("#benefits-redeem-points")?.focus(),0);
+}
+
+async function applyBenefitsModern():Promise<void>{
+  const msg=document.querySelector<HTMLElement>("#benefits-message");
+  try{
+    const redeemInput=document.querySelector<HTMLInputElement>("#benefits-redeem-points");const couponInput=document.querySelector<HTMLInputElement>("#benefits-coupon-code");const giftInput=document.querySelector<HTMLInputElement>("#benefits-gift-voucher-code");
+    const redeemPoints=Number(redeemInput?.value)||0;const couponCode=(couponInput?.value??"").trim();const giftVoucherCode=(giftInput?.value??"").trim();
+    if(redeemPoints>0&&redeemPoints>customerBenefits.availablePoints){if(msg)msg.textContent="Redeem points exceeds available points.";return;}
+    if(giftVoucherCode&&selectedCustomer){const validation=await window.posAPI.validateGiftVoucherCode(giftVoucherCode,selectedCustomer.name);if(msg)msg.textContent=validation.error??"Gift voucher validated.";}
+    appliedBenefits={loyaltyPoints:redeemPoints,couponCode,giftVoucherCode};await saveBenefitsDraft();
+    if(msg)msg.textContent=giftVoucherCode?"Benefits applied - validating voucher with cart...":"Benefits applied - validating with server...";
+    benefitsOutdated=false;if(paymentRows.length)paymentsOutdated=true;scheduleCartPreview();await renderBenefitsModern();
+  }catch(err){if(msg)msg.textContent=err instanceof Error?err.message:"Failed to apply benefits.";}
+}
+
+async function removeBenefitsModern():Promise<void>{appliedBenefits=emptyBenefits();await saveBenefitsDraft();const msg=document.querySelector<HTMLElement>("#benefits-message");if(msg)msg.textContent="Benefits removed.";if(paymentRows.length)paymentsOutdated=true;scheduleCartPreview();await renderBenefitsModern();}
+
+async function openBenefitsModern():Promise<void>{
+  await loadCustomerBenefits();
+  appliedBenefits=normalizeBenefits(await window.posAPI.loadBenefitsDraft());
+  const redeemInput=document.querySelector<HTMLInputElement>("#benefits-redeem-points");if(redeemInput)redeemInput.value=String(appliedBenefits.loyaltyPoints);
+  const couponInput=document.querySelector<HTMLInputElement>("#benefits-coupon-code");if(couponInput)couponInput.value=appliedBenefits.couponCode;
+  const giftInput=document.querySelector<HTMLInputElement>("#benefits-gift-voucher-code");if(giftInput)giftInput.value=appliedBenefits.giftVoucherCode??"";
+  await renderBenefitsModern();
+}
 
 function closeBenefitsDialog():void{document.querySelector<HTMLDialogElement>('#benefits-dialog')?.close();focusCart();}
 
@@ -1956,7 +2108,7 @@ function renderCart(): void {
   (document.querySelector("#cart-quantity") as HTMLElement).textContent = String(quantity);
   setCartText("#cart-sales-tax", totals.salesTax.toFixed(2));
   setCartText("#cart-service-fee", totals.serviceFee.toFixed(2));
-  setCartText("#cart-grand-total", totals.payable.toFixed(2)); // amount due, FBR POS service fee included
+  setCartText("#cart-grand-total", totals.grandTotal.toFixed(2)); // invoice grand total, before loyalty/voucher settlement
   setCartText("#cart-paid", paid.toFixed(2));
   setCartText("#cart-change", changeDue.toFixed(2));
   // Display loyalty redemption and coupon
@@ -1964,6 +2116,12 @@ function renderCart(): void {
   if(loyaltyDisplayEl){loyaltyDisplayEl.textContent=appliedBenefits.loyaltyPoints>0?`Loyalty Redeemed: ${appliedBenefits.loyaltyPoints} pts (${totals.loyaltyAmount.toFixed(2)})`:"";}
   const couponDisplayEl=document.querySelector<HTMLElement>("#cart-coupon-display");
   if(couponDisplayEl){couponDisplayEl.textContent=appliedBenefits.couponCode?`Coupon: ${appliedBenefits.couponCode}`:"";}
+  const giftVoucherDisplayEl=document.querySelector<HTMLElement>("#cart-gift-voucher-display");
+  if(giftVoucherDisplayEl){
+    giftVoucherDisplayEl.textContent=appliedBenefits.giftVoucherCode
+      ? (totals.giftVoucherError ? `Gift Voucher: ${appliedBenefits.giftVoucherCode} - ${totals.giftVoucherError}` : `Gift Voucher: ${appliedBenefits.giftVoucherCode} (${totals.giftVoucherAmount.toFixed(2)})`)
+      : "";
+  }
   updateCompleteSaleState();
 }
 async function afterCartMutation(message: string): Promise<void> {
@@ -1977,7 +2135,7 @@ async function afterCartMutation(message: string): Promise<void> {
     paymentEditIndex = null;
     paymentsOutdated = false;
     changeDue = 0;
-    appliedBenefits = { loyaltyPoints: 0, couponCode: "" };
+    appliedBenefits = emptyBenefits();
     await persistPayments();
     await saveBenefitsDraft();
     renderPayments();
@@ -2758,7 +2916,7 @@ window.addEventListener("DOMContentLoaded", () => {
   void loadCachedPosSession();
   void window.posAPI.getCatalogTotals().then(showCatalogTotals);
   window.posAPI.onCatalogProgress(showCatalogProgress);
-  void window.posAPI.loadCart().then((state) => { cartLines = state.lines; selectedCartIndex = cartLines.length ? 0 : -1; renderCart(); focusCart(); }); void window.posAPI.loadBenefitsDraft().then((draft) => { if(draft) appliedBenefits = draft; }); void window.posAPI.getTerminalInvoiceId().then((id)=>{terminalInvoiceId=id;}); window.posAPI.onCompleteSaleShortcut(()=>void submitCurrentSale());
+  void window.posAPI.loadCart().then((state) => { cartLines = state.lines; selectedCartIndex = cartLines.length ? 0 : -1; renderCart(); focusCart(); }); void window.posAPI.loadBenefitsDraft().then((draft) => { if(draft) appliedBenefits = normalizeBenefits(draft); }); void window.posAPI.getTerminalInvoiceId().then((id)=>{terminalInvoiceId=id;}); window.posAPI.onCompleteSaleShortcut(()=>void submitCurrentSale());
   window.posAPI.onFocusScanner(() => focusCart(true));
   void renderSyncStatus();
   void runPosBootstrap("startup");
@@ -2979,7 +3137,7 @@ window.addEventListener("DOMContentLoaded", () => {
   document.querySelector<HTMLDialogElement>("#quantity-dialog")?.addEventListener("cancel", () => focusCart());
   // Payment dialog controls
   document.querySelector<HTMLButtonElement>('#open-payment')?.addEventListener('click', () => void openPayment());
-  document.querySelector<HTMLButtonElement>('#open-benefits')?.addEventListener('click', () => void openBenefits());
+  document.querySelector<HTMLButtonElement>('#open-benefits')?.addEventListener('click', () => void openBenefitsModern());
   document.querySelector<HTMLButtonElement>('#payment-exact')?.addEventListener('click', () => void addExactAmount());
   document.querySelector<HTMLButtonElement>('#payment-add')?.addEventListener('click', () => void addPayment());
   document.querySelector<HTMLButtonElement>('#payment-complete')?.addEventListener('click', () => void completePaymentAllocation());
@@ -3008,10 +3166,11 @@ window.addEventListener("DOMContentLoaded", () => {
   document.querySelector<HTMLDialogElement>('#receipt-dialog')?.addEventListener('cancel', (e) => e.preventDefault());
   // Benefits dialog controls
   document.querySelector<HTMLButtonElement>('#benefits-max-points')?.addEventListener('click', () => { const input = document.querySelector<HTMLInputElement>('#benefits-redeem-points'); if (input) { input.value = String(customerBenefits.availablePoints); input.focus(); } });
-  document.querySelector<HTMLButtonElement>('#benefits-apply')?.addEventListener('click', () => void applyBenefits());
-  document.querySelector<HTMLButtonElement>('#benefits-remove')?.addEventListener('click', () => void removeBenefits());
-  document.querySelector<HTMLInputElement>('#benefits-redeem-points')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); void applyBenefits(); } });
-  document.querySelector<HTMLInputElement>('#benefits-coupon-code')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); void applyBenefits(); } });
+  document.querySelector<HTMLButtonElement>('#benefits-apply')?.addEventListener('click', () => void applyBenefitsModern());
+  document.querySelector<HTMLButtonElement>('#benefits-remove')?.addEventListener('click', () => void removeBenefitsModern());
+  document.querySelector<HTMLInputElement>('#benefits-redeem-points')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); void applyBenefitsModern(); } });
+  document.querySelector<HTMLInputElement>('#benefits-coupon-code')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); void applyBenefitsModern(); } });
+  document.querySelector<HTMLInputElement>('#benefits-gift-voucher-code')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); void applyBenefitsModern(); } });
   document.addEventListener("keydown", (event) => {
     // Refund quantity inputs own their keystrokes — never let global POS shortcuts intercept typing/arrows there.
     if ((document.activeElement as HTMLElement | null)?.closest("#refund-items")) return;
@@ -3029,11 +3188,11 @@ window.addEventListener("DOMContentLoaded", () => {
     const benefitsOpen = benefitsDialog?.open;
     const paymentOpen = paymentDialog?.open;
     if (captureScannerTextKey(event)) return;
-    if (event.key === 'F7') { event.preventDefault(); event.stopPropagation(); if (benefitsOpen) { closeBenefitsDialog(); } else { void openBenefits(); } return; }
+    if (event.key === 'F7') { event.preventDefault(); event.stopPropagation(); if (benefitsOpen) { closeBenefitsDialog(); } else { void openBenefitsModern(); } return; }
     if (event.key === 'F9') { event.preventDefault(); event.stopPropagation(); void submitCurrentSale(); return; }
     if (benefitsOpen) {
       if (event.key === 'Tab') { /* default behavior for Tab */ return; }
-      if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); void applyBenefits(); return; }
+      if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); void applyBenefitsModern(); return; }
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeBenefitsDialog(); return; }
     }
     if (event.key === 'F6') { event.preventDefault(); event.stopPropagation(); if (paymentOpen) { void completePaymentAllocation(); } else { void openPayment(); } return; }

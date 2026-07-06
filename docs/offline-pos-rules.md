@@ -1,6 +1,6 @@
 # Offline POS Rules
 
-Last updated: 2026-07-03
+Last updated: 2026-07-04
 
 ## Goal
 
@@ -50,6 +50,7 @@ Offline payment must not require live POS Opening Entry validation.
 - No customer/default customer.
 - Empty cart.
 - Missing item price.
+- Gift voucher code is applied. Gift voucher redemption requires online ERPNext validation.
 - Payment is invalid or incomplete.
 
 ## Online Sale Rules
@@ -83,7 +84,7 @@ Queued sale payload stores:
 - `cashier_user`
 - `cashier_full_name`
 - `local_offline_session_id`
-- `opening_entry` as offline placeholder until sync assigns a real one
+- `opening_entry` blank/null until sync assigns a real ERPNext POS Opening Entry
 - `offline_authenticated`
 - `offline_auth_method`
 - `created_at`
@@ -137,6 +138,10 @@ If sync fails:
 - Show clear error.
 - Do not duplicate invoices.
 - Do not lose sales.
+
+`OFFLINE-*` is only a local offline batch ID.
+
+Never send `OFFLINE-*` as `opening_entry` to ERPNext APIs.
 
 ## Still Online-Only
 
