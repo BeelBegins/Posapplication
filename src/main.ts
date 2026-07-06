@@ -60,6 +60,7 @@ import {
   ,normalizeErpnextUrl
   ,logRefund
   ,getShiftRefundTotal
+  ,getShiftRefundBreakdown
 } from "./db/database";
 import type { HeldSaleInput, SalesHistoryFilter, ShiftHistoryRow } from "./db/database";
 
@@ -828,6 +829,57 @@ interface ShiftSummary {
   payments: ShiftPaymentRow[]; invoiceCount: number; netSales: number; refunds: number; totalOpening: number; totalExpected: number; isEstimate: boolean;
 }
 
+function paymentModeText(row: ShiftPaymentRow): string {
+  return String(row.mode_of_payment ?? "");
+}
+
+function hasPaymentBreakdown(summary: ShiftSummary): boolean {
+  return summary.payments.some((row) => row.sale_amount !== undefined || row.refund_amount !== undefined || row.net_movement !== undefined);
+}
+
+function applyLocalRefundBreakdown(summary: ShiftSummary, openingEntry: string, collectedAmountIsNet = true): ShiftSummary {
+  if (hasPaymentBreakdown(summary)) return summary;
+  const rawBreakdown = getShiftRefundBreakdown(openingEntry);
+  const totalRefund = Object.values(rawBreakdown).reduce((sum, value) => sum + Math.abs(Number(value) || 0), 0);
+  if (totalRefund <= 0) return summary;
+
+  const modes = summary.payments.map(paymentModeText).filter(Boolean);
+  const cashMode = modes.find((mode) => mode.toLowerCase().includes("cash")) ?? modes[0] ?? "";
+  const refundByMode = new Map<string, number>();
+  for (const [mode, amount] of Object.entries(rawBreakdown)) {
+    const targetMode = mode && modes.includes(mode) ? mode : cashMode;
+    refundByMode.set(targetMode, (refundByMode.get(targetMode) ?? 0) + Math.abs(Number(amount) || 0));
+  }
+
+  const payments = summary.payments.map((row) => {
+    const mode = paymentModeText(row);
+    const opening = numValue(row as unknown as Record<string, unknown>, "opening_amount");
+    const collected = numValue(row as unknown as Record<string, unknown>, "collected_amount");
+    const refund = -Math.abs(refundByMode.get(mode) ?? 0);
+    const net = collectedAmountIsNet ? collected : collected + refund;
+    const sale = collectedAmountIsNet ? net - refund : collected;
+    const expected = row.expected_amount !== undefined && collectedAmountIsNet ? row.expected_amount : opening + net;
+    return {
+      ...row,
+      opening_amount: opening,
+      sale_amount: sale,
+      refund_amount: refund,
+      net_movement: net,
+      collected_amount: net,
+      expected_amount: expected
+    };
+  });
+
+  return {
+    ...summary,
+    payments,
+    netSales: payments.reduce((sum, row) => sum + (row.sale_amount ?? 0), 0),
+    refunds: payments.reduce((sum, row) => sum + (row.refund_amount ?? 0), 0),
+    totalOpening: payments.reduce((sum, row) => sum + row.opening_amount, 0),
+    totalExpected: payments.reduce((sum, row) => sum + row.expected_amount, 0)
+  };
+}
+
 function numValue(record: Record<string, unknown> | null, ...keys: string[]): number {
   for (const key of keys) { const v = record?.[key]; if (typeof v === "number") return v; if (typeof v === "string" && v.trim() && !Number.isNaN(Number(v))) return Number(v); }
   return 0;
@@ -872,7 +924,7 @@ function getLocalShiftSummary(openingEntry?: string): { success: boolean; summar
     postingDate: textValue(session, "posting_date"), status: textValue(session, "status") || "Open",
     payments, invoiceCount, netSales, refunds: getShiftRefundTotal(entry), totalOpening: payments.reduce((s, p) => s + p.opening_amount, 0), totalExpected: payments.reduce((s, p) => s + p.expected_amount, 0), isEstimate: true
   };
-  return { success: true, summary, error: null };
+  return { success: true, summary: applyLocalRefundBreakdown(summary, entry, false), error: null };
 }
 
 async function getShiftSummary(input: string | Record<string, unknown> = {}): Promise<{ success: boolean; summary: ShiftSummary | null; error: string | null }> {
@@ -893,7 +945,7 @@ async function getShiftSummary(input: string | Record<string, unknown> = {}): Pr
     const b = await r.json() as { message?: unknown };
     const raw = asRecord(b.message);
     const summary = asRecord(raw?.message) ?? raw;
-    return summary ? { success: true, summary: summary as unknown as ShiftSummary, error: null } : { success: false, summary: null, error: "Shift summary was not returned." };
+    return summary ? { success: true, summary: applyLocalRefundBreakdown(summary as unknown as ShiftSummary, openingEntry, true), error: null } : { success: false, summary: null, error: "Shift summary was not returned." };
   } catch (e) {
     return { success: false, summary: null, error: e instanceof Error ? e.message : "Unable to load server shift summary." };
   }
@@ -1273,7 +1325,10 @@ async function submitPosRefund(input: Record<string, unknown>): Promise<{ result
       const returnInvoice = textValue(invoice, "name") || textValue(result, "name");
       const amount = Math.abs(numValue(invoice, "grand_total") || numValue(invoice, "rounded_total") || numValue(result, "grand_total") || numValue(result, "refund_total") || 0);
       const openingEntry = textValue(input, "pos_opening_entry") || getCartIdentity().openingEntry;
-      logRefund(returnInvoice, openingEntry, amount);
+      const resultPayments = Array.isArray(result.payments) ? result.payments : [];
+      const inputPayments = Array.isArray(input.payments) ? input.payments : [];
+      const paymentMode = textValue(asRecord(resultPayments[0]), "mode_of_payment") || textValue(asRecord(inputPayments[0]), "mode_of_payment");
+      logRefund(returnInvoice, openingEntry, amount, paymentMode);
     }
     return result ? { result, error: null } : { result: null, error: "Refund response was empty." };
   } catch (error) {

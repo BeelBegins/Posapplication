@@ -607,6 +607,8 @@ Client normalizes server summary rows so:
 
 stay consistent in the UI.
 
+If the server summary returns only net `collected_amount`, the client supplements the sale/refund split from the local `pos_refund_log`. New refund log rows store `mode_of_payment`; older rows without mode are assigned to Cash for display fallback.
+
 After successful close:
 
 - ERPNext POS Closing Entry is created.

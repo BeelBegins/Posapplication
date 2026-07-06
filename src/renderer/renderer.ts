@@ -904,6 +904,12 @@ async function persistCart(): Promise<void> { await window.posAPI.saveCart(cartL
 function previewNumber(data: Record<string, unknown> | null, ...keys: string[]): number | null { for(const key of keys){const value=data?.[key];if(typeof value==="number")return value;if(typeof value==="string"&&!Number.isNaN(Number(value)))return Number(value);}return null; }
 function setCartText(id:string,value:string):void{const e=document.querySelector<HTMLElement>(id);if(e)e.textContent=value;}
 function asTotalsRecord(value: unknown): Record<string, unknown> | null { return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null; }
+function previewLineSellingRate(row: Record<string, unknown>): number | null {
+  const quantity = previewNumber(row, "quantity", "qty");
+  const lineAmount = previewNumber(row, "line_amount");
+  if (quantity !== null && quantity > 0 && lineAmount !== null) return money2(lineAmount / quantity);
+  return previewNumber(row, "price_list_rate", "rate");
+}
 
 const FBR_TOTAL_KEYS = ["merchandise_total", "value_excluding_tax", "total_sales_tax", "fbr_pos_service_fee", "grand_total", "rounded_total"] as const;
 
@@ -1050,14 +1056,14 @@ async function runCartPreview(version: number): Promise<void> {
   const differs = fbrTotalsDiffer(localFbrTotals, merged);
 
   // Apply server item FBR values (per-line price/rate).
-  const items = Array.isArray(preview.items) ? preview.items : [];
+  const items = Array.isArray(preview.items) ? preview.items : Array.isArray(preview.rows) ? preview.rows : [];
   for (const item of items) {
     const row = asTotalsRecord(item);
     if (!row) continue;
     const code = String(row.item_code ?? "");
     const uom = String(row.uom ?? "");
     const line = cartLines.find((x) => x.itemCode === code && (!uom || x.uom === uom));
-    const rate = previewNumber(row, "rate", "price_list_rate");
+    const rate = previewLineSellingRate(row);
     if (line && rate !== null) line.sellingPrice = rate;
   }
 
