@@ -91,6 +91,12 @@ const MIGRATIONS: Migration[] = [
       "CREATE INDEX IF NOT EXISTS idx_pos_customers_modified ON pos_customers(modified)",
       "CREATE INDEX IF NOT EXISTS idx_pos_item_barcodes_modified ON pos_item_barcodes(modified)"
     ]
+  },
+  {
+    version: 3,
+    sql: [
+      "ALTER TABLE pos_refund_log ADD COLUMN mode_of_payment TEXT"
+    ]
   }
 ];
 
@@ -419,15 +425,20 @@ export function getQueuedSales(): QueuedSale[] {
   return rows.map((r) => ({ terminalInvoiceId: String(r.terminal_invoice_id ?? ""), payload: parseObject(r.payload_json as string ?? null) ?? {}, response: parseObject(r.response_json as string ?? null), createdAt: String(r.created_at ?? "") }));
 }
 // ----- Refund log (for shift summary refund totals; refunds aren't in pos_sales_history) -----
-export function logRefund(returnInvoice: string, openingEntry: string, amount: number): void {
+export function logRefund(returnInvoice: string, openingEntry: string, amount: number, modeOfPayment = ""): void {
   if (!database) return;
-  database.prepare("INSERT INTO pos_refund_log (return_invoice, opening_entry, amount, created_at) VALUES (?, ?, ?, ?) ON CONFLICT(return_invoice) DO UPDATE SET amount=excluded.amount, opening_entry=excluded.opening_entry")
-    .run(returnInvoice || `refund-${Date.now()}`, openingEntry, Math.abs(amount) || 0, new Date().toISOString());
+  database.prepare("INSERT INTO pos_refund_log (return_invoice, opening_entry, amount, mode_of_payment, created_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(return_invoice) DO UPDATE SET amount=excluded.amount, opening_entry=excluded.opening_entry, mode_of_payment=excluded.mode_of_payment")
+    .run(returnInvoice || `refund-${Date.now()}`, openingEntry, Math.abs(amount) || 0, modeOfPayment, new Date().toISOString());
 }
 export function getShiftRefundTotal(openingEntry: string): number {
   if (!database || !openingEntry) return 0;
   const row = database.prepare("SELECT COALESCE(SUM(amount),0) total FROM pos_refund_log WHERE opening_entry=?").get(openingEntry) as { total: number } | undefined;
   return Number(row?.total) || 0;
+}
+export function getShiftRefundBreakdown(openingEntry: string): Record<string, number> {
+  if (!database || !openingEntry) return {};
+  const rows = database.prepare("SELECT COALESCE(mode_of_payment,'') mode, COALESCE(SUM(amount),0) total FROM pos_refund_log WHERE opening_entry=? GROUP BY COALESCE(mode_of_payment,'')").all(openingEntry) as { mode: string; total: number }[];
+  return Object.fromEntries(rows.map((row) => [String(row.mode || ""), Number(row.total) || 0]));
 }
 
 export function getQueueCounts(): { queued: number; failed: number } {
