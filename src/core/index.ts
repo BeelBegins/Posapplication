@@ -1,6 +1,7 @@
 import type { PosCoreDeps } from "./types";
 import { createHttpCore } from "./http";
 import { createCatalogSyncCore } from "./catalog-sync";
+import { createPosSessionCore } from "./pos-session";
 
 export * from "./types";
 export * from "./http";
@@ -14,5 +15,5 @@ export * from "./http";
  */
 export function createPosCore(deps: PosCoreDeps) {
   const http = createHttpCore(deps);
-  return { ...http, ...createCatalogSyncCore(deps, http) };
+  return { ...http, ...createCatalogSyncCore(deps, http), ...createPosSessionCore(deps) };
 }
