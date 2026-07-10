@@ -3,6 +3,7 @@ import { createHttpCore } from "./http";
 import { createCatalogSyncCore } from "./catalog-sync";
 import { createPosSessionCore } from "./pos-session";
 import { createPosConfigCore } from "./pos-config";
+import { createSaleRefundCore } from "./sale-refund";
 
 export * from "./types";
 export * from "./http";
@@ -16,10 +17,12 @@ export * from "./http";
  */
 export function createPosCore(deps: PosCoreDeps) {
   const http = createHttpCore(deps);
+  const posSession = createPosSessionCore(deps);
   return {
     ...http,
     ...createCatalogSyncCore(deps, http),
-    ...createPosSessionCore(deps),
-    ...createPosConfigCore(deps, http)
+    ...posSession,
+    ...createPosConfigCore(deps, http),
+    ...createSaleRefundCore(deps, http, posSession)
   };
 }
