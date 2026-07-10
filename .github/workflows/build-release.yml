@@ -24,6 +24,9 @@ jobs:
       - name: Install dependencies (rebuilds better-sqlite3 for Electron via postinstall)
         run: npm ci
 
+      - name: Run tests
+        run: npm test
+
       - name: Compile TypeScript + copy renderer assets
         run: npm run build
 

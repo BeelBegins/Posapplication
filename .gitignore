@@ -10,3 +10,10 @@ setup/
 .env.local
 *.log
 .DS_Store
+
+# Ruflo runtime state (generated, local-only)
+.claude-flow/
+.swarm/
+
+# test build output (tsconfig.test.json), never shipped
+.test-out/

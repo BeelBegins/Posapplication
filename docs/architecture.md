@@ -781,9 +781,18 @@ Release:
 npm run release
 ```
 
+Automated tests:
+
+```powershell
+npm test
+```
+
+Unit-tests `src/domain/fbr-calculation.ts` (tax/refund math) and `src/db/database.ts` (schema/migrations, settings, held sales, sales-history/offline-queue idempotency, refund logging, shift-reconciliation totals). Runs in CI on every push to `main`, before the installer build. Does not cover the IPC/UI layer (`main.ts`/`preload.ts`/`renderer.ts`) — the manual checklist below is still required for that.
+
 Minimum verification before release:
 
 - `npm run build`
+- `npm test`
 - normal online sale
 - offline sale queue and sync
 - receipt print
