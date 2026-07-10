@@ -781,6 +781,16 @@ export function loadSettings(): AppSettings {
   return settings;
 }
 
+// Releases the underlying file handle. Not called during normal app operation (the OS
+// reclaims it on process exit) — exists for tests, which run multiple init/teardown
+// cycles in one process and, on Windows, cannot delete a SQLite file while it's still open.
+export function closeDatabase(): void {
+  if (!database) return;
+  database.close();
+  database = null;
+  databasePath = "";
+}
+
 export function getDatabaseStatus(): DatabaseStatus {
   if (!database) {
     return {

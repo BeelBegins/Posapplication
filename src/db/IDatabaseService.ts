@@ -14,6 +14,7 @@ import type {
 export interface IDatabaseService {
   // ----- Lifecycle -----
   initDatabase(): void;
+  closeDatabase(): void;
   getDatabaseStatus(): DatabaseStatus;
   normalizeErpnextUrl(value: string): string;
   getMeta(key: string): string | null;
