@@ -19,6 +19,9 @@ const db = require("../../src/db/database") as typeof import("../../src/db/datab
 db.initDatabase();
 
 after(() => {
+  // better-sqlite3 holds the file open; Windows can't unlink an open file (EBUSY),
+  // so the handle must be released before rmSync.
+  db.closeDatabase();
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
