@@ -7,10 +7,8 @@ import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from
 import {
   cachePosProfile,
   cachePosBootstrap,
-  cachePosSession,
   getCatalogTotals,
   getFbrSyncState,
-  getOpenTerminalInvoice,
   getCustomerSyncState,
   loadCartState,
   loadPaymentDraft,
@@ -18,7 +16,6 @@ import {
   saveBenefitsDraft,
   getDatabaseStatus,
   getPosBootstrap,
-  getCachedPosSession,
   getPosProfileCacheStatus,
   getSettingsForRenderer,
   searchCatalog,
@@ -34,14 +31,11 @@ import {
   ,listHeldSales
   ,getHeldSale
   ,deleteHeldSale
-  ,deleteAllHeldSales
   ,renameHeldSale
   ,listSalesHistory
   ,getSaleHistory
   ,recordReprint
   ,setSaleHistoryStatus
-  ,saveShiftHistory
-  ,listShiftHistory
   ,getShiftHistory
   ,getQueuedSales
   ,getQueueCounts
@@ -51,8 +45,6 @@ import {
   ,setMeta
   ,normalizeErpnextUrl
   ,logRefund
-  ,getShiftRefundTotal
-  ,getShiftRefundBreakdown
 } from "./db/database";
 import type { HeldSaleInput, SalesHistoryFilter, ShiftHistoryRow } from "./db/database";
 import type {
@@ -303,26 +295,6 @@ async function cashierOfflineLogin(input: Record<string, unknown>): Promise<Cash
   };
 }
 
-function sessionFromPayload(payload: Record<string, unknown>): Record<string, unknown> | null {
-  const nested = asRecord(payload.session) ?? asRecord(payload.pos_opening_entry) ?? asRecord(payload.opening_entry_doc);
-  if (nested) return nested;
-  return textValue(payload, "opening_entry") || textValue(payload, "name") ? payload : null;
-}
-
-function matchingOpenEntry(entries: Record<string, unknown>[], posProfile: string, cashierUser: string): Record<string, unknown> | null {
-  const matches = entries.filter((entry) => {
-    const status = textValue(entry, "status") || "Open";
-    const docstatus = entry.docstatus === undefined || entry.docstatus === null || entry.docstatus === "" ? 1 : Number(entry.docstatus);
-    const profile = textValue(entry, "pos_profile");
-    const user = textValue(entry, "user");
-    return status === "Open"
-      && docstatus === 1
-      && (!profile || sameIdentity(profile, posProfile))
-      && (!user || sameIdentity(user, cashierUser));
-  });
-  return matches.length === 1 ? matches[0] : null;
-}
-
 const LEGACY_ADMIN_PIN_HASH_KEY = "admin_pin_hash_v1";
 const ADMIN_PIN_MIN_LENGTH = 4;
 const ADMIN_PIN_MAX_ATTEMPTS = 5;
@@ -505,312 +477,16 @@ async function setAdminPin(input: Record<string, unknown>): Promise<{ ok: boolea
   return { ok: true, error: null };
 }
 
-function summarizePosSession(session: Record<string, unknown> | null): PosSessionSummary {
-  if (!session) {
-    return { sessionStatus: "Not Open", openingEntry: "", user: "", startDateTime: "", openingBalanceRowsCount: 0, lastSynced: null };
-  }
-  const date = textValue(session, "period_start_date") || textValue(session, "posting_date") || textValue(session, "creation");
-  const time = textValue(session, "period_start_time");
-  const balances = Array.isArray(session.balance_details) ? session.balance_details : [];
-  return {
-    sessionStatus: textValue(session, "status") === "Open" ? "Open" : "Not Open",
-    openingEntry: textValue(session, "name"),
-    user: textValue(session, "user"),
-    startDateTime: [date, time].filter(Boolean).join(" ") || date,
-    openingBalanceRowsCount: balances.length,
-    lastSynced: textValue(session, "synced_at") || null
-  };
-}
-
-async function syncPosSession(input: Record<string, unknown> = {}): Promise<{ success: boolean; summary: PosSessionSummary; error: string | null }> {
-  const result = await getActivePosSession(input);
-  return { success: result.success, summary: summarizePosSession(result.session), error: result.error };
-}
-
-async function getActivePosSession(input: Record<string, unknown> = {}): Promise<{ success:boolean; session:Record<string,unknown>|null; error:string|null; diagnosticReason:string; apiUser:string; requestedPosProfile:string; entries:Record<string,unknown>[] }> {
-  const s = loadSettings();
-  const cashierUser = textValue(input, "cashier_user");
-  if (!s.erpnextUrl || !s.apiKey || !s.apiSecret) return { success:false, session:null, error:"Online connection required to load POS session.", diagnosticReason:"Missing ERPNext URL or API credentials", apiUser:"", requestedPosProfile:s.posProfile, entries:[] };
-  if (!cashierUser) return { success:false, session:null, error:"Cashier user is required to load POS session.", diagnosticReason:"Cashier user missing", apiUser:"", requestedPosProfile:s.posProfile, entries:[] };
-  try {
-    const base = new URL(s.erpnextUrl).toString().replace(/\/+$/, "");
-    const query = new URLSearchParams({ pos_profile: s.posProfile, cashier_user: cashierUser });
-    const r = await fetch(`${base}/api/method/aimatic.offline_pos.api.get_active_pos_session?${query.toString()}`, { headers:{ Authorization:`token ${s.apiKey}:${s.apiSecret}` } });
-    if (!r.ok) {
-      const error = await getResponseError(r);
-      return { success:false, session:null, error, diagnosticReason:error, apiUser:"", requestedPosProfile:s.posProfile, entries:[] };
-    }
-    const b = await r.json() as Record<string, unknown>;
-    const payload = unwrapFrappePayload(b);
-    const entries = (Array.isArray(payload.submitted_open_entries) ? payload.submitted_open_entries : Array.isArray(payload.open_entries) ? payload.open_entries : []).map(asRecord).filter((x): x is Record<string, unknown> => Boolean(x));
-    const session = sessionFromPayload(payload) ?? matchingOpenEntry(entries, s.posProfile, cashierUser);
-    const diagnosticReason = textValue(payload, "diagnostic_reason") || textValue(payload, "reason") || (session ? "Active session returned" : "No active POS Opening Entry returned by server");
-    const apiUser = textValue(payload, "authenticated_user") || textValue(payload, "api_user");
-    if (session) {
-      const entry = textValue(session, "opening_entry") || textValue(session, "name");
-      if (entry) cachePosSession(entry, s.posProfile, textValue(session, "user") || cashierUser, session, new Date().toISOString());
-    }
-    return { success:true, session, error:null, diagnosticReason, apiUser, requestedPosProfile:textValue(payload, "requested_pos_profile") || textValue(payload, "pos_profile") || s.posProfile, entries };
-  } catch (e) {
-    const error = e instanceof Error ? e.message : "Unable to load POS session.";
-    return { success:false, session:null, error, diagnosticReason:error, apiUser:"", requestedPosProfile:s.posProfile, entries:[] };
-  }
-}
-
-async function startPosSession(input:Record<string,unknown>):Promise<{success:boolean;session:Record<string,unknown>|null;error:string|null}>{
-  const s=loadSettings();
-  if(!s.erpnextUrl||!s.apiKey||!s.apiSecret)return {success:false,session:null,error:"Online connection required to start shift"};
-  const cashierUser=textValue(input,"cashier_user");
-  if(!cashierUser)return {success:false,session:null,error:"Cashier user is required to start shift"};
-  try{
-    const base=new URL(s.erpnextUrl).toString().replace(/\/+$/,"");
-    const r=await fetch(`${base}/api/method/aimatic.offline_pos.api.start_pos_session`,{method:"POST",headers:{Authorization:`token ${s.apiKey}:${s.apiSecret}`,"Content-Type":"application/json"},body:JSON.stringify({pos_profile:s.posProfile,opening_balances:JSON.stringify(Array.isArray(input.opening_balances)?input.opening_balances:[]),cashier_user:cashierUser,local_offline_session_id:textValue(input,"local_offline_session_id")})});
-    if(!r.ok){
-      const body = await r.clone().json().catch(() => null) as unknown;
-      const payload = unwrapFrappePayload(body);
-      const entries = (Array.isArray(payload.submitted_open_entries) ? payload.submitted_open_entries : Array.isArray(payload.open_entries) ? payload.open_entries : []).map(asRecord).filter((x): x is Record<string, unknown> => Boolean(x));
-      const session = sessionFromPayload(payload) ?? matchingOpenEntry(entries, s.posProfile, cashierUser);
-      const entry = textValue(session, "opening_entry") || textValue(session, "name");
-      if (session && entry) {
-        cachePosSession(entry, s.posProfile, textValue(session, "user") || cashierUser, session, new Date().toISOString());
-        return { success: true, session, error: null };
-      }
-      return {success:false,session:null,error:await getResponseError(r)};
-    }
-    const b=await r.json() as Record<string,unknown>;
-    const payload=unwrapFrappePayload(b);
-    const entries=(Array.isArray(payload.submitted_open_entries)?payload.submitted_open_entries:Array.isArray(payload.open_entries)?payload.open_entries:[]).map(asRecord).filter((x):x is Record<string,unknown>=>Boolean(x));
-    const session=sessionFromPayload(payload)??matchingOpenEntry(entries,s.posProfile,cashierUser);
-    const entry=textValue(session,"opening_entry")||textValue(session,"name");
-    if(!session||!entry)return {success:false,session:null,error:"Server returned no Opening Entry."};
-    cachePosSession(entry,s.posProfile,textValue(session,"user")||cashierUser,session,new Date().toISOString());
-    return {success:true,session,error:null};
-  }catch(e){return {success:false,session:null,error:e instanceof Error?e.message:"Unable to start shift."};}
-}
-
-function paymentModeText(row: ShiftPaymentRow): string {
-  return String(row.mode_of_payment ?? "");
-}
-
-function hasPaymentBreakdown(summary: ShiftSummary): boolean {
-  return summary.payments.some((row) => row.sale_amount !== undefined || row.refund_amount !== undefined || row.net_movement !== undefined);
-}
-
-function applyLocalRefundBreakdown(summary: ShiftSummary, openingEntry: string, collectedAmountIsNet = true): ShiftSummary {
-  if (hasPaymentBreakdown(summary)) return summary;
-  const rawBreakdown = getShiftRefundBreakdown(openingEntry);
-  const totalRefund = Object.values(rawBreakdown).reduce((sum, value) => sum + Math.abs(Number(value) || 0), 0);
-  if (totalRefund <= 0) return summary;
-
-  const modes = summary.payments.map(paymentModeText).filter(Boolean);
-  const cashMode = modes.find((mode) => mode.toLowerCase().includes("cash")) ?? modes[0] ?? "";
-  const refundByMode = new Map<string, number>();
-  for (const [mode, amount] of Object.entries(rawBreakdown)) {
-    const targetMode = mode && modes.includes(mode) ? mode : cashMode;
-    refundByMode.set(targetMode, (refundByMode.get(targetMode) ?? 0) + Math.abs(Number(amount) || 0));
-  }
-
-  const payments = summary.payments.map((row) => {
-    const mode = paymentModeText(row);
-    const opening = numValue(row as unknown as Record<string, unknown>, "opening_amount");
-    const collected = numValue(row as unknown as Record<string, unknown>, "collected_amount");
-    const refund = -Math.abs(refundByMode.get(mode) ?? 0);
-    const net = collectedAmountIsNet ? collected : collected + refund;
-    const sale = collectedAmountIsNet ? net - refund : collected;
-    const expected = row.expected_amount !== undefined && collectedAmountIsNet ? row.expected_amount : opening + net;
-    return {
-      ...row,
-      opening_amount: opening,
-      sale_amount: sale,
-      refund_amount: refund,
-      net_movement: net,
-      collected_amount: net,
-      expected_amount: expected
-    };
-  });
-
-  return {
-    ...summary,
-    payments,
-    netSales: payments.reduce((sum, row) => sum + (row.sale_amount ?? 0), 0),
-    refunds: payments.reduce((sum, row) => sum + (row.refund_amount ?? 0), 0),
-    totalOpening: payments.reduce((sum, row) => sum + row.opening_amount, 0),
-    totalExpected: payments.reduce((sum, row) => sum + row.expected_amount, 0)
-  };
-}
-
-function numValue(record: Record<string, unknown> | null, ...keys: string[]): number {
-  for (const key of keys) { const v = record?.[key]; if (typeof v === "number") return v; if (typeof v === "string" && v.trim() && !Number.isNaN(Number(v))) return Number(v); }
-  return 0;
-}
-
-// Build a Close Shift summary from local data only (cached Opening Entry balances + submitted sales for this shift).
-// Authoritative reconciliation happens server-side on close; these figures are the cashier's local estimate.
-function getLocalShiftSummary(openingEntry?: string): { success: boolean; summary: ShiftSummary | null; error: string | null } {
-  const settings = loadSettings();
-  const session = getCachedPosSession(settings.posProfile);
-  if (!session) return { success: false, summary: null, error: "No cached POS Opening Entry — refresh the session first." };
-  const entry = textValue(session, "name") || textValue(session, "opening_entry");
-  if (openingEntry && entry && openingEntry !== entry) {
-    return { success: false, summary: null, error: `Cached shift is ${entry}, not ${openingEntry}. Refresh the session.` };
-  }
-  const openingByMode = new Map<string, number>();
-  const balances = Array.isArray(session.balance_details) ? session.balance_details : [];
-  for (const row of balances) { const r = asRecord(row); const mode = textValue(r, "mode_of_payment"); if (mode) openingByMode.set(mode, numValue(r, "opening_amount")); }
-  // Ensure every POS Profile payment method is present even with a zero opening balance.
-  for (const mode of getPaymentMethods()) if (!openingByMode.has(mode)) openingByMode.set(mode, 0);
-
-  const collectedByMode = new Map<string, number>();
-  let invoiceCount = 0; let netSales = 0;
-  const history = listSalesHistory({ limit: 200 });
-  for (const sale of history) {
-    if (sale.status !== "Submitted") continue;
-    const payload = sale.payload;
-    if (!payload || textValue(payload, "opening_entry") !== entry) continue;
-    invoiceCount += 1;
-    const payments = Array.isArray(payload.payments) ? payload.payments : [];
-    for (const p of payments) { const pr = asRecord(p); const mode = textValue(pr, "mode_of_payment"); if (!mode) continue; const amount = numValue(pr, "amount"); collectedByMode.set(mode, (collectedByMode.get(mode) ?? 0) + amount); netSales += amount; if (!openingByMode.has(mode)) openingByMode.set(mode, 0); }
-  }
-
-  const payments: ShiftPaymentRow[] = [...openingByMode.keys()].sort().map((mode) => {
-    const opening_amount = openingByMode.get(mode) ?? 0;
-    const collected_amount = collectedByMode.get(mode) ?? 0;
-    return { mode_of_payment: mode, opening_amount, collected_amount, expected_amount: opening_amount + collected_amount };
-  });
-  const summary: ShiftSummary = {
-    openingEntry: entry, posProfile: textValue(session, "pos_profile") || settings.posProfile, user: textValue(session, "user"),
-    company: textValue(session, "company"), periodStart: textValue(session, "period_start_date") || textValue(session, "posting_date") || textValue(session, "creation"),
-    postingDate: textValue(session, "posting_date"), status: textValue(session, "status") || "Open",
-    payments, invoiceCount, netSales, refunds: getShiftRefundTotal(entry), totalOpening: payments.reduce((s, p) => s + p.opening_amount, 0), totalExpected: payments.reduce((s, p) => s + p.expected_amount, 0), isEstimate: true
-  };
-  return { success: true, summary: applyLocalRefundBreakdown(summary, entry, false), error: null };
-}
-
-async function getShiftSummary(input: string | Record<string, unknown> = {}): Promise<{ success: boolean; summary: ShiftSummary | null; error: string | null }> {
-  const s = loadSettings();
-  const request = typeof input === "string" ? { opening_entry: input } : input;
-  const openingEntry = textValue(request, "opening_entry");
-  const cashierUser = textValue(request, "cashier_user");
-  if (!s.erpnextUrl || !s.apiKey || !s.apiSecret) return getLocalShiftSummary(openingEntry);
-  if (!openingEntry) return { success: false, summary: null, error: "Opening Entry is required." };
-  if (!cashierUser) return { success: false, summary: null, error: "Cashier user is required to load closing summary." };
-  try {
-    const base = new URL(s.erpnextUrl).toString().replace(/\/+$/, "");
-    const query = new URLSearchParams({ opening_entry: openingEntry, cashier_user: cashierUser });
-    const r = await fetch(`${base}/api/method/aimatic.offline_pos.api.get_pos_closing_summary?${query.toString()}`, {
-      headers: { Authorization: `token ${s.apiKey}:${s.apiSecret}` }
-    });
-    if (!r.ok) return { success: false, summary: null, error: await getResponseError(r) };
-    const b = await r.json() as { message?: unknown };
-    const raw = asRecord(b.message);
-    const summary = asRecord(raw?.message) ?? raw;
-    return summary ? { success: true, summary: applyLocalRefundBreakdown(summary as unknown as ShiftSummary, openingEntry, true), error: null } : { success: false, summary: null, error: "Shift summary was not returned." };
-  } catch (e) {
-    return { success: false, summary: null, error: e instanceof Error ? e.message : "Unable to load server shift summary." };
-  }
-}
-
-// Submit the POS Closing Entry via the server (aimatic.offline_pos.api.close_pos_session). Online-only.
-async function closeShift(input: Record<string, unknown>): Promise<{ success: boolean; closingEntry: string; response: Record<string, unknown> | null; error: string | null }> {
-  const s = loadSettings();
-  if (!s.erpnextUrl || !s.apiKey || !s.apiSecret) return { success: false, closingEntry: "", response: null, error: "Online connection required to close shift." };
-  const openingEntry = textValue(input, "opening_entry");
-  const cashierUser = textValue(input, "cashier_user");
-  if (!openingEntry) return { success: false, closingEntry: "", response: null, error: "Opening Entry is required to close the shift." };
-  if (!cashierUser) return { success: false, closingEntry: "", response: null, error: "Cashier user is required to close the shift." };
-  const closingBalances = Array.isArray(input.closing_balances) ? input.closing_balances : [];
-  const notes = textValue(input, "notes");
-  // Snapshot the local expected/opening figures before the close so we can persist shift history on success.
-  const pre = await getShiftSummary({ opening_entry: openingEntry, cashier_user: cashierUser });
-  try {
-    const base = new URL(s.erpnextUrl).toString().replace(/\/+$/, "");
-    const r = await fetch(`${base}/api/method/aimatic.offline_pos.api.close_pos_session`, {
-      method: "POST",
-      headers: { Authorization: `token ${s.apiKey}:${s.apiSecret}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ opening_entry: openingEntry, cashier_user: cashierUser, closing_balances: JSON.stringify(closingBalances), notes })
-    });
-    if (!r.ok) return { success: false, closingEntry: "", response: null, error: await getResponseError(r) };
-    const b = await r.json() as { message?: unknown };
-    const raw = asRecord(b.message);
-    const response = asRecord(raw?.message) ?? raw ?? {};
-    const closingEntry = textValue(response, "closing_entry") || textValue(response, "name") || textValue(asRecord(response.pos_closing_entry), "name");
-    persistClosedShift(openingEntry, closingEntry, closingBalances, pre.summary, response);
-    const deletedHeldSales = deleteAllHeldSales();
-    return { success: true, closingEntry, response: { ...response, deleted_held_sales: deletedHeldSales }, error: null };
-  } catch (e) {
-    return { success: false, closingEntry: "", response: null, error: e instanceof Error ? e.message : "Unable to close shift." };
-  }
-}
-
-function persistClosedShift(openingEntry: string, closingEntry: string, closingBalances: unknown[], summary: ShiftSummary | null, response: Record<string, unknown>): void {
-  try {
-    const actualByMode = new Map<string, number>();
-    for (const row of closingBalances) { const r = asRecord(row); const mode = textValue(r, "mode_of_payment"); if (mode) actualByMode.set(mode, numValue(r, "closing_amount")); }
-    const isCash = (mode: string) => mode.toLowerCase().includes("cash");
-    const cashRow = summary?.payments.find((p) => isCash(p.mode_of_payment));
-    const openingCash = cashRow?.opening_amount ?? summary?.totalOpening ?? 0;
-    const expectedCash = cashRow?.expected_amount ?? summary?.totalExpected ?? 0;
-    const actualCash = cashRow ? (actualByMode.get(cashRow.mode_of_payment) ?? 0) : [...actualByMode.values()].reduce((a, b) => a + b, 0);
-    saveShiftHistory({
-      openingEntry, closingEntry: closingEntry || null, posProfile: summary?.posProfile ?? loadSettings().posProfile,
-      cashier: summary?.user ?? "", company: summary?.company ?? "", openedAt: summary?.periodStart ?? null, closedAt: new Date().toISOString(),
-      openingCash, expectedCash, actualCash, difference: actualCash - expectedCash, netSales: summary?.netSales ?? 0, status: "Closed",
-      summary: { summary, closing_balances: closingBalances, response }
-    });
-  } catch { /* shift-history persistence is best-effort; never block a successful close */ }
-}
-
-function getShiftHistoryList(): ShiftHistoryRow[] { return listShiftHistory(100); }
-
-function getCachedSessionSummary(): PosSessionSummary {
-  return summarizePosSession(getCachedPosSession(loadSettings().posProfile));
-}
-
-function todayKey(): string {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, "0");
-  const day = String(now.getDate()).padStart(2, "0");
-  return `${year}${month}${day}`;
-}
-
-function getOfflineBatchId(terminalId: string): string {
-  const key = `offline_batch_${terminalId}_${todayKey()}`;
-  const existing = getMeta(key);
-  if (existing) return existing;
-  const id = `OFFLINE-${terminalId}-${todayKey()}-${randomUUID()}`;
-  setMeta(key, id);
-  return id;
-}
-
-function isOfflineBatchId(value: string): boolean {
-  return value.trim().toUpperCase().startsWith("OFFLINE-");
-}
-
-function realOpeningEntry(value: string): string {
-  const openingEntry = value.trim();
-  return isOfflineBatchId(openingEntry) ? "" : openingEntry;
-}
-
-function getCartIdentity(): { terminalId: string; openingEntry: string; offlineBatchId: string } {
-  const settings = loadSettings();
-  const session = getCachedSessionSummary();
-  const terminalId = settings.terminalId || "default-terminal";
-  const openingEntry = realOpeningEntry(session.openingEntry || "");
-  return { terminalId, openingEntry, offlineBatchId: openingEntry ? "" : getOfflineBatchId(terminalId) };
-}
-function getTerminalInvoiceId():string{const id=getCartIdentity();return getOpenTerminalInvoice(id.terminalId,()=>`${id.terminalId}-${randomUUID()}`);}
-// Build the canonical sale submission payload (shared by online submit and offline queue).
 function buildSalePayload(input: Record<string, unknown>): Record<string, unknown> {
   const settings = loadSettings();
-  const id = String(input.terminal_invoice_id || getTerminalInvoiceId());
-  const identity = getCartIdentity();
+  const id = String(input.terminal_invoice_id || core.getTerminalInvoiceId());
+  const identity = core.getCartIdentity();
   const requestedOpening = String(input.opening_entry || identity.openingEntry || "");
   const offlineAuthenticated = Boolean(input.offline_authenticated);
-  const openingEntry = offlineAuthenticated ? "" : realOpeningEntry(requestedOpening);
+  const openingEntry = offlineAuthenticated ? "" : core.realOpeningEntry(requestedOpening);
   let localOfflineSessionId = String(input.local_offline_session_id || "").trim();
-  if (!localOfflineSessionId && isOfflineBatchId(requestedOpening)) localOfflineSessionId = requestedOpening.trim();
-  if (!localOfflineSessionId && offlineAuthenticated) localOfflineSessionId = identity.offlineBatchId || getOfflineBatchId(identity.terminalId);
+  if (!localOfflineSessionId && core.isOfflineBatchId(requestedOpening)) localOfflineSessionId = requestedOpening.trim();
+  if (!localOfflineSessionId && offlineAuthenticated) localOfflineSessionId = identity.offlineBatchId || core.getOfflineBatchId(identity.terminalId);
   return {
     terminal_invoice_id: id,
     terminal_id: identity.terminalId,
@@ -834,7 +510,7 @@ function buildSalePayload(input: Record<string, unknown>): Record<string, unknow
 }
 // A local stand-in for the server response so the receipt + history have coherent data until the sale syncs.
 function buildProvisionalResponse(id: string, payload: Record<string, unknown>): Record<string, unknown> {
-  return { provisional: true, offline: true, queued: true, terminal_invoice_id: id, pos_invoice: id, posting_datetime: new Date().toISOString(), fbr_status: "Awaiting internet availability", fbr_invoice_number: "Pending", fbr_response: "Will submit automatically when ERPNext is online", estimated_total: numValue(payload, "estimated_total") };
+  return { provisional: true, offline: true, queued: true, terminal_invoice_id: id, pos_invoice: id, posting_datetime: new Date().toISOString(), fbr_status: "Awaiting internet availability", fbr_invoice_number: "Pending", fbr_response: "Will submit automatically when ERPNext is online", estimated_total: core.numValue(payload, "estimated_total") };
 }
 // Persist a completed-offline sale to the queue (status "Queued"); it replays to the server on reconnect.
 function queueSale(input: Record<string, unknown>): { success: boolean; response: Record<string, unknown> | null; error: string | null; queued: boolean } {
@@ -849,14 +525,14 @@ async function submitOnlineSale(input:Record<string,unknown>):Promise<{success:b
 
 async function openingEntryForQueuedPayload(payload: Record<string, unknown>, cache: Map<string, string>): Promise<{ openingEntry: string | null; error: string | null }> {
   const current = textValue(payload, "opening_entry");
-  const batch = textValue(payload, "local_offline_session_id") || (isOfflineBatchId(current) ? current : "");
-  if (current && !isOfflineBatchId(current)) return { openingEntry: current, error: null };
+  const batch = textValue(payload, "local_offline_session_id") || (core.isOfflineBatchId(current) ? current : "");
+  if (current && !core.isOfflineBatchId(current)) return { openingEntry: current, error: null };
   if (!batch) return { openingEntry: null, error: "Queued sale is missing local_offline_session_id and real POS Opening Entry." };
   const cashierUser = textValue(payload, "cashier_user");
   if (!cashierUser) return { openingEntry: null, error: "Queued sale is missing cashier_user." };
   const cacheKey = `${batch}|${cashierUser}`;
   if (cache.has(cacheKey)) return { openingEntry: cache.get(cacheKey) || null, error: null };
-  const result = await startPosSession({ opening_balances: [], cashier_user: cashierUser, local_offline_session_id: batch });
+  const result = await core.startPosSession({ opening_balances: [], cashier_user: cashierUser, local_offline_session_id: batch });
   if (!result.success || !result.session) return { openingEntry: null, error: result.error || "Unable to create POS Opening Entry for offline batch." };
   const openingEntry = textValue(result.session, "opening_entry") || textValue(result.session, "name");
   if (!openingEntry) return { openingEntry: null, error: "Server returned no POS Opening Entry for offline batch." };
@@ -884,7 +560,7 @@ async function syncSaleQueue(): Promise<{ synced: number; failed: number; remain
     try {
       const opening = await openingEntryForQueuedPayload(payload, openingCache);
       if (opening.error || !opening.openingEntry) { failed += 1; error = opening.error || "Unable to prepare POS Opening Entry for queued sale."; break; }
-      if (isOfflineBatchId(opening.openingEntry)) { failed += 1; error = "Offline batch ID could not be converted to a real POS Opening Entry."; break; }
+      if (core.isOfflineBatchId(opening.openingEntry)) { failed += 1; error = "Offline batch ID could not be converted to a real POS Opening Entry."; break; }
       payload.opening_entry = opening.openingEntry;
       const response = await fetch(`${base}/api/method/aimatic.offline_pos.api.submit_online_sale`, { method: "POST", headers: { Authorization: `token ${settings.apiKey}:${settings.apiSecret}`, "Content-Type": "application/json" }, body: JSON.stringify(payload) });
       const rawBody = await response.text();
@@ -1082,8 +758,8 @@ async function submitPosRefund(input: Record<string, unknown>): Promise<{ result
       // Record the refund locally so the shift summary can report a Refunds total (refunds aren't in pos_sales_history).
       const invoice = asRecord(result.invoice) ?? {};
       const returnInvoice = textValue(invoice, "name") || textValue(result, "name");
-      const amount = Math.abs(numValue(invoice, "grand_total") || numValue(invoice, "rounded_total") || numValue(result, "grand_total") || numValue(result, "refund_total") || 0);
-      const openingEntry = textValue(input, "pos_opening_entry") || getCartIdentity().openingEntry;
+      const amount = Math.abs(core.numValue(invoice, "grand_total") || core.numValue(invoice, "rounded_total") || core.numValue(result, "grand_total") || core.numValue(result, "refund_total") || 0);
+      const openingEntry = textValue(input, "pos_opening_entry") || core.getCartIdentity().openingEntry;
       const resultPayments = Array.isArray(result.payments) ? result.payments : [];
       const inputPayments = Array.isArray(input.payments) ? input.payments : [];
       const paymentMode = textValue(asRecord(resultPayments[0]), "mode_of_payment") || textValue(asRecord(inputPayments[0]), "mode_of_payment");
@@ -1094,8 +770,6 @@ async function submitPosRefund(input: Record<string, unknown>): Promise<{ result
     return { result: null, error: error instanceof Error ? error.message : "Refund submission failed." };
   }
 }
-
-function getPaymentMethods(): string[] { const profile=asRecord(getPosBootstrap(loadSettings().posProfile)?.pos_profile); const rows=Array.isArray(profile?.payments)?profile.payments:[]; return [...new Set(rows.map(asRecord).map((row)=>textValue(row,"mode_of_payment")).filter(Boolean))]; }
 
 async function previewCart(input: Record<string, unknown>): Promise<{ preview: Record<string, unknown> | null; error: string | null }> {
   const settings = loadSettings();
@@ -1570,21 +1244,21 @@ app.whenReady().then(() => {
   ipcMain.handle("pos-profile-cache:get-status", () => getPosProfileCacheStatus());
   ipcMain.handle("pos-configuration:sync", () => syncPosConfiguration());
   ipcMain.handle("pos-configuration:get-cached", () => getCachedPosConfiguration());
-  ipcMain.handle("pos-session:sync", (_event, input) => syncPosSession(asRecord(input) ?? {}));
-  ipcMain.handle("pos-session:get-cached", () => getCachedSessionSummary());
-  ipcMain.handle("pos-session:active", (_event, input) => getActivePosSession(asRecord(input) ?? {}));
-  ipcMain.handle("pos-session:start", (_event,input) => startPosSession(asRecord(input)??{}));
+  ipcMain.handle("pos-session:sync", (_event, input) => core.syncPosSession(asRecord(input) ?? {}));
+  ipcMain.handle("pos-session:get-cached", () => core.getCachedSessionSummary());
+  ipcMain.handle("pos-session:active", (_event, input) => core.getActivePosSession(asRecord(input) ?? {}));
+  ipcMain.handle("pos-session:start", (_event,input) => core.startPosSession(asRecord(input)??{}));
   ipcMain.handle("catalog:sync", (event, mode) => core.syncItemCatalog((message) => event.sender.send("catalog:progress", message), mode === "full" ? "full" : "auto"));
   ipcMain.handle("catalog:get-totals", () => getCatalogTotals());
   ipcMain.handle("fbr:sync", (_event, mode) => core.syncFbrConfig(mode === "full" ? "full" : "auto"));
   ipcMain.handle("fbr:state", () => getFbrSyncState());
   ipcMain.handle("catalog:search", (_event, query) => searchCatalog(String(query), textValue(asRecord(getPosBootstrap(loadSettings().posProfile)?.pos_profile), "warehouse")));
   ipcMain.handle("catalog:lookup", (_event, query) => lookupCatalog(String(query), textValue(asRecord(getPosBootstrap(loadSettings().posProfile)?.pos_profile), "warehouse")));
-  ipcMain.handle("cart:load", () => { const id = getCartIdentity(); return loadCartState(id.terminalId, id.openingEntry); });
-  ipcMain.handle("cart:save", (_event, lines) => { const id = getCartIdentity(); saveCartState(id.terminalId, id.openingEntry, Array.isArray(lines) ? lines : []); });
-  ipcMain.handle("payments:methods", () => getPaymentMethods());
-  ipcMain.handle("payments:load", () => { const id=getCartIdentity(); const cartKey=`${id.terminalId}::${id.openingEntry}`; return loadPaymentDraft(cartKey); });
-  ipcMain.handle("payments:save", (_event, payments) => { const id=getCartIdentity(); savePaymentDraft(`${id.terminalId}::${id.openingEntry}`,Array.isArray(payments)?payments:[]); });
+  ipcMain.handle("cart:load", () => { const id = core.getCartIdentity(); return loadCartState(id.terminalId, id.openingEntry); });
+  ipcMain.handle("cart:save", (_event, lines) => { const id = core.getCartIdentity(); saveCartState(id.terminalId, id.openingEntry, Array.isArray(lines) ? lines : []); });
+  ipcMain.handle("payments:methods", () => core.getPaymentMethods());
+  ipcMain.handle("payments:load", () => { const id=core.getCartIdentity(); const cartKey=`${id.terminalId}::${id.openingEntry}`; return loadPaymentDraft(cartKey); });
+  ipcMain.handle("payments:save", (_event, payments) => { const id=core.getCartIdentity(); savePaymentDraft(`${id.terminalId}::${id.openingEntry}`,Array.isArray(payments)?payments:[]); });
   ipcMain.handle("customers:sync", (_event, mode) => core.syncCustomers(mode === "full" ? "full" : "auto"));
   ipcMain.handle("customers:state", () => getCustomerSyncState());
   ipcMain.handle("customers:search", (_event, query) => searchCustomers(String(query)));
@@ -1593,13 +1267,13 @@ app.whenReady().then(() => {
   ipcMain.handle("customers:create", (_event, input) => core.createCustomer(asRecord(input) ?? {}));
   ipcMain.handle("cart:preview", (_event, input) => previewCart(asRecord(input) ?? {}));
   ipcMain.handle("fbr:preview", (_event, input) => core.calculateFbrCart(asRecord(input) ?? {}));
-  ipcMain.handle("benefits:load", () => { const id = getCartIdentity(); return loadBenefitsDraft(`${id.terminalId}::${id.openingEntry}`); });
-  ipcMain.handle("benefits:save", (_event, benefits) => { const id = getCartIdentity(); const data = asRecord(benefits); if (data) saveBenefitsDraft(`${id.terminalId}::${id.openingEntry}`, data); });
+  ipcMain.handle("benefits:load", () => { const id = core.getCartIdentity(); return loadBenefitsDraft(`${id.terminalId}::${id.openingEntry}`); });
+  ipcMain.handle("benefits:save", (_event, benefits) => { const id = core.getCartIdentity(); const data = asRecord(benefits); if (data) saveBenefitsDraft(`${id.terminalId}::${id.openingEntry}`, data); });
   ipcMain.handle("benefits:customer", (_event, customerName) => getCustomerBenefits(String(customerName)));
   ipcMain.handle("benefits:validate-coupon", (_event, couponCode) => validateCoupon(String(couponCode)));
   ipcMain.handle("benefits:gift-vouchers", (_event, customerName) => listCustomerGiftVouchers(String(customerName)));
   ipcMain.handle("benefits:validate-gift-voucher", (_event, voucherCode, customerName) => validateGiftVoucherCode(String(voucherCode), String(customerName)));
-  ipcMain.handle("sale:terminal-id", () => getTerminalInvoiceId());
+  ipcMain.handle("sale:terminal-id", () => core.getTerminalInvoiceId());
   ipcMain.handle("sale:submit", (_event,input) => submitOnlineSale(asRecord(input)??{}));
   ipcMain.handle("sale:queue", (_event,input) => queueSale(asRecord(input)??{}));
   ipcMain.handle("queue:sync", () => syncSaleQueue());
@@ -1618,9 +1292,9 @@ app.whenReady().then(() => {
   ipcMain.handle("sale:set-status", (_event, id, status) => setSaleHistoryStatus(String(id), String(status)));
   ipcMain.handle("refund:get-invoice", (_event, invoiceName) => getInvoiceForRefund(String(invoiceName)));
   ipcMain.handle("refund:submit", (_event, input) => submitPosRefund(asRecord(input) ?? {}));
-  ipcMain.handle("shift:summary", (_event, input) => getShiftSummary(asRecord(input) ?? (typeof input === "string" ? input : {})));
-  ipcMain.handle("shift:close", (_event, input) => closeShift(asRecord(input) ?? {}));
-  ipcMain.handle("shift:history", () => getShiftHistoryList());
+  ipcMain.handle("shift:summary", (_event, input) => core.getShiftSummary(asRecord(input) ?? (typeof input === "string" ? input : {})));
+  ipcMain.handle("shift:close", (_event, input) => core.closeShift(asRecord(input) ?? {}));
+  ipcMain.handle("shift:history", () => core.getShiftHistoryList());
   ipcMain.handle("shift:history-get", (_event, openingEntry) => getShiftHistory(String(openingEntry ?? "")));
   ipcMain.handle("update:current-version", () => app.getVersion());
   ipcMain.handle("update:check", async () => {
