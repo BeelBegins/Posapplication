@@ -67,118 +67,11 @@ import type {
   PosProfileDetails, PosProfileOption, PosConfigurationSummary, PosSessionSummary,
   CashierLoginResult, ShiftPaymentRow, ShiftSummary, ReleaseEntry
 } from "./core/types";
+import * as database from "./db/database";
+import { createPosCore, asRecord, textValue, sameIdentity, unwrapFrappePayload, formatResponseError, getResponseError } from "./core";
 
 let mainWindowRef: BrowserWindow | null = null;
-
-async function testServerReachability(): Promise<{ connected: boolean }> {
-  const { erpnextUrl } = loadSettings();
-
-  if (!erpnextUrl.trim()) {
-    return { connected: false };
-  }
-
-  let endpoint: string;
-  try {
-    const baseUrl = new URL(erpnextUrl.trim()).toString().replace(/\/+$/, "");
-    endpoint = `${baseUrl}/api/method/frappe.auth.get_logged_user`;
-  } catch {
-    return { connected: false };
-  }
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 5_000);
-
-  try {
-    await fetch(endpoint, { method: "GET", signal: controller.signal });
-    return { connected: true };
-  } catch {
-    return { connected: false };
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-async function testApiAuthentication(): Promise<{ success: boolean; loggedUser: string | null }> {
-  const { erpnextUrl, apiKey, apiSecret } = loadSettings();
-
-  if (!erpnextUrl.trim() || !apiKey.trim() || !apiSecret.trim()) {
-    return { success: false, loggedUser: null };
-  }
-
-  let endpoint: string;
-  try {
-    const baseUrl = new URL(erpnextUrl.trim()).toString().replace(/\/+$/, "");
-    endpoint = `${baseUrl}/api/method/frappe.auth.get_logged_user`;
-  } catch {
-    return { success: false, loggedUser: null };
-  }
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 5_000);
-
-  try {
-    const response = await fetch(endpoint, {
-      method: "GET",
-      headers: { Authorization: `token ${apiKey}:${apiSecret}` },
-      signal: controller.signal
-    });
-
-    if (!response.ok) {
-      return { success: false, loggedUser: null };
-    }
-
-    const body = await response.json() as { message?: unknown };
-    if (typeof body.message !== "string" || !body.message) {
-      return { success: false, loggedUser: null };
-    }
-
-    return { success: true, loggedUser: body.message };
-  } catch {
-    return { success: false, loggedUser: null };
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-// Builds an error message from an already-read body — use when the response body has been consumed elsewhere.
-function formatResponseError(status: number, statusText: string, rawBody: string): string {
-  let body: Record<string, unknown> = {};
-  try { body = JSON.parse(rawBody) as Record<string, unknown>; } catch { /* non-JSON response */ }
-  const messages: string[] = [];
-  if (typeof body.message === "string") messages.push(body.message);
-  if (typeof body._server_messages === "string") {
-    try {
-      const entries = JSON.parse(body._server_messages) as unknown[];
-      for (const entry of entries) {
-        const value = typeof entry === "string" ? JSON.parse(entry) as Record<string, unknown> : entry as Record<string, unknown>;
-        if (typeof value?.message === "string") messages.push(value.message);
-      }
-    } catch { messages.push(body._server_messages); }
-  }
-  for (const key of ["exception", "exc_type", "exc"] as const) if (typeof body[key] === "string") messages.push(body[key] as string);
-  const message = messages.find(Boolean) || rawBody || `HTTP ${status}: ${statusText}`;
-  return `HTTP ${status}: ${message}`;
-}
-
-async function getResponseError(response: Response): Promise<string> {
-  const rawBody = await response.text();
-  let body: Record<string, unknown> = {};
-  try { body = JSON.parse(rawBody) as Record<string, unknown>; } catch { /* non-JSON response */ }
-  const messages: string[] = [];
-  if (typeof body.message === "string") messages.push(body.message);
-  if (typeof body._server_messages === "string") {
-    try {
-      const entries = JSON.parse(body._server_messages) as unknown[];
-      for (const entry of entries) {
-        const value = typeof entry === "string" ? JSON.parse(entry) as Record<string, unknown> : entry as Record<string, unknown>;
-        if (typeof value?.message === "string") messages.push(value.message);
-      }
-    } catch { messages.push(body._server_messages); }
-  }
-  for (const key of ["exception", "exc_type", "exc"] as const) if (typeof body[key] === "string") messages.push(body[key] as string);
-  const message = messages.find(Boolean) || rawBody || `HTTP ${response.status}: ${response.statusText}`;
-  return `HTTP ${response.status}: ${message}`;
-}
+const core = createPosCore({ db: database, fetch });
 
 function missingCashierLoginEndpointMessage(): string {
   return "Cashier login requires server endpoint aimatic.offline_pos.api.pos_cashier_login";
@@ -418,26 +311,6 @@ async function cashierOfflineLogin(input: Record<string, unknown>): Promise<Cash
   };
 }
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
-}
-
-function textValue(record: Record<string, unknown> | null, key: string): string {
-  return typeof record?.[key] === "string" ? record[key] as string : "";
-}
-
-function sameIdentity(a: string, b: string): boolean {
-  return a.trim().toLowerCase() === b.trim().toLowerCase();
-}
-
-function unwrapFrappePayload(value: unknown): Record<string, unknown> {
-  const root = asRecord(value) ?? {};
-  const first = asRecord(root.message) ?? root;
-  return asRecord(first.message) ?? first;
-}
-
 function sessionFromPayload(payload: Record<string, unknown>): Record<string, unknown> | null {
   const nested = asRecord(payload.session) ?? asRecord(payload.pos_opening_entry) ?? asRecord(payload.opening_entry_doc);
   if (nested) return nested;
@@ -638,52 +511,6 @@ async function setAdminPin(input: Record<string, unknown>): Promise<{ ok: boolea
   setMeta(pinFailedKey(pinScope), "0");
   setMeta(pinLockKey(pinScope), "0");
   return { ok: true, error: null };
-}
-
-async function fetchErpResource(baseUrl: string, apiKey: string, apiSecret: string, doctype: string, name: string): Promise<Record<string, unknown>> {
-  const endpoint = `${baseUrl}/api/resource/${encodeURIComponent(doctype)}/${encodeURIComponent(name)}`;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 5_000);
-
-  try {
-    const response = await fetch(endpoint, {
-      method: "GET",
-      headers: { Authorization: `token ${apiKey}:${apiSecret}` },
-      signal: controller.signal
-    });
-    if (!response.ok) {
-      throw new Error(await getResponseError(response));
-    }
-    const body = await response.json() as { data?: unknown; message?: unknown };
-    const document = asRecord(body.data) ?? asRecord(body.message);
-    if (!document) {
-      throw new Error(`ERPNext returned no ${doctype} document.`);
-    }
-    return document;
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-async function getLoggedInUser(baseUrl: string, apiKey: string, apiSecret: string): Promise<string> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 5_000);
-  try {
-    const response = await fetch(`${baseUrl}/api/method/frappe.auth.get_logged_user`, {
-      headers: { Authorization: `token ${apiKey}:${apiSecret}` },
-      signal: controller.signal
-    });
-    if (!response.ok) {
-      throw new Error(await getResponseError(response));
-    }
-    const body = await response.json() as { message?: unknown };
-    if (typeof body.message !== "string" || !body.message) {
-      throw new Error("ERPNext returned no logged-in user.");
-    }
-    return body.message;
-  } finally {
-    clearTimeout(timeout);
-  }
 }
 
 function summarizePosSession(session: Record<string, unknown> | null): PosSessionSummary {
@@ -1054,7 +881,7 @@ async function syncSaleQueue(): Promise<{ synced: number; failed: number; remain
   const settings = loadSettings();
   const counts0 = getQueueCounts();
   if (!settings.erpnextUrl || !settings.apiKey || !settings.apiSecret) return { synced: 0, failed: 0, remaining: counts0.queued, error: "ERPNext URL and API credentials are required." };
-  const auth = await testApiAuthentication();
+  const auth = await core.testApiAuthentication();
   if (!auth.success) return { synced: 0, failed: 0, remaining: counts0.queued, error: "Terminal API credentials could not be revalidated." };
   let base: string;
   try { base = new URL(settings.erpnextUrl).toString().replace(/\/+$/, ""); } catch { return { synced: 0, failed: 0, remaining: counts0.queued, error: "Invalid ERPNext URL." }; }
@@ -1278,22 +1105,6 @@ async function submitPosRefund(input: Record<string, unknown>): Promise<{ result
 
 function getPaymentMethods(): string[] { const profile=asRecord(getPosBootstrap(loadSettings().posProfile)?.pos_profile); const rows=Array.isArray(profile?.payments)?profile.payments:[]; return [...new Set(rows.map(asRecord).map((row)=>textValue(row,"mode_of_payment")).filter(Boolean))]; }
 
-async function fetchPagedList(baseUrl: string, apiKey: string, apiSecret: string, doctype: string, fields: string[], filters?: unknown): Promise<Record<string, unknown>[]> {
-  const rows: Record<string, unknown>[] = [];
-  for (let start = 0; ; start += 500) {
-    const query = new URLSearchParams({ fields: JSON.stringify(fields), limit_start: String(start), limit_page_length: "500" });
-    if (filters) query.set("filters", JSON.stringify(filters));
-    const response = await fetch(`${baseUrl}/api/resource/${encodeURIComponent(doctype)}?${query.toString()}`, {
-      headers: { Authorization: `token ${apiKey}:${apiSecret}` }
-    });
-    if (!response.ok) throw new Error(await getResponseError(response));
-    const body = await response.json() as { data?: unknown };
-    const page = Array.isArray(body.data) ? body.data.map(asRecord).filter((row): row is Record<string, unknown> => Boolean(row)) : [];
-    rows.push(...page);
-    if (page.length < 500) return rows;
-  }
-}
-
 // --- Delta-sync helpers ---------------------------------------------------
 // Highest `modified` value across the given row groups — used as the next delta watermark
 // (server-basis, so it is immune to client clock skew). Returns "" when there are no rows.
@@ -1356,7 +1167,7 @@ async function syncCustomers(mode: "auto" | "full" = "auto"): Promise<{ success:
     const cursor=getMeta("customers_last_sync")??"";
     const doFull=mode==="full"||!cursor||isFullDue("customers_last_full_sync");
     const filters=doFull?[["disabled","=",0]]:[["disabled","=",0],["modified",">",cursor]];
-    const customers=await fetchPagedList(base,settings.apiKey,settings.apiSecret,"Customer",["name","customer_name","customer_group","territory","mobile_no","email_id","tax_id","disabled","modified"],filters);
+    const customers=await core.fetchPagedList(base,settings.apiKey,settings.apiSecret,"Customer",["name","customer_name","customer_group","territory","mobile_no","email_id","tax_id","disabled","modified"],filters);
     upsertCustomers(customers);
     const wm=maxModified(customers); if(wm)setMeta("customers_last_sync",wm);
     if(doFull)setMeta("customers_last_full_sync",new Date().toISOString());
@@ -1367,12 +1178,12 @@ async function syncCustomers(mode: "auto" | "full" = "auto"): Promise<{ success:
 async function loadCustomer(name: string): Promise<{ customer: Record<string, unknown> | null; cached: boolean; error: string | null }> {
   const settings=loadSettings(); const cached=getCachedCustomer(name);
   if(!settings.erpnextUrl||!settings.apiKey||!settings.apiSecret) return {customer:cached,cached:true,error:cached?null:"Customer not cached."};
-  try { const base=new URL(settings.erpnextUrl).toString().replace(/\/+$/,""); const customer=await fetchErpResource(base,settings.apiKey,settings.apiSecret,"Customer",name); cacheCustomer(name,customer); return {customer,cached:false,error:null}; } catch(error) { return {customer:cached,cached:true,error:error instanceof Error?error.message:"Unable to load customer."}; }
+  try { const base=new URL(settings.erpnextUrl).toString().replace(/\/+$/,""); const customer=await core.fetchErpResource(base,settings.apiKey,settings.apiSecret,"Customer",name); cacheCustomer(name,customer); return {customer,cached:false,error:null}; } catch(error) { return {customer:cached,cached:true,error:error instanceof Error?error.message:"Unable to load customer."}; }
 }
 
 async function getCustomerCreationOptions(): Promise<{ groups: string[]; territories: string[]; error: string | null }> {
   const settings=loadSettings(); if(!settings.erpnextUrl||!settings.apiKey||!settings.apiSecret) return {groups:[],territories:[],error:"Online connection required to create a customer."};
-  try { const base=new URL(settings.erpnextUrl).toString().replace(/\/+$/,""); const [groups,territories]=await Promise.all([fetchPagedList(base,settings.apiKey,settings.apiSecret,"Customer Group",["name"],[["is_group","=",0]]),fetchPagedList(base,settings.apiKey,settings.apiSecret,"Territory",["name"],[["is_group","=",0]])]); return {groups:groups.map((x)=>textValue(x,"name")).filter(Boolean),territories:territories.map((x)=>textValue(x,"name")).filter(Boolean),error:null}; } catch(error) { return {groups:[],territories:[],error:error instanceof Error?error.message:"Unable to load customer options."}; }
+  try { const base=new URL(settings.erpnextUrl).toString().replace(/\/+$/,""); const [groups,territories]=await Promise.all([core.fetchPagedList(base,settings.apiKey,settings.apiSecret,"Customer Group",["name"],[["is_group","=",0]]),core.fetchPagedList(base,settings.apiKey,settings.apiSecret,"Territory",["name"],[["is_group","=",0]])]); return {groups:groups.map((x)=>textValue(x,"name")).filter(Boolean),territories:territories.map((x)=>textValue(x,"name")).filter(Boolean),error:null}; } catch(error) { return {groups:[],territories:[],error:error instanceof Error?error.message:"Unable to load customer options."}; }
 }
 
 async function createCustomer(input: Record<string, unknown>): Promise<{ customer: Record<string, unknown> | null; error: string | null }> {
@@ -1428,11 +1239,11 @@ async function syncItemCatalog(sendProgress: (message: string) => void, mode: "a
   try {
     const baseUrl = new URL(settings.erpnextUrl).toString().replace(/\/+$/, "");
     sendProgress(doFull ? "Full sync: items..." : "Delta sync: items...");
-    const items = await fetchPagedList(baseUrl, settings.apiKey, settings.apiSecret, "Item", ["name", "item_name", "item_group", "stock_uom", "is_stock_item", "is_sales_item", "disabled", "has_batch_no", "has_serial_no", "modified"], doFull ? undefined : [["modified", ">", itemsCursor]]);
+    const items = await core.fetchPagedList(baseUrl, settings.apiKey, settings.apiSecret, "Item", ["name", "item_name", "item_group", "stock_uom", "is_stock_item", "is_sales_item", "disabled", "has_batch_no", "has_serial_no", "modified"], doFull ? undefined : [["modified", ">", itemsCursor]]);
     sendProgress(`Items: ${items.length}. Syncing prices...`);
-    const prices = await fetchPagedList(baseUrl, settings.apiKey, settings.apiSecret, "Item Price", ["name", "item_code", "uom", "price_list_rate", "currency", "valid_from", "valid_upto", "modified"], since([["price_list", "=", priceList], ["selling", "=", 1]]));
+    const prices = await core.fetchPagedList(baseUrl, settings.apiKey, settings.apiSecret, "Item Price", ["name", "item_code", "uom", "price_list_rate", "currency", "valid_from", "valid_upto", "modified"], since([["price_list", "=", priceList], ["selling", "=", 1]]));
     sendProgress(`Prices: ${prices.length}. Syncing stock...`);
-    const stock = await fetchPagedList(baseUrl, settings.apiKey, settings.apiSecret, "Bin", ["item_code", "warehouse", "actual_qty", "reserved_qty", "projected_qty", "modified"], since([["warehouse", "=", warehouse]]));
+    const stock = await core.fetchPagedList(baseUrl, settings.apiKey, settings.apiSecret, "Bin", ["item_code", "warehouse", "actual_qty", "reserved_qty", "projected_qty", "modified"], since([["warehouse", "=", warehouse]]));
     let conversions: Record<string, unknown>[] = [];
     let conversionError: string | null = null;
     try {
@@ -1505,12 +1316,12 @@ async function syncPosConfiguration(): Promise<{ success: boolean; summary: PosC
 
   try {
     const baseUrl = new URL(erpnextUrl.trim()).toString().replace(/\/+$/, "");
-    const profile = await fetchErpResource(baseUrl, apiKey, apiSecret, "POS Profile", posProfile);
+    const profile = await core.fetchErpResource(baseUrl, apiKey, apiSecret, "POS Profile", posProfile);
     const companyName = textValue(profile, "company");
     const taxTemplateName = textValue(profile, "taxes_and_charges");
-    const company = companyName ? await fetchErpResource(baseUrl, apiKey, apiSecret, "Company", companyName) : null;
+    const company = companyName ? await core.fetchErpResource(baseUrl, apiKey, apiSecret, "Company", companyName) : null;
     const taxTemplate = taxTemplateName
-      ? await fetchErpResource(baseUrl, apiKey, apiSecret, "Sales Taxes and Charges Template", taxTemplateName)
+      ? await core.fetchErpResource(baseUrl, apiKey, apiSecret, "Sales Taxes and Charges Template", taxTemplateName)
       : null;
     const paymentNames = [...new Set(
       (Array.isArray(profile.payments) ? profile.payments : [])
@@ -1519,7 +1330,7 @@ async function syncPosConfiguration(): Promise<{ success: boolean; summary: PosC
         .filter(Boolean)
     )];
     const paymentModes = await Promise.all(
-      paymentNames.map((paymentName) => fetchErpResource(baseUrl, apiKey, apiSecret, "Mode of Payment", paymentName))
+      paymentNames.map((paymentName) => core.fetchErpResource(baseUrl, apiKey, apiSecret, "Mode of Payment", paymentName))
     );
     const syncedAt = new Date().toISOString();
     const configuration: Record<string, unknown> = {
@@ -1727,7 +1538,7 @@ async function validateCoupon(couponCode: string): Promise<{ couponName: string 
   }
   try {
     const baseUrl = new URL(settings.erpnextUrl.trim()).toString().replace(/\/+$/, "");
-    const coupon = await fetchErpResource(baseUrl, settings.apiKey, settings.apiSecret, "Coupon Code", couponCode);
+    const coupon = await core.fetchErpResource(baseUrl, settings.apiKey, settings.apiSecret, "Coupon Code", couponCode);
     const couponName = textValue(coupon, "name") || couponCode;
     const discountAmount = typeof coupon.discount_amount === "number" ? coupon.discount_amount as number : 0;
     return { couponName, discountAmount, error: null };
@@ -1903,8 +1714,8 @@ app.whenReady().then(() => {
     win.webContents.send("pos:focus-scanner");
     return true;
   });
-  ipcMain.handle("server:test", () => testServerReachability());
-  ipcMain.handle("auth:test", () => testApiAuthentication());
+  ipcMain.handle("server:test", () => core.testServerReachability());
+  ipcMain.handle("auth:test", () => core.testApiAuthentication());
   ipcMain.handle("cashier:login", (_event, input) => posCashierLogin(asRecord(input) ?? {}));
   ipcMain.handle("cashier:offline-login", (_event, input) => cashierOfflineLogin(asRecord(input) ?? {}));
   ipcMain.handle("cashier:remembered", () => rememberedCashiers());
