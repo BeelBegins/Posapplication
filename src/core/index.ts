@@ -1,5 +1,6 @@
 import type { PosCoreDeps } from "./types";
 import { createHttpCore } from "./http";
+import { createCatalogSyncCore } from "./catalog-sync";
 
 export * from "./types";
 export * from "./http";
@@ -12,5 +13,6 @@ export * from "./http";
  * handlers can be rewired incrementally without a single large-scale rewrite.
  */
 export function createPosCore(deps: PosCoreDeps) {
-  return { ...createHttpCore(deps) };
+  const http = createHttpCore(deps);
+  return { ...http, ...createCatalogSyncCore(deps, http) };
 }
