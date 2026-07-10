@@ -63,6 +63,10 @@ import {
   ,getShiftRefundBreakdown
 } from "./db/database";
 import type { HeldSaleInput, SalesHistoryFilter, ShiftHistoryRow } from "./db/database";
+import type {
+  PosProfileDetails, PosProfileOption, PosConfigurationSummary, PosSessionSummary,
+  CashierLoginResult, ShiftPaymentRow, ShiftSummary, ReleaseEntry
+} from "./core/types";
 
 let mainWindowRef: BrowserWindow | null = null;
 
@@ -134,64 +138,6 @@ async function testApiAuthentication(): Promise<{ success: boolean; loggedUser: 
   } finally {
     clearTimeout(timeout);
   }
-}
-
-interface PosProfileDetails {
-  company: string;
-  warehouse: string;
-  branch: string;
-  customer: string;
-  priceList: string;
-  currency: string;
-  paymentMethodsCount: number;
-}
-
-interface PosProfileOption {
-  name: string;
-  company: string;
-  warehouse: string;
-}
-
-interface PosConfigurationSummary {
-  posProfile: string;
-  company: string;
-  branch: string;
-  warehouse: string;
-  defaultCustomer: string;
-  sellingPriceList: string;
-  currency: string;
-  taxTemplate: string | null;
-  taxRowsCount: number;
-  paymentMethodsCount: number;
-  lastSynced: string;
-  cacheStatus: "Ready";
-}
-
-interface PosSessionSummary {
-  sessionStatus: "Open" | "Not Open";
-  openingEntry: string;
-  user: string;
-  startDateTime: string;
-  openingBalanceRowsCount: number;
-  lastSynced: string | null;
-}
-
-interface CashierLoginResult {
-  success: boolean;
-  user: string;
-  fullName: string;
-  roles: string[];
-  allowedPosProfiles: string[];
-  defaultPosProfile: string;
-  canStartShift: boolean;
-  canRefund: boolean;
-  canCloseShift: boolean;
-  canOfflineSale: boolean;
-  offlineLoginExpiresAt: string;
-  requirePinSetup: boolean;
-  offlineCached?: boolean;
-  offlineLogin?: boolean;
-  error: string | null;
 }
 
 // Builds an error message from an already-read body — use when the response body has been consumed elsewhere.
@@ -821,12 +767,6 @@ async function startPosSession(input:Record<string,unknown>):Promise<{success:bo
     cachePosSession(entry,s.posProfile,textValue(session,"user")||cashierUser,session,new Date().toISOString());
     return {success:true,session,error:null};
   }catch(e){return {success:false,session:null,error:e instanceof Error?e.message:"Unable to start shift."};}
-}
-
-interface ShiftPaymentRow { mode_of_payment: string; opening_amount: number; collected_amount: number; expected_amount: number; sale_amount?: number; refund_amount?: number; net_movement?: number; }
-interface ShiftSummary {
-  openingEntry: string; posProfile: string; user: string; company: string; periodStart: string; postingDate: string; status: string;
-  payments: ShiftPaymentRow[]; invoiceCount: number; netSales: number; refunds: number; totalOpening: number; totalExpected: number; isEstimate: boolean;
 }
 
 function paymentModeText(row: ShiftPaymentRow): string {
@@ -1875,7 +1815,6 @@ function setupAutoUpdater(): void {
 
 // --- Release browser (pick any version) -----------------------------------
 const RELEASES_API = "https://api.github.com/repos/BeelBegins/Posapplication/releases";
-interface ReleaseEntry { tag: string; version: string; name: string; notes: string; publishedAt: string; prerelease: boolean; exeName: string; exeUrl: string; exeApiUrl: string; }
 function ghHeaders(extra: Record<string, string> = {}): Record<string, string> {
   const token = (getMeta("github_update_token") || "").trim();
   const headers: Record<string, string> = { Accept: "application/vnd.github+json", "User-Agent": "erpnext-offline-pos", ...extra };
