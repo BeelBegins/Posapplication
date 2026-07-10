@@ -4,6 +4,7 @@ import { createCatalogSyncCore } from "./catalog-sync";
 import { createPosSessionCore } from "./pos-session";
 import { createPosConfigCore } from "./pos-config";
 import { createSaleRefundCore } from "./sale-refund";
+import { createReleasesCore } from "./releases";
 
 export * from "./types";
 export * from "./http";
@@ -23,6 +24,7 @@ export function createPosCore(deps: PosCoreDeps) {
     ...createCatalogSyncCore(deps, http),
     ...posSession,
     ...createPosConfigCore(deps, http),
-    ...createSaleRefundCore(deps, http, posSession)
+    ...createSaleRefundCore(deps, http, posSession),
+    ...createReleasesCore(deps)
   };
 }
