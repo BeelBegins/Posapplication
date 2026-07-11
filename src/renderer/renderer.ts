@@ -88,6 +88,7 @@ interface PosAPI {
   authorizeAdminAction: (input: Record<string, unknown>) => Promise<{ ok: boolean; token: string; error: string | null }>;
   setAdminPin: (input: Record<string, unknown>) => Promise<{ ok: boolean; error: string | null }>;
   resetCashierOfflinePin: (input: Record<string, unknown>) => Promise<{ ok: boolean; error: string | null }>;
+  pushCustomerDisplay: (payload: Record<string, unknown>) => void;
 }
 
 interface ReleaseEntry { tag: string; version: string; name: string; notes: string; publishedAt: string; prerelease: boolean; exeName: string; exeUrl: string; exeApiUrl: string; }
@@ -511,7 +512,20 @@ function activeEntriesReason(entries: Record<string, unknown>[], selectedProfile
   }).join("; ");
   return `Active shift exists but is not available for cashier ${cashierUser} on profile ${selectedProfile}. ${summary}. Login as that cashier or close that shift in ERPNext.`;
 }
-function updatePosHeader(): void { const set = (id: string, value: string) => { const e = document.querySelector<HTMLElement>(id); if (e) e.textContent = value || "—"; }; set("#pos-branch", (document.querySelector<HTMLInputElement>("#branch")?.value ?? "")); set("#pos-profile-name", document.querySelector<HTMLSelectElement>("#pos-profile")?.value ?? ""); set("#pos-terminal", document.querySelector<HTMLInputElement>("#terminal-id")?.value ?? ""); set("#pos-cashier", cashierDisplay()); set("#pos-opening-entry", document.querySelector<HTMLElement>("#session-opening-entry")?.textContent ?? ""); }
+// Reads the (already-set-elsewhere) textContent of the three header status
+// fields and reflects it as a data-state attribute for CSS badge coloring —
+// purely a presentation layer on top of existing state, no new state of its
+// own, so it's safe to call opportunistically rather than threading it
+// through every place that currently sets these fields' text.
+function refreshHeaderStatusBadges(): void {
+  const server = document.querySelector<HTMLElement>("#pos-server-status");
+  if (server) { const text = server.textContent ?? ""; server.dataset.state = text === "Online" ? "ok" : text === "Reconnecting" ? "warn" : "err"; }
+  const sync = document.querySelector<HTMLElement>("#pos-sync-status");
+  if (sync) { const text = sync.textContent ?? ""; sync.dataset.state = text === "Ready" ? "ok" : text === "Session Invalid" ? "err" : text && text !== "—" ? "warn" : "neutral"; }
+  const queue = document.querySelector<HTMLElement>("#pos-queue-status");
+  if (queue) queue.dataset.state = queue.classList.contains("queue-pending") ? "warn" : "ok";
+}
+function updatePosHeader(): void { const set = (id: string, value: string) => { const e = document.querySelector<HTMLElement>(id); if (e) e.textContent = value || "—"; }; set("#pos-branch", (document.querySelector<HTMLInputElement>("#branch")?.value ?? "")); set("#pos-profile-name", document.querySelector<HTMLSelectElement>("#pos-profile")?.value ?? ""); set("#pos-terminal", document.querySelector<HTMLInputElement>("#terminal-id")?.value ?? ""); set("#pos-cashier", cashierDisplay()); set("#pos-opening-entry", document.querySelector<HTMLElement>("#session-opening-entry")?.textContent ?? ""); refreshHeaderStatusBadges(); }
 function showCustomer(): void { const e=document.querySelector<HTMLElement>("#pos-customer"); if(e)e.textContent=selectedCustomer?`${selectedCustomer.customer_name || selectedCustomer.name}${navigator.onLine?"":" (Cached)"}`:"—"; }
 function customerInput(): HTMLInputElement | null { return document.querySelector<HTMLInputElement>("#customer-search"); }
 async function selectCustomer(customer: CustomerResult): Promise<void> { const result=await window.posAPI.loadCustomer(customer.name); selectedCustomer=customer; showCustomer(); // mark payment and benefits allocation outdated when customer changes
@@ -554,6 +568,7 @@ async function updateOfflineUi(): Promise<void> {
   try { counts = await window.posAPI.getQueueStatus(); } catch { /* DB not ready — leave zeros */ }
   const queueEl = document.querySelector<HTMLElement>("#pos-queue-status");
   if (queueEl) { queueEl.textContent = counts.queued > 0 ? `${counts.queued} pending` : (online ? "Synced" : "—"); queueEl.className = counts.queued > 0 ? "queue-pending" : ""; }
+  refreshHeaderStatusBadges();
   const banner = document.querySelector<HTMLElement>("#pos-offline-banner");
   const text = document.querySelector<HTMLElement>("#pos-offline-text");
   const show = !online || counts.queued > 0;
@@ -2209,6 +2224,25 @@ function renderCart(): void {
       : "";
   }
   updateCompleteSaleState();
+  pushCustomerDisplayUpdate(totals);
+}
+// Broadcasts the same lines/total the cashier's own screen just rendered to the
+// (optional, dual-monitor) customer-facing display window — reuses whatever
+// renderCart() already computed rather than recalculating pricing separately,
+// so the two screens can never show different numbers.
+function pushCustomerDisplayUpdate(totals: FbrTotalsView): void {
+  const lines = cartLines.map((line) => ({
+    itemName: line.itemName,
+    quantity: line.quantity,
+    rate: line.sellingPrice ?? 0,
+    amount: (line.sellingPrice ?? 0) * line.quantity
+  }));
+  window.posAPI.pushCustomerDisplay({
+    lines,
+    itemCount: cartLines.length,
+    grandTotal: totals.grandTotal,
+    customerName: selectedCustomer?.customer_name || selectedCustomer?.name || ""
+  });
 }
 async function afterCartMutation(message: string): Promise<void> {
   selectedCartIndex = cartLines.length ? Math.min(Math.max(selectedCartIndex, 0), cartLines.length - 1) : -1;
@@ -2295,6 +2329,7 @@ function applySessionToHeader(): void {
   if (sessionState.user) setCartText("#session-user", sessionState.user);
   updatePosHeader();
   const sync = document.querySelector<HTMLElement>("#pos-sync-status"); if (sync) sync.textContent = !isOnline() ? "Offline Session — Sales Queued" : (sessionState.valid ? "Ready" : "Session Invalid");
+  refreshHeaderStatusBadges();
 }
 function showSessionInvalid(reason: string): void {
   setCartText("#session-invalid-reason", reason || sessionState.reason || "POS session is no longer active");
@@ -2679,10 +2714,14 @@ function setCashierPinMode(mode: CashierPinMode, message = ""): void {
   const changeButton = document.querySelector<HTMLButtonElement>("#cashier-pin-change");
   const resetButton = document.querySelector<HTMLButtonElement>("#cashier-pin-reset");
   const msg = document.querySelector<HTMLElement>("#cashier-login-message");
+  const pinKeypad = document.querySelector<HTMLElement>("#cashier-pin-keypad");
   const needsPin = !online || mode !== "login";
   if (passwordRow) passwordRow.hidden = !online;
   if (offlinePinRow) offlinePinRow.hidden = !needsPin;
   if (offlinePinConfirmRow) offlinePinConfirmRow.hidden = !online || mode === "login";
+  // Keypad tracks the same visibility as the offline PIN row — it's an alternate
+  // input surface for that same field, not a separate piece of state.
+  if (pinKeypad) pinKeypad.hidden = !needsPin;
   if (changeButton) changeButton.hidden = !online;
   if (resetButton) resetButton.hidden = !online;
   if (submitButton) submitButton.textContent = mode === "login" ? "Login" : mode === "setup" ? "Save Offline PIN" : "Change Offline PIN";
@@ -2694,6 +2733,103 @@ function setCashierPinMode(mode: CashierPinMode, message = ""): void {
         : "ERPNext password verifies the cashier online. The Offline Cashier PIN is stored locally as a salted hash.";
   }
   if (msg && message) msg.textContent = message;
+  activePinFieldId = "cashier-offline-pin";
+  updatePinKeypadDisplay();
+}
+
+// --- Numeric PIN keypad -------------------------------------------------
+// Writes into whichever of #cashier-offline-pin / #cashier-offline-pin-confirm
+// last had focus, so the existing submitCashierLogin()/setCashierPinMode()
+// logic (which reads those inputs' .value directly) needs no changes at all.
+let activePinFieldId: "cashier-offline-pin" | "cashier-offline-pin-confirm" = "cashier-offline-pin";
+
+function getActivePinInput(): HTMLInputElement | null {
+  return document.querySelector<HTMLInputElement>(`#${activePinFieldId}`);
+}
+
+function updatePinKeypadDisplay(): void {
+  const input = getActivePinInput();
+  const dotsEl = document.querySelector<HTMLElement>("#pin-keypad-dots");
+  const countEl = document.querySelector<HTMLElement>("#pin-keypad-count");
+  const label = document.querySelector<HTMLElement>("#pin-keypad-target-label");
+  const len = input?.value.length ?? 0;
+  if (dotsEl) {
+    dotsEl.replaceChildren(...Array.from({ length: len }, () => {
+      const dot = document.createElement("span");
+      dot.className = "pin-keypad-dot";
+      return dot;
+    }));
+  }
+  if (countEl) countEl.textContent = len ? `${len} digit${len === 1 ? "" : "s"}` : "";
+  if (label) label.textContent = activePinFieldId === "cashier-offline-pin-confirm" ? "Entering: Confirm PIN" : "Entering: Offline PIN";
+}
+
+function pinKeypadPressDigit(digit: string): void {
+  const input = getActivePinInput();
+  if (!input || input.value.length >= 12) return;
+  input.value += digit;
+  updatePinKeypadDisplay();
+}
+
+function pinKeypadBackspace(): void {
+  const input = getActivePinInput();
+  if (!input) return;
+  input.value = input.value.slice(0, -1);
+  updatePinKeypadDisplay();
+}
+
+function pinKeypadClear(): void {
+  const input = getActivePinInput();
+  if (!input) return;
+  input.value = "";
+  updatePinKeypadDisplay();
+}
+
+function initPinKeypad(): void {
+  document.querySelectorAll<HTMLButtonElement>(".pin-keypad-key[data-digit]").forEach((button) => {
+    button.addEventListener("click", () => pinKeypadPressDigit(button.dataset.digit ?? ""));
+  });
+  document.querySelector<HTMLButtonElement>("#pin-keypad-backspace")?.addEventListener("click", pinKeypadBackspace);
+  document.querySelector<HTMLButtonElement>("#pin-keypad-clear")?.addEventListener("click", pinKeypadClear);
+  document.querySelector<HTMLInputElement>("#cashier-offline-pin")?.addEventListener("focus", () => { activePinFieldId = "cashier-offline-pin"; updatePinKeypadDisplay(); });
+  document.querySelector<HTMLInputElement>("#cashier-offline-pin-confirm")?.addEventListener("focus", () => { activePinFieldId = "cashier-offline-pin-confirm"; updatePinKeypadDisplay(); });
+  document.querySelector<HTMLInputElement>("#cashier-offline-pin")?.addEventListener("input", updatePinKeypadDisplay);
+  document.querySelector<HTMLInputElement>("#cashier-offline-pin-confirm")?.addEventListener("input", updatePinKeypadDisplay);
+}
+
+// --- Offline-PIN lockout countdown --------------------------------------
+// Purely a display-layer read of the lockout error text main.ts already
+// returns (validatePinFormat/ADMIN_PIN_MAX_ATTEMPTS/ADMIN_PIN_LOCK_MS are
+// untouched) — no lockout logic changes, just a friendlier countdown instead
+// of a static sentence.
+let cashierLockoutTimer: number | undefined;
+
+function parseLockoutSeconds(message: string): number | null {
+  const secondsMatch = /try again in\s+(\d+)s/i.exec(message);
+  if (secondsMatch) return Number(secondsMatch[1]);
+  const minutesMatch = /locked for\s+(\d+)\s*minutes?/i.exec(message);
+  if (minutesMatch) return Number(minutesMatch[1]) * 60;
+  return null;
+}
+
+function showLockoutCountdown(message: string): void {
+  const lockoutEl = document.querySelector<HTMLElement>("#cashier-login-lockout");
+  if (!lockoutEl) return;
+  if (cashierLockoutTimer !== undefined) { window.clearInterval(cashierLockoutTimer); cashierLockoutTimer = undefined; }
+  let remaining = parseLockoutSeconds(message);
+  if (remaining === null) { lockoutEl.hidden = true; return; }
+  lockoutEl.hidden = false;
+  const tick = () => {
+    if (remaining === null || remaining <= 0) {
+      lockoutEl.textContent = "You can try again now.";
+      if (cashierLockoutTimer !== undefined) { window.clearInterval(cashierLockoutTimer); cashierLockoutTimer = undefined; }
+      return;
+    }
+    lockoutEl.textContent = `Locked — try again in ${remaining}s`;
+    remaining -= 1;
+  };
+  tick();
+  cashierLockoutTimer = window.setInterval(tick, 1000);
 }
 
 async function showCashierLogin(message = ""): Promise<void> {
@@ -2714,6 +2850,7 @@ async function showCashierLogin(message = ""): Promise<void> {
   setText("#cashier-login-connection", online ? "Online" : "Offline");
   const msg = document.querySelector<HTMLElement>("#cashier-login-message");
   if (msg) msg.textContent = message || (online ? "Enter ERPNext cashier credentials." : "Enter cashier username and offline PIN.");
+  showLockoutCountdown("");
   setCashierPinMode(online ? "login" : "login");
   showScreen("cashier-login");
   // Offline restart with a remembered cashier: username is already correct, so
@@ -2781,6 +2918,7 @@ async function submitCashierLogin(): Promise<void> {
     if (passwordInput) passwordInput.value = "";
     if (offlinePinInput) offlinePinInput.value = "";
     if (offlinePinConfirmInput) offlinePinConfirmInput.value = "";
+    updatePinKeypadDisplay();
     if (result.requirePinSetup && !result.success) {
       // Username/password already verified server-side to get here - restore the
       // password the cashier just typed (cleared above) so they only need to add
@@ -2790,7 +2928,7 @@ async function submitCashierLogin(): Promise<void> {
       document.querySelector<HTMLInputElement>("#cashier-offline-pin")?.focus();
       return;
     }
-    if (!result.success) { if (msg) msg.textContent = result.error ?? "Cashier login failed."; return; }
+    if (!result.success) { if (msg) msg.textContent = result.error ?? "Cashier login failed."; showLockoutCountdown(result.error ?? ""); return; }
     const selectedProfile = document.querySelector<HTMLSelectElement>("#pos-profile")?.value ?? "";
     if (result.allowedPosProfiles.length && selectedProfile && !result.allowedPosProfiles.includes(selectedProfile)) {
       if (msg) msg.textContent = `Cashier is not allowed for POS Profile ${selectedProfile}.`;
@@ -3029,6 +3167,7 @@ window.addEventListener("DOMContentLoaded", () => {
   window.addEventListener("online", () => { scheduleCartPreview(); void backgroundSyncTick(); void syncQueueNow(); });
   document.querySelector<HTMLButtonElement>("#retry-startup")?.addEventListener("click", () => void runPosBootstrap("retry"));
   document.querySelector<HTMLFormElement>("#cashier-login-form")?.addEventListener("submit", (event) => { event.preventDefault(); void submitCashierLogin(); });
+  initPinKeypad();
   document.querySelector<HTMLButtonElement>("#cashier-pin-change")?.addEventListener("click", () => setCashierPinMode("change", "Enter ERPNext password, then enter and confirm the new Offline Cashier PIN."));
   document.querySelector<HTMLButtonElement>("#cashier-pin-reset")?.addEventListener("click", () => {
     const cashierUser = document.querySelector<HTMLInputElement>("#cashier-username")?.value.trim() ?? "";

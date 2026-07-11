@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell } from "electron";
+import { app, BrowserWindow, ipcMain, screen, shell } from "electron";
 import { autoUpdater } from "electron-updater";
 import path from "node:path";
 import { writeFile } from "node:fs/promises";
@@ -45,7 +45,41 @@ import * as database from "./db/database";
 import { createPosCore, asRecord, textValue, sameIdentity, unwrapFrappePayload, formatResponseError, getResponseError } from "./core";
 
 let mainWindowRef: BrowserWindow | null = null;
+let customerDisplayWindow: BrowserWindow | null = null;
 const core = createPosCore({ db: database, fetch });
+
+// Second-monitor, customer-facing display. Greenfield: the app is single-window
+// otherwise (the only other BrowserWindow is a hidden print-rendering one, not
+// a persistent display). Skips creation entirely — not an error — when only
+// one display is connected, since not every terminal has this hardware yet.
+function createCustomerDisplayWindow(): void {
+  const primary = screen.getPrimaryDisplay();
+  const secondary = screen.getAllDisplays().find((display) => display.id !== primary.id);
+  if (!secondary) {
+    console.log("Customer display: only one monitor detected, skipping second window.");
+    return;
+  }
+  const win = new BrowserWindow({
+    x: secondary.bounds.x,
+    y: secondary.bounds.y,
+    width: secondary.bounds.width,
+    height: secondary.bounds.height,
+    fullscreen: true,
+    frame: false,
+    autoHideMenuBar: true,
+    title: "Aimatic POS App — Customer Display",
+    webPreferences: {
+      preload: path.join(__dirname, "preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false
+    }
+  });
+  customerDisplayWindow = win;
+  win.loadFile(path.join(__dirname, "renderer", "customer-display.html"));
+  win.on("closed", () => {
+    if (customerDisplayWindow === win) customerDisplayWindow = null;
+  });
+}
 
 function missingCashierLoginEndpointMessage(): string {
   return "Cashier login requires server endpoint aimatic.offline_pos.api.pos_cashier_login";
@@ -596,6 +630,10 @@ function createMainWindow(): void {
   mainWindow.loadFile(path.join(__dirname, "renderer", "index.html"));
   mainWindow.on("closed", () => {
     if (mainWindowRef === mainWindow) mainWindowRef = null;
+    // The app is meant to quit when its main window closes (see window-all-closed
+    // below) — without this, a still-open customer display window would keep
+    // window-all-closed from ever firing on Windows/Linux.
+    if (customerDisplayWindow && !customerDisplayWindow.isDestroyed()) customerDisplayWindow.close();
   });
   mainWindow.webContents.on("before-input-event", (event, input) => {
     if (input.type === "keyDown" && (input.key === "F9" || input.code === "F9")) {
@@ -640,6 +678,9 @@ app.whenReady().then(() => {
   ipcMain.handle("catalog:lookup", (_event, query) => lookupCatalog(String(query), textValue(asRecord(getPosBootstrap(loadSettings().posProfile)?.pos_profile), "warehouse")));
   ipcMain.handle("cart:load", () => { const id = core.getCartIdentity(); return loadCartState(id.terminalId, id.openingEntry); });
   ipcMain.handle("cart:save", (_event, lines) => { const id = core.getCartIdentity(); saveCartState(id.terminalId, id.openingEntry, Array.isArray(lines) ? lines : []); });
+  ipcMain.on("customer-display:cart-update", (_event, payload) => {
+    customerDisplayWindow?.webContents.send("customer-display:render", payload);
+  });
   ipcMain.handle("payments:methods", () => core.getPaymentMethods());
   ipcMain.handle("payments:load", () => { const id=core.getCartIdentity(); const cartKey=`${id.terminalId}::${id.openingEntry}`; return loadPaymentDraft(cartKey); });
   ipcMain.handle("payments:save", (_event, payments) => { const id=core.getCartIdentity(); savePaymentDraft(`${id.terminalId}::${id.openingEntry}`,Array.isArray(payments)?payments:[]); });
@@ -705,6 +746,7 @@ app.whenReady().then(() => {
   ipcMain.handle("admin:pin-set", (_event, input) => setAdminPin(asRecord(input) ?? {}));
   ipcMain.handle("cashier:reset-pin-with-authorization", (_event, input) => resetCashierOfflinePinWithAuthorization(asRecord(input) ?? {}));
   createMainWindow();
+  createCustomerDisplayWindow();
   setupAutoUpdater();
 
   app.on("activate", () => {
