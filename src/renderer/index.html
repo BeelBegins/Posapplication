@@ -208,6 +208,7 @@
       <section id="cashier-login-screen" class="app-screen cashier-login-screen" hidden>
         <div class="cashier-login-card">
           <div class="cashier-login-brand">
+            <div class="cashier-login-wordmark" aria-hidden="true">A</div>
             <p class="eyebrow">Aimatic POS App</p>
             <h2>Cashier Login</h2>
             <p>Sign in with your ERPNext cashier account to start operating this terminal.</p>
@@ -218,6 +219,28 @@
             <label id="cashier-password-row">ERPNext Password<input id="cashier-password" type="password" autocomplete="current-password" /></label>
             <label id="cashier-offline-pin-row">Offline Cashier PIN<input id="cashier-offline-pin" type="password" inputmode="numeric" autocomplete="off" placeholder="4-12 digits" /></label>
             <label id="cashier-offline-pin-confirm-row">Confirm Offline PIN<input id="cashier-offline-pin-confirm" type="password" inputmode="numeric" autocomplete="off" placeholder="Repeat PIN" /></label>
+            <div id="cashier-pin-keypad" class="pin-keypad" hidden>
+              <p id="pin-keypad-target-label" class="pin-keypad-target-label">Entering: Offline PIN</p>
+              <div class="pin-keypad-display">
+                <span id="pin-keypad-dots"></span>
+                <span id="pin-keypad-count" class="pin-keypad-count"></span>
+              </div>
+              <div class="pin-keypad-grid">
+                <button type="button" class="pin-keypad-key" data-digit="1">1</button>
+                <button type="button" class="pin-keypad-key" data-digit="2">2</button>
+                <button type="button" class="pin-keypad-key" data-digit="3">3</button>
+                <button type="button" class="pin-keypad-key" data-digit="4">4</button>
+                <button type="button" class="pin-keypad-key" data-digit="5">5</button>
+                <button type="button" class="pin-keypad-key" data-digit="6">6</button>
+                <button type="button" class="pin-keypad-key" data-digit="7">7</button>
+                <button type="button" class="pin-keypad-key" data-digit="8">8</button>
+                <button type="button" class="pin-keypad-key" data-digit="9">9</button>
+                <button id="pin-keypad-clear" type="button" class="pin-keypad-key pin-keypad-wide">Clear</button>
+                <button type="button" class="pin-keypad-key" data-digit="0">0</button>
+                <button id="pin-keypad-backspace" type="button" class="pin-keypad-key pin-keypad-wide">⌫</button>
+              </div>
+            </div>
+            <p id="cashier-login-lockout" class="cashier-login-lockout" role="status" hidden></p>
             <button id="cashier-login-submit" type="submit" class="primary-action">Login</button>
             <div class="form-actions">
               <button id="cashier-pin-change" type="button" class="secondary-button">Change Offline PIN</button>
@@ -317,18 +340,24 @@
 
       <section id="pos-screen" class="app-screen" hidden>
         <header class="pos-header">
-          <div><strong id="pos-branch">Branch</strong><span id="pos-profile-name">POS Profile</span></div>
-          <div><span>Terminal</span><strong id="pos-terminal">—</strong></div>
-          <div><span>Cashier</span><strong id="pos-cashier">—</strong></div>
-          <div><span>Customer</span><strong id="pos-customer">—</strong></div>
-          <div><span>Opening Entry</span><strong id="pos-opening-entry">—</strong></div>
-          <div><span>Server</span><strong id="pos-server-status">Reconnecting</strong></div>
-          <div><span>Sync</span><strong id="pos-sync-status">Pending</strong></div>
-          <div><span>Shift Age</span><strong id="pos-session-age">—</strong></div>
-          <div><span>Queue</span><strong id="pos-queue-status">—</strong></div>
-          <button id="cashier-logout" type="button" class="secondary-button header-action">Switch Cashier</button>
-          <button id="pos-close-shift" type="button" class="secondary-button header-action">Close Shift</button>
-          <button id="open-settings" type="button" class="secondary-button icon-button" title="Settings" aria-label="Settings">⚙</button>
+          <div class="pos-header-identity">
+            <div class="pos-header-brand"><strong id="pos-branch">Branch</strong><span id="pos-profile-name">POS Profile</span></div>
+            <div class="pos-header-field"><span>Terminal</span><strong id="pos-terminal">—</strong></div>
+            <div class="pos-header-field"><span>Cashier</span><strong id="pos-cashier">—</strong></div>
+            <div class="pos-header-field"><span>Customer</span><strong id="pos-customer">—</strong></div>
+            <div class="pos-header-field"><span>Opening Entry</span><strong id="pos-opening-entry">—</strong></div>
+          </div>
+          <div class="pos-header-status">
+            <div class="pos-header-badge"><span>Server</span><strong id="pos-server-status">Reconnecting</strong></div>
+            <div class="pos-header-badge"><span>Sync</span><strong id="pos-sync-status">Pending</strong></div>
+            <div class="pos-header-field"><span>Shift Age</span><strong id="pos-session-age">—</strong></div>
+            <div class="pos-header-badge"><span>Queue</span><strong id="pos-queue-status">—</strong></div>
+          </div>
+          <div class="pos-header-actions">
+            <button id="cashier-logout" type="button" class="secondary-button header-action">Switch Cashier</button>
+            <button id="pos-close-shift" type="button" class="secondary-button header-action">Close Shift</button>
+            <button id="open-settings" type="button" class="secondary-button icon-button" title="Settings" aria-label="Settings">⚙</button>
+          </div>
         </header>
         <div id="pos-session-warning" class="session-warning" hidden></div>
         <div id="pos-offline-banner" class="offline-banner" hidden><span id="pos-offline-text"></span><button id="pos-sync-queue" type="button" class="secondary-button">Sync Now</button></div>

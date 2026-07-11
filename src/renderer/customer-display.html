@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Aimatic POS — Customer Display</title>
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="customer-display.css" />
+  </head>
+  <body>
+    <div id="cd-idle" class="cd-idle">
+      <div class="cd-wordmark">A</div>
+      <p class="cd-idle-eyebrow">Aimatic</p>
+      <h1 class="cd-idle-title">Welcome</h1>
+      <p class="cd-idle-sub">Please place your items on the counter.</p>
+    </div>
+    <div id="cd-active" class="cd-active" hidden>
+      <header class="cd-active-head">
+        <span class="cd-wordmark cd-wordmark-sm">A</span>
+        <span id="cd-customer" class="cd-customer"></span>
+      </header>
+      <div id="cd-lines" class="cd-lines"></div>
+      <footer class="cd-active-foot">
+        <div class="cd-foot-row">
+          <span>Items</span>
+          <strong id="cd-item-count">0</strong>
+        </div>
+        <div class="cd-foot-row cd-foot-total">
+          <span>Total Due</span>
+          <strong id="cd-total">0.00</strong>
+        </div>
+      </footer>
+    </div>
+    <script src="customer-display.js"></script>
+  </body>
+</html>

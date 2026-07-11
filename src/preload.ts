@@ -104,4 +104,6 @@ contextBridge.exposeInMainWorld("posAPI", {
   ,authorizeAdminAction: (input: Record<string, unknown>) => ipcRenderer.invoke("admin:authorize-action", input)
   ,setAdminPin: (input: Record<string, unknown>) => ipcRenderer.invoke("admin:pin-set", input)
   ,resetCashierOfflinePin: (input: Record<string, unknown>) => ipcRenderer.invoke("cashier:reset-pin-with-authorization", input)
+  ,pushCustomerDisplay: (payload: Record<string, unknown>) => ipcRenderer.send("customer-display:cart-update", payload)
+  ,onCustomerDisplayUpdate: (callback: (payload: Record<string, unknown>) => void) => ipcRenderer.on("customer-display:render", (_event, payload: Record<string, unknown>) => callback(payload))
 });
