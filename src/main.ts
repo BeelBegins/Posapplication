@@ -102,7 +102,7 @@ async function posCashierLogin(input: Record<string, unknown>): Promise<CashierL
       roles,
       allowedPosProfiles,
       defaultPosProfile: textValue(payload, "default_pos_profile"),
-      canStartShift: Boolean(payload.can_start_shift ?? true),
+      canStartShift: Boolean(payload.can_start_shift ?? false),
       canRefund: Boolean(payload.can_refund ?? false),
       canCloseShift: Boolean(payload.can_close_shift ?? false),
       canOfflineSale,
@@ -294,7 +294,14 @@ const ALLOW_HTTP_SUPERVISOR_AUTH = !app.isPackaged || process.env.POS_ALLOW_HTTP
 const DEV_ADMIN_AUTH_BYPASS = !app.isPackaged || process.env.POS_DEV_ADMIN_AUTH_BYPASS === "1";
 type AdminAction = "setup_pin" | "reset_pin" | "change_credentials" | "start_shift" | "close_shift" | "settings" | "force_sync" | "diagnostics";
 type PinScope = "settings" | "shift";
-let pendingAdminAuthorization: { tokenHash: string; action: AdminAction; pinScope: PinScope; terminalId: string; expiresAt: number } | null = null;
+// cashierUser is set only when a "reset_pin" authorization is for a specific
+// cashier's local Offline Cashier PIN cache (see resetCashierOfflinePinWithAuthorization)
+// rather than the terminal-wide Settings/Shift admin PIN - purely a local distinction,
+// never sent to the server (which only knows the fixed action/role check, see
+// aimatic.offline_pos.api.authorize_pos_admin_action - reusing "reset_pin" as the wire
+// action here is deliberate, not accidental, since that endpoint's role check doesn't
+// differentiate by action at all).
+let pendingAdminAuthorization: { tokenHash: string; action: AdminAction; pinScope: PinScope; terminalId: string; expiresAt: number; cashierUser?: string } | null = null;
 
 function hashSecret(value: string): string {
   return createHash("sha256").update(value).digest("hex");
@@ -403,12 +410,13 @@ async function authorizePosAdminAction(input: Record<string, unknown>): Promise<
   const pinScope = pinScopeFromAction(action, textValue(input, "pinScope"));
   const username = textValue(input, "username");
   const password = textValue(input, "password");
+  const cashierUser = action === "reset_pin" ? normalizeCashierUser(textValue(input, "cashierUser")) : "";
   if (!settings.erpnextUrl || !settings.apiKey || !settings.apiSecret || !settings.terminalId) return { ok: false, token: "", error: "Terminal settings are required before supervisor authorization." };
   if (!["setup_pin", "reset_pin", "change_credentials"].includes(action)) return { ok: false, token: "", error: "Invalid admin action." };
   if (!username || !password) return { ok: false, token: "", error: "Supervisor username and password are required." };
   if (DEV_ADMIN_AUTH_BYPASS) {
     const token = randomUUID();
-    pendingAdminAuthorization = { tokenHash: hashSecret(token), action, pinScope, terminalId: settings.terminalId, expiresAt: Date.now() + 5 * 60_000 };
+    pendingAdminAuthorization = { tokenHash: hashSecret(token), action, pinScope, terminalId: settings.terminalId, expiresAt: Date.now() + 5 * 60_000, cashierUser: cashierUser || undefined };
     return { ok: true, token, error: null };
   }
   let base: URL;
@@ -437,7 +445,7 @@ async function authorizePosAdminAction(input: Record<string, unknown>): Promise<
       }
       return { ok: false, token: "", error: serverError ? `Supervisor authorization failed: ${serverError}` : "Supervisor authorization failed." };
     }
-    pendingAdminAuthorization = { tokenHash: hashSecret(token), action, pinScope, terminalId: settings.terminalId, expiresAt: Date.now() + 5 * 60_000 };
+    pendingAdminAuthorization = { tokenHash: hashSecret(token), action, pinScope, terminalId: settings.terminalId, expiresAt: Date.now() + 5 * 60_000, cashierUser: cashierUser || undefined };
     return { ok: true, token, error: null };
   } catch (error) {
     return { ok: false, token: "", error: supervisorAuthNetworkError(error) };
@@ -464,6 +472,41 @@ async function setAdminPin(input: Record<string, unknown>): Promise<{ ok: boolea
   setMeta(pinHashKey(pinScope), pinHash(pin));
   setMeta(pinFailedKey(pinScope), "0");
   setMeta(pinLockKey(pinScope), "0");
+  return { ok: true, error: null };
+}
+
+function consumeCashierPinResetAuthorization(token: string, cashierUser: string): { ok: boolean; error: string | null } {
+  const pending = pendingAdminAuthorization;
+  pendingAdminAuthorization = null;
+  const terminalId = loadSettings().terminalId;
+  if (!pending) return { ok: false, error: "Supervisor authorization is missing or expired." };
+  if (pending.expiresAt < Date.now()) return { ok: false, error: "Supervisor authorization expired." };
+  if (pending.action !== "reset_pin") return { ok: false, error: "Supervisor authorization was for a different action." };
+  if (pending.terminalId !== terminalId) return { ok: false, error: "Supervisor authorization was for a different terminal." };
+  if (pending.tokenHash !== hashSecret(token)) return { ok: false, error: "Supervisor authorization token is invalid." };
+  if (!pending.cashierUser || pending.cashierUser !== cashierUser) return { ok: false, error: "Supervisor authorization was for a different cashier." };
+  return { ok: true, error: null };
+}
+
+async function resetCashierOfflinePinWithAuthorization(input: Record<string, unknown>): Promise<{ ok: boolean; error: string | null }> {
+  const cashierUser = normalizeCashierUser(textValue(input, "cashierUser"));
+  const pin = textValue(input, "pin");
+  const confirmPin = textValue(input, "confirmPin");
+  const token = textValue(input, "token");
+  if (!cashierUser) return { ok: false, error: "Cashier username is required." };
+  const formatError = validatePinFormat(pin);
+  if (formatError) return { ok: false, error: formatError };
+  if (pin !== confirmPin) return { ok: false, error: "PIN confirmation does not match." };
+  const consumed = consumeCashierPinResetAuthorization(token, cashierUser);
+  if (!consumed.ok) return consumed;
+  const raw = getCashierCacheRaw(cashierUser);
+  if (!raw) return { ok: false, error: "No offline PIN is cached yet for this cashier on this terminal/profile - they must complete one online login with PIN setup first." };
+  let cached: Record<string, unknown>;
+  try { cached = JSON.parse(raw) as Record<string, unknown>; } catch { return { ok: false, error: "Cached cashier record is corrupted." }; }
+  cached.pinHash = pinHash(pin);
+  setMeta(cashierCacheKey(cashierUser), JSON.stringify(cached));
+  setMeta(cashierFailedKey(cashierUser), "0");
+  setMeta(cashierLockKey(cashierUser), "0");
   return { ok: true, error: null };
 }
 
@@ -660,6 +703,7 @@ app.whenReady().then(() => {
   ipcMain.handle("admin:pin-verify", (_event, input) => verifyAdminPin(asRecord(input) ?? {}));
   ipcMain.handle("admin:authorize-action", (_event, input) => authorizePosAdminAction(asRecord(input) ?? {}));
   ipcMain.handle("admin:pin-set", (_event, input) => setAdminPin(asRecord(input) ?? {}));
+  ipcMain.handle("cashier:reset-pin-with-authorization", (_event, input) => resetCashierOfflinePinWithAuthorization(asRecord(input) ?? {}));
   createMainWindow();
   setupAutoUpdater();
 

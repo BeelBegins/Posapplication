@@ -103,4 +103,5 @@ contextBridge.exposeInMainWorld("posAPI", {
   ,verifyAdminPin: (input: Record<string, unknown>) => ipcRenderer.invoke("admin:pin-verify", input)
   ,authorizeAdminAction: (input: Record<string, unknown>) => ipcRenderer.invoke("admin:authorize-action", input)
   ,setAdminPin: (input: Record<string, unknown>) => ipcRenderer.invoke("admin:pin-set", input)
+  ,resetCashierOfflinePin: (input: Record<string, unknown>) => ipcRenderer.invoke("cashier:reset-pin-with-authorization", input)
 });
