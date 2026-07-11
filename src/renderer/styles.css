@@ -285,8 +285,10 @@ button:disabled { cursor: wait; opacity: 0.65; }
 .customer-dialog::backdrop { background: rgb(15 23 42 / 45%); }
 .customer-dialog .search-result { font-size: 12px; padding: 6px 8px; }
 .payment-dialog { width: min(620px, 92vw); }
-.payment-methods { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin: 10px 0; }
-.payment-methods .search-result { min-height: 34px; padding: 7px 10px; }
+.payment-methods { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin: 10px 0; max-height: 220px; overflow-y: auto; }
+.payment-methods .search-result { min-height: 34px; padding: 7px 10px; position: relative; }
+.payment-methods .search-result .payment-method-key { position: absolute; top: 2px; left: 4px; font-size: 0.65rem; font-weight: 700; opacity: 0.6; }
+.payment-amount-hint { display: block; margin-top: 3px; font-size: 0.78rem; color: #1d4ed8; font-weight: 600; }
 .payment-rows { display: grid; gap: 6px; margin: 12px 0; }
 .payment-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; border-radius: 7px; background: #f4f7fb; }
 

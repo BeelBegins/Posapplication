@@ -87,6 +87,7 @@ interface PosAPI {
   verifyAdminPin: (input: Record<string, unknown>) => Promise<{ ok: boolean; error: string | null; locked?: boolean; secondsRemaining?: number }>;
   authorizeAdminAction: (input: Record<string, unknown>) => Promise<{ ok: boolean; token: string; error: string | null }>;
   setAdminPin: (input: Record<string, unknown>) => Promise<{ ok: boolean; error: string | null }>;
+  resetCashierOfflinePin: (input: Record<string, unknown>) => Promise<{ ok: boolean; error: string | null }>;
 }
 
 interface ReleaseEntry { tag: string; version: string; name: string; notes: string; publishedAt: string; prerelease: boolean; exeName: string; exeUrl: string; exeApiUrl: string; }
@@ -381,14 +382,18 @@ let receiptAutoPrintDone = false;
 // --- Refund state ---
 let refundData: Record<string, unknown> | null = null;       // server get_pos_invoice_for_refund payload
 let refundTerminalId = "";                                   // persistent terminal_refund_id for the current refund operation
+let salesHistoryRenderToken = 0;                              // guards a background refund-status patch from clobbering a newer search/filter render
 let refundSubmitting = false;
 let paymentMethods: string[] = [];
+const PAYMENT_METHOD_GRID_COLUMNS = 3; // must match .payment-methods CSS grid-template-columns
 let selectedPaymentMethodIndex = 0;
 let paymentRows: PaymentRow[] = [];
 let paymentsOutdated = false;
 let prevServerConnected = false;
 let cashierSession: CashierSession | null = null;
-type CashierPinMode = "login" | "setup" | "change" | "reset";
+// "reset" is handled entirely by requestSupervisorPinSetup (a separate supervisor-
+// authorized dialog), never by this in-form mode - see the #cashier-pin-reset handler.
+type CashierPinMode = "login" | "setup" | "change";
 let cashierPinMode: CashierPinMode = "login";
 // --- POS session health ---
 interface SessionState { openingEntry: string; status: string; user: string; posProfile: string; company: string; postingDate: string; periodStart: string; lastChecked: number; lastError: string; valid: boolean; reason: string; }
@@ -1130,7 +1135,7 @@ async function persistPayments():Promise<void>{await window.posAPI.savePaymentDr
 function paidAmount():number{return paymentRows.reduce((s,x)=>s+x.amount,0);}
 function remainingAmount():number{return Math.max(0,money2(payableAmount()-paidAmount()));}
 // Lightweight refresh of the Payable / Tendered / Paid / Remaining / Change figures (no row rebuild).
-function refreshPaymentSummary():void{const input=document.querySelector<HTMLInputElement>("#payment-amount");const tendered=Number(input?.value)||0;const payable=payableAmount(),paid=paidAmount(),remaining=Math.max(0,money2(payable-paid));setCartText("#payment-payable",payable.toFixed(2));setCartText("#payment-tendered",tendered.toFixed(2));setCartText("#payment-allocated",paid.toFixed(2));setCartText("#payment-remaining",remaining.toFixed(2));setCartText("#payment-change",changeDue.toFixed(2));}
+function refreshPaymentSummary():void{const input=document.querySelector<HTMLInputElement>("#payment-amount");const tendered=Number(input?.value)||0;const payable=payableAmount(),paid=paidAmount(),remaining=Math.max(0,money2(payable-paid));setCartText("#payment-payable",payable.toFixed(2));setCartText("#payment-tendered",tendered.toFixed(2));setCartText("#payment-allocated",paid.toFixed(2));setCartText("#payment-remaining",remaining.toFixed(2));setCartText("#payment-change",changeDue.toFixed(2));const hint=document.querySelector<HTMLElement>("#payment-amount-hint");if(hint)hint.textContent=`Remaining: ${remaining.toFixed(2)}`;}
 function renderPayments():void{refreshPaymentSummary();const box=document.querySelector<HTMLElement>("#payment-rows");if(box){box.replaceChildren(); for(const [i,row] of paymentRows.entries()){const container=document.createElement("div");container.className="payment-row";const text=document.createElement("span");text.textContent=`${row.method}: ${row.amount.toFixed(2)}`;const edit=document.createElement("button");edit.type="button";edit.className="secondary-button";edit.textContent="Edit";edit.onclick=()=>{paymentEditIndex=i; const methodIndex=paymentMethods.findIndex(m=>m.toLowerCase()===row.method.toLowerCase()); if(methodIndex>=0)selectedPaymentMethodIndex=methodIndex; renderPaymentMethods(); const input=document.querySelector<HTMLInputElement>("#payment-amount"); if(input){input.value=String(row.amount); input.focus(); input.select();}};const remove=document.createElement("button");remove.type="button";remove.className="secondary-button";remove.textContent="Remove";remove.onclick=async()=>{paymentRows.splice(i,1);changeDue=0;await persistPayments();renderPayments();};container.append(text,edit,remove);box.append(container);} } }
 
 async function addPayment():Promise<void>{
@@ -1151,14 +1156,26 @@ async function addPayment():Promise<void>{
   if(targetIndex>=0)paymentRows[targetIndex]={method,amount:applied};else paymentRows.push({method,amount:applied});
   paymentEditIndex=null;
   await persistPayments();renderPayments();if(input)input.value="";refreshPaymentSummary();
-  if(remainingAmount()<=0.0001){await finalizePaymentReady();return;}
+  // Once fully covered, stop short of auto-closing the dialog — leave it open on a
+  // "Payment Ready" state and require one more explicit Complete Payment (F6 or
+  // click) so a mistyped last split leg has a beat to be caught/edited before it
+  // actually submits, instead of instantly vanishing the moment remaining hits 0.
+  if(remainingAmount()<=0.0001){if(msg)msg.textContent="Payment Ready — press F6 or Complete Payment to finish.";document.querySelector<HTMLButtonElement>("#payment-complete")?.focus();return;}
   if(msg)msg.textContent="";if(input)input.focus();}
 
 // "Exact Amount" immediately adds whatever is still owed.
 async function addExactAmount():Promise<void>{const input=document.querySelector<HTMLInputElement>("#payment-amount");if(input)input.value=remainingAmount().toFixed(2);await addPayment();}
 
-// F6 / Complete Payment: settle any typed amount, then prepare the payment when fully covered.
-async function completePaymentAllocation():Promise<void>{const input=document.querySelector<HTMLInputElement>("#payment-amount");if(input?.value.trim()){await addPayment();return;}if(remainingAmount()>0.0001){const msg=document.querySelector<HTMLElement>("#payment-message");if(msg)msg.textContent="Remaining amount must be zero.";return;}await finalizePaymentReady();}
+// F6 / Complete Payment: require any typed amount to be explicitly Added first
+// (never silently commit half-typed text as a payment row on the same keypress
+// that's meant to finish the sale), then prepare the payment once fully covered.
+async function completePaymentAllocation():Promise<void>{
+  const input=document.querySelector<HTMLInputElement>("#payment-amount");
+  const msg=document.querySelector<HTMLElement>("#payment-message");
+  if(input?.value.trim()){if(msg)msg.textContent="Press Enter or Add to save this amount first, then Complete Payment.";input.focus();return;}
+  if(remainingAmount()>0.0001){if(msg)msg.textContent="Remaining amount must be zero.";return;}
+  await finalizePaymentReady();
+}
 
 // Mark the prepared payment for this exact cart version, then hand off to Complete Sale & Print.
 async function finalizePaymentReady():Promise<void>{
@@ -1619,15 +1636,64 @@ function classifyRefundHistory(data:Record<string,unknown>|null):RefundHistorySt
   if(returned&&remaining)return "partial";
   return "none";
 }
+// Short-lived cache so the badge check (Sales History) and opening the refund
+// screen for the same invoice a moment later don't both hit the server for
+// identical data. Deliberately NOT used by submitRefund's pre-submit re-verify,
+// which is a race guard against another refund landing in between and must
+// always be a fresh fetch.
+const refundInvoiceCache = new Map<string, { data: Record<string, unknown> | null; error: string | null; fetchedAt: number }>();
+const REFUND_INVOICE_CACHE_TTL_MS = 30_000;
+async function getInvoiceForRefundCached(invoice: string): Promise<{ data: Record<string, unknown> | null; error: string | null }> {
+  const cached = refundInvoiceCache.get(invoice);
+  if (cached && Date.now() - cached.fetchedAt < REFUND_INVOICE_CACHE_TTL_MS) return cached;
+  const result = await window.posAPI.getInvoiceForRefund(invoice).catch(() => ({ data: null, error: "" }));
+  refundInvoiceCache.set(invoice, { ...result, fetchedAt: Date.now() });
+  return result;
+}
 async function loadRefundHistoryStatuses(rows:SalesHistoryRow[]):Promise<Map<string,RefundHistoryStatus>>{
   const statuses=new Map<string,RefundHistoryStatus>();
   if(!isOnline())return statuses;
   const invoices=[...new Set(rows.filter((row)=>row.posInvoice&&row.status==="Submitted").map((row)=>row.posInvoice as string))];
   await Promise.all(invoices.map(async(invoice)=>{
-    const result=await window.posAPI.getInvoiceForRefund(invoice).catch(()=>({data:null,error:""}));
+    const result=await getInvoiceForRefundCached(invoice);
     statuses.set(invoice,classifyRefundHistory(result.data));
   }));
   return statuses;
+}
+function buildHistoryRow(row:SalesHistoryRow,refundStatus:RefundHistoryStatus|undefined,checking:boolean):HTMLElement{
+  const response=row.response??{}; const payload=row.payload??{};
+  const fbr=interpretFbr(response);
+  const grand=previewNumber(response,"grand_total","rounded_total")??previewNumber(asTotalsRecord(payload),"grand_total")??0;
+  const card=document.createElement("div");card.className="op-card";
+  const main=document.createElement("div");main.className="op-card-main";
+  const queued=row.status==="Queued";
+  const estTotal=grand||previewNumber(asTotalsRecord(payload),"estimated_total")||previewNumber(response,"estimated_total")||0;
+  const title=document.createElement("div");title.className="op-card-title";title.textContent=row.posInvoice||(queued?"Queued (offline)":"(no invoice)");
+  const meta=document.createElement("div");meta.className="op-card-meta";
+  meta.textContent=`${new Date(row.submittedAt||row.createdAt).toLocaleString()} · ${String(payload.customer??"—")} · ${estTotal?`Total ${estTotal.toFixed(2)}`:row.status} · Term ${row.terminalInvoiceId.slice(0,12)}… · Reprints ${row.reprintCount}`;
+  const fbrTag=document.createElement("span");
+  if(queued){fbrTag.className="fbr-tag return";fbrTag.textContent="Queued — Offline (FBR pending)";}
+  else{fbrTag.className=`fbr-tag ${fbr.accepted?"ok":"warn"}`;fbrTag.textContent=`FBR ${fbr.accepted?"Accepted":fbr.statusText}${fbr.invoiceNumber?` · ${fbr.invoiceNumber}`:""}`;}
+  main.append(title,meta,fbrTag);
+  if(refundStatus==="partial"||refundStatus==="complete"){
+    const refundTag=document.createElement("span");
+    refundTag.className=`fbr-tag ${refundStatus==="complete"?"return":"warn"}`;
+    refundTag.textContent=refundStatus==="complete"?"Completely refunded":"Partially refunded";
+    main.append(refundTag);
+  }else if(checking&&row.posInvoice&&row.status==="Submitted"){
+    const checkingTag=document.createElement("span");checkingTag.className="fbr-tag";checkingTag.textContent="Checking refund status…";
+    main.append(checkingTag);
+  }
+  const actions=document.createElement("div");actions.className="op-card-actions";
+  const view=document.createElement("button");view.type="button";view.className="secondary-button";view.textContent="View Receipt";view.onclick=()=>void viewHistoryReceipt(row);
+  const dup=document.createElement("button");dup.type="button";dup.textContent="Print Duplicate";dup.disabled=!row.posInvoice;dup.onclick=()=>void printDuplicate(row);
+  const refund=document.createElement("button");refund.type="button";refund.className="secondary-button";refund.textContent=refundStatus==="complete"?"Refunded":"Refund";
+  const canRefund=Boolean(cashierSession?.canRefund);
+  refund.disabled=!row.posInvoice||row.status!=="Submitted"||refundStatus==="complete"||!canRefund;
+  refund.title=canRefund?"":"This cashier is not allowed to refund.";
+  refund.onclick=()=>void openRefund(row.posInvoice??"");
+  actions.append(view,dup,refund);
+  card.append(main,actions);return card;
 }
 async function renderSalesHistory():Promise<void>{
   const list=document.querySelector<HTMLElement>("#history-list"); const msg=document.querySelector<HTMLElement>("#history-message"); if(!list)return;
@@ -1642,39 +1708,18 @@ async function renderSalesHistory():Promise<void>{
   let rows:SalesHistoryRow[]=[];
   try{rows=await window.posAPI.listSalesHistory({search,dateFrom:from?`${from}T00:00:00.000Z`:"",dateTo:to?`${to}T23:59:59.999Z`:"",limit:50,offset:0});}
   catch{if(msg)msg.textContent="Unable to load sales history.";return;}
-  if(msg)msg.textContent=isOnline()?"Checking refund status...":"";
-  const refundStatuses=await loadRefundHistoryStatuses(rows);
   if(msg)msg.textContent="";
   if(!rows.length){list.replaceChildren(Object.assign(document.createElement("div"),{className:"op-empty",textContent:"No matching sales."}));return;}
-  list.replaceChildren(...rows.map((row)=>{
-    const response=row.response??{}; const payload=row.payload??{};
-    const fbr=interpretFbr(response);
-    const grand=previewNumber(response,"grand_total","rounded_total")??previewNumber(asTotalsRecord(payload),"grand_total")??0;
-    const card=document.createElement("div");card.className="op-card";
-    const main=document.createElement("div");main.className="op-card-main";
-    const queued=row.status==="Queued";
-    const estTotal=grand||previewNumber(asTotalsRecord(payload),"estimated_total")||previewNumber(response,"estimated_total")||0;
-    const title=document.createElement("div");title.className="op-card-title";title.textContent=row.posInvoice||(queued?"Queued (offline)":"(no invoice)");
-    const meta=document.createElement("div");meta.className="op-card-meta";
-    meta.textContent=`${new Date(row.submittedAt||row.createdAt).toLocaleString()} · ${String(payload.customer??"—")} · ${estTotal?`Total ${estTotal.toFixed(2)}`:row.status} · Term ${row.terminalInvoiceId.slice(0,12)}… · Reprints ${row.reprintCount}`;
-    const fbrTag=document.createElement("span");
-    if(queued){fbrTag.className="fbr-tag return";fbrTag.textContent="Queued — Offline (FBR pending)";}
-    else{fbrTag.className=`fbr-tag ${fbr.accepted?"ok":"warn"}`;fbrTag.textContent=`FBR ${fbr.accepted?"Accepted":fbr.statusText}${fbr.invoiceNumber?` · ${fbr.invoiceNumber}`:""}`;}
-    main.append(title,meta,fbrTag);
-    const refundStatus=row.posInvoice?refundStatuses.get(row.posInvoice):undefined;
-    if(refundStatus==="partial"||refundStatus==="complete"){
-      const refundTag=document.createElement("span");
-      refundTag.className=`fbr-tag ${refundStatus==="complete"?"return":"warn"}`;
-      refundTag.textContent=refundStatus==="complete"?"Completely refunded":"Partially refunded";
-      main.append(refundTag);
-    }
-    const actions=document.createElement("div");actions.className="op-card-actions";
-    const view=document.createElement("button");view.type="button";view.className="secondary-button";view.textContent="View Receipt";view.onclick=()=>void viewHistoryReceipt(row);
-    const dup=document.createElement("button");dup.type="button";dup.textContent="Print Duplicate";dup.disabled=!row.posInvoice;dup.onclick=()=>void printDuplicate(row);
-    const refund=document.createElement("button");refund.type="button";refund.className="secondary-button";refund.textContent=refundStatus==="complete"?"Refunded":"Refund";refund.disabled=!row.posInvoice||row.status!=="Submitted"||refundStatus==="complete";refund.onclick=()=>void openRefund(row.posInvoice??"");
-    actions.append(view,dup,refund);
-    card.append(main,actions);return card;
-  }));
+  // Render immediately without waiting on refund-status checks (up to ~50 parallel
+  // network calls) — the cashier can view/act on the list right away. Refund badges
+  // patch in once the background check resolves, instead of blocking the whole list.
+  const renderToken=++salesHistoryRenderToken;
+  const online=isOnline();
+  list.replaceChildren(...rows.map((row)=>buildHistoryRow(row,undefined,online)));
+  if(!online)return;
+  const refundStatuses=await loadRefundHistoryStatuses(rows);
+  if(renderToken!==salesHistoryRenderToken)return; // a newer search/filter already superseded this one
+  list.replaceChildren(...rows.map((row)=>buildHistoryRow(row,row.posInvoice?refundStatuses.get(row.posInvoice):undefined,false)));
 }
 
 async function viewHistoryReceipt(row:SalesHistoryRow):Promise<void>{
@@ -1742,7 +1787,7 @@ async function openRefund(posInvoice:string):Promise<void>{
   if(cashierSession?.offlineLogin){const hm=document.querySelector<HTMLElement>("#history-message");if(hm)hm.textContent="Refund requires online cashier login.";return;}
   if(!isOnline()){const hm=document.querySelector<HTMLElement>("#history-message");if(hm)hm.textContent="Online connection required for refunds.";return;}
   const hm=document.querySelector<HTMLElement>("#history-message");if(hm)hm.textContent="Loading invoice…";
-  const result=await window.posAPI.getInvoiceForRefund(posInvoice);
+  const result=await getInvoiceForRefundCached(posInvoice);
   if(!result.data){if(hm)hm.textContent=`Cannot open refund: ${result.error??"Unknown error"}`;return;}
   if(hm)hm.textContent="";
   refundData=result.data;
@@ -1888,8 +1933,21 @@ async function submitRefund():Promise<void>{
   const mode=document.querySelector<HTMLSelectElement>("#refund-mode")?.value??"";
   if(!mode){if(msg)msg.textContent="Select a refund mode of payment.";return;}
   const reason=document.querySelector<HTMLInputElement>("#refund-reason")?.value??"";
+  const totalQty=items.reduce((sum,it)=>sum+it.qty,0);
+  if(!confirm(`Refund ${totalQty} item(s) from ${String(refundData.original_invoice??"")}?`))return;
+  await verifyAndSubmitRefund(items,mode,reason,false);
+}
+
+// Split out from submitRefund so the quantity-conflict path can retry once with
+// server-corrected quantities without re-scraping the DOM (which renderRefundScreen
+// has already reset to reflect the fresh remaining amounts, not the cashier's
+// original request) and without re-showing the confirm dialog a second time.
+async function verifyAndSubmitRefund(items:{original_row_name:string;qty:number}[],mode:string,reason:string,isRetry:boolean):Promise<void>{
+  if(!cashierSession||!refundData)return;
+  const msg=document.querySelector<HTMLElement>("#refund-message");
   const btn=document.querySelector<HTMLButtonElement>("#refund-submit");if(btn)btn.disabled=true;
   // Re-fetch authoritative remaining quantities and block if another refund reduced availability.
+  // Deliberately NOT the cached getInvoiceForRefundCached — this is a race guard and must be fresh.
   if(msg)msg.textContent="Verifying available quantities…";
   const fresh=await window.posAPI.getInvoiceForRefund(String(refundData.original_invoice??""));
   if(!fresh.data){if(msg)msg.textContent=`Unable to verify quantities: ${fresh.error??"Unknown error"}`;if(btn)btn.disabled=false;return;}
@@ -1902,10 +1960,21 @@ async function submitRefund():Promise<void>{
     if(!refundHasRemaining(fresh.data)){
       if(msg)msg.textContent="This invoice is now fully refunded. Returning to Sales History.";
       window.setTimeout(()=>void openSalesHistory(),900);
-    }else if(msg){
-      msg.textContent="Available quantity changed (another refund may have processed). Quantities refreshed — re-check and submit again.";
+      return;
     }
-    if(btn)btn.disabled=!refundHasRemaining(fresh.data);
+    if(!isRetry){
+      // Auto-correct to the fresh remaining quantities and retry once, instead of
+      // leaving the cashier to notice the message and resubmit manually.
+      const correctedItems=items
+        .map((it)=>({original_row_name:it.original_row_name,qty:Math.min(it.qty,freshRemaining.get(it.original_row_name)??0)}))
+        .filter((it)=>it.qty>0.0001);
+      if(!correctedItems.length){if(msg)msg.textContent="Available quantity changed — nothing left to refund on the requested rows.";if(btn)btn.disabled=false;return;}
+      if(msg)msg.textContent="Available quantity changed — retrying with corrected quantities…";
+      await verifyAndSubmitRefund(correctedItems,mode,reason,true);
+      return;
+    }
+    if(msg)msg.textContent="Available quantity changed again — please review and submit manually.";
+    if(btn)btn.disabled=false;
     return;
   }
   refundSubmitting=true;if(msg)msg.textContent="Submitting Refund…";
@@ -2067,7 +2136,18 @@ async function openBenefitsModern():Promise<void>{
 
 function closeBenefitsDialog():void{document.querySelector<HTMLDialogElement>('#benefits-dialog')?.close();focusCart();}
 
-function renderPaymentMethods():void{const box=document.querySelector<HTMLElement>("#payment-methods");if(!box)return;box.replaceChildren(...paymentMethods.map((m,i)=>{const b=document.createElement("button");b.type="button";b.className=`secondary-button search-result${i===selectedPaymentMethodIndex?" selected":""}`;b.textContent=m;b.onclick=()=>{selectedPaymentMethodIndex=i;renderPaymentMethods();document.querySelector<HTMLInputElement>("#payment-amount")?.focus();};return b;}));}
+// Cash is the most common tender at retail, so pin it first regardless of its
+// position in the POS Profile's payments child table - rest stays server-order.
+function sortPaymentMethodsCashFirst(methods: string[]): string[] {
+  const cashIndex = methods.findIndex((m) => m.toLowerCase() === "cash");
+  if (cashIndex <= 0) return methods;
+  const copy = methods.slice();
+  const [cash] = copy.splice(cashIndex, 1);
+  copy.unshift(cash);
+  return copy;
+}
+
+function renderPaymentMethods():void{const box=document.querySelector<HTMLElement>("#payment-methods");if(!box)return;box.replaceChildren(...paymentMethods.map((m,i)=>{const b=document.createElement("button");b.type="button";b.className=`secondary-button search-result${i===selectedPaymentMethodIndex?" selected":""}`;if(i<9){const key=document.createElement("span");key.className="payment-method-key";key.textContent=String(i+1);b.append(key);}b.append(document.createTextNode(m));b.onclick=()=>{selectedPaymentMethodIndex=i;renderPaymentMethods();document.querySelector<HTMLInputElement>("#payment-amount")?.focus();};return b;}));}
 async function openPayment():Promise<void>{
   // F6 gate: validate the POS session, then require the current cart version to be server-validated.
   if(!cashierSession){cartMessage("Cashier login required.");await showCashierLogin("Cashier login required.");return;}
@@ -2103,7 +2183,7 @@ async function openPayment():Promise<void>{
     const blocker=await offlineLocalBlocker(false);
     if(blocker){cartMessage(blocker);return;}
   }
-  if(paymentsOutdated&&paymentRows.length){if(!confirm("Cart changed. Clear outdated payments?"))return;paymentRows=[];await persistPayments();paymentsOutdated=false;}paymentMethods=await window.posAPI.getPaymentMethods();paymentRows=await window.posAPI.loadPaymentDraft();changeDue=0;selectedPaymentMethodIndex=0;renderPaymentMethods();const amountInput=document.querySelector<HTMLInputElement>("#payment-amount");if(amountInput)amountInput.value="";const payMsg=document.querySelector<HTMLElement>("#payment-message");if(payMsg)payMsg.textContent="";renderPayments();document.querySelector<HTMLDialogElement>("#payment-dialog")?.showModal();window.setTimeout(()=>amountInput?.focus(),0);}
+  if(paymentsOutdated&&paymentRows.length){if(!confirm("Cart changed. Clear outdated payments?"))return;paymentRows=[];await persistPayments();paymentsOutdated=false;}paymentMethods=sortPaymentMethodsCashFirst(await window.posAPI.getPaymentMethods());paymentRows=await window.posAPI.loadPaymentDraft();changeDue=0;selectedPaymentMethodIndex=0;renderPaymentMethods();const amountInput=document.querySelector<HTMLInputElement>("#payment-amount");if(amountInput)amountInput.value="";const payMsg=document.querySelector<HTMLElement>("#payment-message");if(payMsg)payMsg.textContent="";renderPayments();document.querySelector<HTMLDialogElement>("#payment-dialog")?.showModal();window.setTimeout(()=>amountInput?.focus(),0);}
 function renderCart(): void {
   const container = document.querySelector<HTMLElement>("#cart-rows"); if (!container) return; container.replaceChildren();
   cartLines.forEach((line, index) => { const row = document.createElement("div"); row.setAttribute("role", "button"); row.tabIndex = -1; row.className = `cart-row${index === selectedCartIndex ? " selected" : ""}`; const cells = [line.itemCode,line.itemName,line.uom,String(line.quantity),String(line.sellingPrice ?? 0),"0.00",((line.sellingPrice ?? 0) * line.quantity).toFixed(2),`${line.actualStock ?? "—"}${line.actualStock !== null && line.quantity > line.actualStock ? " ⚠" : ""}`,"Void"]; cells.forEach((text) => { const cell=document.createElement("span");cell.textContent=text;row.append(cell); }); row.onpointerdown = (event) => event.preventDefault(); row.onclick = () => { selectedCartIndex = index; renderCart(); focusCart(true); }; container.append(row); });
@@ -2605,7 +2685,7 @@ function setCashierPinMode(mode: CashierPinMode, message = ""): void {
   if (offlinePinConfirmRow) offlinePinConfirmRow.hidden = !online || mode === "login";
   if (changeButton) changeButton.hidden = !online;
   if (resetButton) resetButton.hidden = !online;
-  if (submitButton) submitButton.textContent = mode === "login" ? "Login" : mode === "setup" ? "Save Offline PIN" : mode === "change" ? "Change Offline PIN" : "Reset Offline PIN";
+  if (submitButton) submitButton.textContent = mode === "login" ? "Login" : mode === "setup" ? "Save Offline PIN" : "Change Offline PIN";
   if (offlineNote) {
     offlineNote.textContent = !online
       ? "Use the offline PIN saved after a previous online cashier login."
@@ -2627,6 +2707,7 @@ async function showCashierLogin(message = ""): Promise<void> {
     option.value = email;
     return option;
   }));
+  const usernamePrefilled = Boolean(usernameInput && !usernameInput.value && remembered[0]);
   if (usernameInput && !usernameInput.value && remembered[0]) usernameInput.value = remembered[0];
   setText("#cashier-login-terminal", settings?.terminalId ?? "");
   setText("#cashier-login-profile", settings?.posProfile ?? "");
@@ -2635,7 +2716,12 @@ async function showCashierLogin(message = ""): Promise<void> {
   if (msg) msg.textContent = message || (online ? "Enter ERPNext cashier credentials." : "Enter cashier username and offline PIN.");
   setCashierPinMode(online ? "login" : "login");
   showScreen("cashier-login");
-  window.setTimeout(() => usernameInput?.focus(), 0);
+  // Offline restart with a remembered cashier: username is already correct, so
+  // skip straight to the PIN field instead of forcing a redundant click/tab
+  // through a field that rarely needs retyping (still requires the PIN itself).
+  const offlinePinInput = document.querySelector<HTMLInputElement>("#cashier-offline-pin");
+  const fastPathTarget = !online && usernamePrefilled ? offlinePinInput : usernameInput;
+  window.setTimeout(() => fastPathTarget?.focus(), 0);
 }
 
 async function continueAfterCashierLogin(): Promise<void> {
@@ -2696,7 +2782,12 @@ async function submitCashierLogin(): Promise<void> {
     if (offlinePinInput) offlinePinInput.value = "";
     if (offlinePinConfirmInput) offlinePinConfirmInput.value = "";
     if (result.requirePinSetup && !result.success) {
+      // Username/password already verified server-side to get here - restore the
+      // password the cashier just typed (cleared above) so they only need to add
+      // PIN+confirm and resubmit, instead of retyping the whole form from scratch.
+      if (passwordInput) passwordInput.value = password;
       setCashierPinMode("setup", result.error ?? "Create Offline Cashier PIN once for this cashier.");
+      document.querySelector<HTMLInputElement>("#cashier-offline-pin")?.focus();
       return;
     }
     if (!result.success) { if (msg) msg.textContent = result.error ?? "Cashier login failed."; return; }
@@ -2822,20 +2913,27 @@ function pinLabel(scope: PinScope): string {
   return scope === "shift" ? "Shift PIN" : "Settings PIN";
 }
 
-async function requestSupervisorPinSetup(action: "setup_pin" | "reset_pin", pinScope: PinScope): Promise<boolean> {
+async function requestSupervisorPinSetup(action: "setup_pin" | "reset_pin", pinScope: PinScope, cashierUser?: string): Promise<boolean> {
   const dialog = document.querySelector<HTMLDialogElement>("#admin-supervisor-dialog");
   const title = document.querySelector<HTMLElement>("#admin-supervisor-title");
   const note = document.querySelector<HTMLElement>("#admin-supervisor-note");
   const form = document.querySelector<HTMLFormElement>("#admin-supervisor-form");
   if (!dialog || !form) return false;
+  // Resetting a specific cashier's Offline Cashier PIN reuses this same supervisor-
+  // authorization dialog/flow (and the server's "reset_pin" action/role check, which
+  // doesn't differentiate by action) rather than the terminal-wide Settings/Shift PIN
+  // storage - see resetCashierOfflinePinWithAuthorization in main.ts.
+  const label = cashierUser ? "Offline Cashier PIN" : pinLabel(pinScope);
   if (!navigator.onLine) {
-    alert(`${pinLabel(pinScope)} reset requires an online connection and authorized ERPNext supervisor credentials.`);
+    alert(`${label} reset requires an online connection and authorized ERPNext supervisor credentials.`);
     return false;
   }
-  if (title) title.textContent = action === "setup_pin" ? `Create ${pinLabel(pinScope)}` : `Reset ${pinLabel(pinScope)}`;
-  if (note) note.textContent = action === "setup_pin"
-    ? `First-time ${pinLabel(pinScope)} setup requires online ERPNext supervisor verification.`
-    : `Forgot ${pinLabel(pinScope)} requires online ERPNext supervisor verification.`;
+  if (title) title.textContent = cashierUser ? `Reset ${label} for ${cashierUser}` : (action === "setup_pin" ? `Create ${label}` : `Reset ${label}`);
+  if (note) note.textContent = cashierUser
+    ? `A supervisor verifies their own ERPNext credentials to reset ${cashierUser}'s Offline Cashier PIN - ${cashierUser}'s own password is not needed.`
+    : action === "setup_pin"
+      ? `First-time ${label} setup requires online ERPNext supervisor verification.`
+      : `Forgot ${label} requires online ERPNext supervisor verification.`;
   ["#admin-supervisor-user","#admin-supervisor-password","#admin-new-pin","#admin-confirm-pin"].forEach((id)=>{const input=document.querySelector<HTMLInputElement>(id);if(input)input.value="";});
   adminMessage("#admin-supervisor-message", "");
   return new Promise((resolve) => {
@@ -2851,13 +2949,15 @@ async function requestSupervisorPinSetup(action: "setup_pin" | "reset_pin", pinS
       const pin = pinInput?.value ?? "";
       const confirmPin = confirmInput?.value ?? "";
       adminMessage("#admin-supervisor-message", "Verifying supervisor...");
-      const auth = await window.posAPI.authorizeAdminAction({ username, password, action, pinScope, terminal_id: (document.querySelector<HTMLInputElement>("#terminal-id")?.value ?? "") });
+      const auth = await window.posAPI.authorizeAdminAction({ username, password, action, pinScope, cashierUser, terminal_id: (document.querySelector<HTMLInputElement>("#terminal-id")?.value ?? "") });
       if (passwordInput) passwordInput.value = "";
       if (!auth.ok) { adminMessage("#admin-supervisor-message", auth.error ?? "Supervisor authorization failed."); return; }
-      const saved = await window.posAPI.setAdminPin({ action, pinScope, token: auth.token, pin, confirmPin });
+      const saved = cashierUser
+        ? await window.posAPI.resetCashierOfflinePin({ cashierUser, token: auth.token, pin, confirmPin })
+        : await window.posAPI.setAdminPin({ action, pinScope, token: auth.token, pin, confirmPin });
       if (pinInput) pinInput.value = "";
       if (confirmInput) confirmInput.value = "";
-      if (!saved.ok) { adminMessage("#admin-supervisor-message", saved.error ?? "Unable to save Admin PIN."); return; }
+      if (!saved.ok) { adminMessage("#admin-supervisor-message", saved.error ?? `Unable to save ${label}.`); return; }
       dialog.close();
       form.onsubmit = null;
       resolve(true);
@@ -2930,7 +3030,16 @@ window.addEventListener("DOMContentLoaded", () => {
   document.querySelector<HTMLButtonElement>("#retry-startup")?.addEventListener("click", () => void runPosBootstrap("retry"));
   document.querySelector<HTMLFormElement>("#cashier-login-form")?.addEventListener("submit", (event) => { event.preventDefault(); void submitCashierLogin(); });
   document.querySelector<HTMLButtonElement>("#cashier-pin-change")?.addEventListener("click", () => setCashierPinMode("change", "Enter ERPNext password, then enter and confirm the new Offline Cashier PIN."));
-  document.querySelector<HTMLButtonElement>("#cashier-pin-reset")?.addEventListener("click", () => setCashierPinMode("reset", "Reset requires online ERPNext cashier verification. Enter password and new Offline Cashier PIN."));
+  document.querySelector<HTMLButtonElement>("#cashier-pin-reset")?.addEventListener("click", () => {
+    const cashierUser = document.querySelector<HTMLInputElement>("#cashier-username")?.value.trim() ?? "";
+    const msg = document.querySelector<HTMLElement>("#cashier-login-message");
+    if (!cashierUser) { if (msg) msg.textContent = "Enter the cashier's username above first, then Reset Offline PIN."; return; }
+    // Supervisor-authorized: unlike "Change", this cashier doesn't need to know/enter
+    // their own ERPNext password - a supervisor authorizes the reset instead.
+    void requestSupervisorPinSetup("reset_pin", "settings", cashierUser).then((ok) => {
+      if (ok) setCashierPinMode("login", `Offline PIN reset for ${cashierUser}. They can now log in offline with the new PIN.`);
+    });
+  });
   document.querySelector<HTMLButtonElement>("#cashier-login-settings")?.addEventListener("click", () => void runProtected("settings", "Settings contain terminal credentials and sync controls.", () => showScreen("settings")));
   document.querySelector<HTMLButtonElement>("#cashier-login-retry")?.addEventListener("click", () => void runPosBootstrap("cashier-login-retry"));
   document.querySelector<HTMLButtonElement>("#complete-setup")?.addEventListener("click", (e) => { /* form submit handles save + bootstrap */ void e; });
@@ -2975,10 +3084,22 @@ window.addEventListener("DOMContentLoaded", () => {
     const button = document.querySelector<HTMLButtonElement>("#complete-setup");
     if (button) button.disabled = true;
     try {
-      await window.posAPI.saveSettings(getSettingsFromForm());
-      cashierSession = null;
+      const previous = await window.posAPI.loadSettings().catch(() => null);
+      const next = getSettingsFromForm();
+      // Only force a cashier re-login when something identity/auth-relevant actually
+      // changed (URL/key/terminal/profile, or the secret field was non-blank meaning
+      // it's being replaced — blank means "keep existing" per saveSettings). A save
+      // that only touches e.g. branch/warehouse shouldn't log the cashier out.
+      const identityChanged = !previous
+        || previous.erpnextUrl !== next.erpnextUrl
+        || previous.apiKey !== next.apiKey
+        || previous.terminalId !== next.terminalId
+        || previous.posProfile !== next.posProfile
+        || Boolean(next.apiSecret);
+      await window.posAPI.saveSettings(next);
+      if (identityChanged) cashierSession = null;
       updatePosHeader();
-      showSettingsMessage("Settings saved — completing setup…");
+      showSettingsMessage(identityChanged ? "Settings saved — completing setup…" : "Settings saved.");
       await runPosBootstrap("complete-setup");
     } catch {
       showSettingsMessage("Unable to save settings");
@@ -3203,13 +3324,23 @@ window.addEventListener("DOMContentLoaded", () => {
     }
     if (event.key === 'F6') { event.preventDefault(); event.stopPropagation(); if (paymentOpen) { void completePaymentAllocation(); } else { void openPayment(); } return; }
     if (paymentOpen) {
-      // Payment dialog keyboard controls
-      if (event.key === 'ArrowUp') { event.preventDefault(); event.stopPropagation(); selectedPaymentMethodIndex = Math.max(0, selectedPaymentMethodIndex - 1); renderPaymentMethods(); return; }
-      if (event.key === 'ArrowDown') { event.preventDefault(); event.stopPropagation(); selectedPaymentMethodIndex = Math.min(paymentMethods.length - 1, selectedPaymentMethodIndex + 1); renderPaymentMethods(); return; }
+      // Payment dialog keyboard controls. Method buttons render in a 3-column CSS
+      // grid (PAYMENT_METHOD_GRID_COLUMNS) - Up/Down move a full row (±3) and
+      // Left/Right move within a row (±1) to match what's visually happening,
+      // instead of Up/Down stepping through the flat array one at a time.
+      if (event.key === 'ArrowUp') { event.preventDefault(); event.stopPropagation(); selectedPaymentMethodIndex = Math.max(0, selectedPaymentMethodIndex - PAYMENT_METHOD_GRID_COLUMNS); renderPaymentMethods(); return; }
+      if (event.key === 'ArrowDown') { event.preventDefault(); event.stopPropagation(); selectedPaymentMethodIndex = Math.min(paymentMethods.length - 1, selectedPaymentMethodIndex + PAYMENT_METHOD_GRID_COLUMNS); renderPaymentMethods(); return; }
+      if (event.key === 'ArrowLeft') { event.preventDefault(); event.stopPropagation(); selectedPaymentMethodIndex = Math.max(0, selectedPaymentMethodIndex - 1); renderPaymentMethods(); return; }
+      if (event.key === 'ArrowRight') { event.preventDefault(); event.stopPropagation(); selectedPaymentMethodIndex = Math.min(paymentMethods.length - 1, selectedPaymentMethodIndex + 1); renderPaymentMethods(); return; }
+      // Number-key quick-select: jump straight to method N (1-9) matching its
+      // position in the grid, shown as a small badge on each button.
+      if (/^[1-9]$/.test(event.key) && document.activeElement !== document.querySelector('#payment-amount')) {
+        const idx = Number(event.key) - 1;
+        if (idx < paymentMethods.length) { event.preventDefault(); event.stopPropagation(); selectedPaymentMethodIndex = idx; renderPaymentMethods(); document.querySelector<HTMLInputElement>('#payment-amount')?.focus(); return; }
+      }
       if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); // select highlighted method -> focus amount
         document.querySelector<HTMLInputElement>('#payment-amount')?.focus(); return; }
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closePaymentDialog(); return; }
-      if (event.key === 'F6') { event.preventDefault(); event.stopPropagation(); void completePaymentAllocation(); return; }
     }
     if (event.ctrlKey && event.key.toLowerCase() === "h") { event.preventDefault(); event.stopPropagation(); void holdCurrentSale(); }
     else if (event.key === "F2") { event.preventDefault(); event.stopPropagation(); focusCart(); }
