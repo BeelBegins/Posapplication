@@ -8,6 +8,7 @@ interface AppSettings {
   posProfile: string;
   branch: string;
   warehouse: string;
+  receiptPrinter: string;
 }
 
 interface RendererSettings {
@@ -18,6 +19,7 @@ interface RendererSettings {
   branch: string;
   warehouse: string;
   hasApiSecret: boolean;
+  receiptPrinter: string;
 }
 
 contextBridge.exposeInMainWorld("posAPI", {
@@ -26,6 +28,7 @@ contextBridge.exposeInMainWorld("posAPI", {
   onFocusScanner: (callback: () => void) => ipcRenderer.on("pos:focus-scanner", () => callback()),
   saveSettings: (settings: AppSettings) => ipcRenderer.invoke("settings:save", settings),
   loadSettings: () => ipcRenderer.invoke("settings:load") as Promise<RendererSettings>,
+  listPrinters: () => ipcRenderer.invoke("printer:list") as Promise<{ name: string; displayName: string }[]>,
   testServer: () => ipcRenderer.invoke("server:test"),
   testLogin: () => ipcRenderer.invoke("auth:test"),
   cashierLogin: (input: Record<string, unknown>) => ipcRenderer.invoke("cashier:login", input),

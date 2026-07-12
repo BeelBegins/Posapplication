@@ -39,7 +39,8 @@ test("initDatabase is idempotent — calling it again does not throw or reset st
     terminalId: "T1",
     posProfile: "Main",
     branch: "Branch A",
-    warehouse: "WH-A"
+    warehouse: "WH-A",
+    receiptPrinter: ""
   });
   db.initDatabase();
   const settings = db.loadSettings();
@@ -61,7 +62,8 @@ test("saveSettings + getSettingsForRenderer never leaks the raw API secret to th
     terminalId: "T2",
     posProfile: "Counter 2",
     branch: "Branch B",
-    warehouse: "WH-B"
+    warehouse: "WH-B",
+    receiptPrinter: ""
   });
   const rendererSettings = db.getSettingsForRenderer() as unknown as Record<string, unknown>;
   assert.equal(rendererSettings.hasApiSecret, true);
@@ -77,7 +79,8 @@ test("saveSettings keeps a previously saved API secret when a blank one is submi
     terminalId: "T2",
     posProfile: "Counter 2",
     branch: "Branch B",
-    warehouse: "WH-B"
+    warehouse: "WH-B",
+    receiptPrinter: ""
   });
   assert.equal(db.loadSettings().apiSecret, "top-secret");
 });

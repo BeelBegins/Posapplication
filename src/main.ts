@@ -500,13 +500,19 @@ async function printReceiptHtml(html: string): Promise<{ success: boolean; error
     };
     printWindow.webContents.once("did-finish-load", () => {
       // scaleFactor pinned to 100 so the OS print dialog never auto-shrinks
-      // the 80mm-designed receipt layout to "fit printable area" - that
-      // downscale-then-rasterize step was the likely cause of receipts
-      // printed from this app looking visibly lighter/thinner than the same
-      // server-rendered HTML printed via a regular browser's own print
-      // dialog (which keeps whatever 100%/saved scale that browser already
-      // had for the site), even though the underlying HTML/CSS is identical.
-      printWindow.webContents.print({ silent: false, printBackground: true, scaleFactor: 100 }, (ok, failureReason) => {
+      // the 80mm-designed receipt layout to "fit printable area", which
+      // alone wasn't enough to fix faded output. The bigger factor: with no
+      // deviceName, this always popped a fresh native print dialog with
+      // none of the printer's own saved driver defaults (darkness/media
+      // type) that a regular browser printing the same server HTML would
+      // already have dialed in for that printer. When a receipt printer is
+      // configured in Settings, print straight to it silently instead,
+      // using its own saved driver defaults every time.
+      const receiptPrinter = database.loadSettings().receiptPrinter;
+      const printOptions: Electron.WebContentsPrintOptions = receiptPrinter
+        ? { silent: true, printBackground: true, scaleFactor: 100, deviceName: receiptPrinter }
+        : { silent: false, printBackground: true, scaleFactor: 100 };
+      printWindow.webContents.print(printOptions, (ok, failureReason) => {
         finish({ success: ok, error: ok ? null : (failureReason || "Printing was cancelled.") });
       });
     });
@@ -635,6 +641,12 @@ app.whenReady().then(() => {
   ipcMain.handle("db:getStatus", () => getDatabaseStatus());
   ipcMain.handle("settings:save", (_event, settings) => saveSettings(settings));
   ipcMain.handle("settings:load", () => getSettingsForRenderer());
+  ipcMain.handle("printer:list", async () => {
+    const win = mainWindowRef;
+    if (!win || win.isDestroyed()) return [];
+    const printers = await win.webContents.getPrintersAsync();
+    return printers.map((p) => ({ name: p.name, displayName: p.displayName || p.name }));
+  });
   ipcMain.handle("window:focus-pos", () => {
     const win = mainWindowRef;
     if (!win || win.isDestroyed()) return false;
