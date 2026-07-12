@@ -3526,6 +3526,13 @@ window.addEventListener("DOMContentLoaded", () => {
   document.addEventListener("keydown", (event) => {
     // Refund quantity inputs own their keystrokes — never let global POS shortcuts intercept typing/arrows there.
     if ((document.activeElement as HTMLElement | null)?.closest("#refund-items")) return;
+    // None of the shortcuts below intentionally use Alt/Meta - swallowing
+    // those combos here was breaking Alt+F4 (main.ts's own before-input-event
+    // handles that explicitly now, but this must get out of its way first,
+    // since this listener runs in the capture phase and would otherwise
+    // preventDefault/stopPropagation the bare "F4" first and misfire
+    // "change quantity" instead).
+    if (event.altKey || event.metaKey) return;
     // While the receipt preview is open the sale is already submitted; keep POS hotkeys off the underlying cart.
     if (document.querySelector<HTMLDialogElement>("#receipt-dialog")?.open) {
       if (["F2","F3","F4","F6","F7","F8","F9","F10"].includes(event.key)) { event.preventDefault(); event.stopPropagation(); }

@@ -497,11 +497,16 @@ button:disabled { cursor: wait; opacity: 0.65; }
 .summary-note:not(:empty) { margin: 4px 0 0 !important; font-size: 0.8rem; color: var(--color-accent-strong); font-weight: 600; }
 .summary-group-total { background: var(--color-accent-soft); border-color: var(--color-accent); }
 /* The Payment card (Paid/Change) is what the cashier actually needs to check
-   at the point of handing back change - a distinct green tint sets it apart
-   from the plain-white Cart/Taxes cards above it and the amber Grand Total
-   card, rather than all four cards reading as one undifferentiated stack. */
-.summary-group-payment { background: var(--color-success-soft); border-color: var(--color-success-border); }
-.summary-group-payment .summary-row strong { color: var(--color-success); }
+   at the point of handing back change - a bold dark card (echoing the header
+   bar rather than a soft tint) sets it clearly apart from the plain-white
+   Cart/Taxes cards above it and the amber Grand Total card, so the four
+   cards don't all read as one undifferentiated stack. */
+.summary-group-payment { background: var(--color-header); border-color: var(--color-header); }
+.summary-group-payment .summary-group-title { color: var(--color-accent-on-dark); }
+.summary-group-payment .summary-row span { color: var(--color-text-faint); }
+.summary-group-payment .summary-row strong { color: var(--color-header-contrast); }
+.summary-group-payment .validation-status { color: var(--color-accent-on-dark); }
+.summary-group-payment #cart-calculating { color: var(--color-text-faint); }
 .summary-actions-group { margin-top: 4px; }
 .summary-pay-button { width: 100%; padding: 11px; font-size: 1rem; }
 .summary-secondary-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin-top: 6px; }
