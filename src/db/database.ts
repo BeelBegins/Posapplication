@@ -51,6 +51,7 @@ export interface CatalogSearchResult {
   currency: string | null;
   actualStock: number | null;
   warehouse: string | null;
+  mrp: number | null;
 }
 
 export interface CartState { cartKey: string; lines: unknown[]; }
@@ -599,11 +600,12 @@ export function searchCatalog(query: string, warehouse: string): CatalogSearchRe
       (SELECT p.currency FROM pos_item_prices p WHERE p.item_code=i.item_code AND COALESCE(p.uom,'')=COALESCE(b.uom,i.stock_uom,'') ORDER BY p.modified DESC LIMIT 1),
       (SELECT p.currency FROM pos_item_prices p WHERE p.item_code=i.item_code AND COALESCE(p.uom,'')=COALESCE(i.stock_uom,'') ORDER BY p.modified DESC LIMIT 1)
     ) currency,
-    s.actual_qty actualStock, s.warehouse warehouse
+    s.actual_qty actualStock, s.warehouse warehouse, f.custom_mrp mrp
     FROM pos_items i
     LEFT JOIN pos_item_barcodes b ON b.parent=i.item_code AND b.barcode=?
     LEFT JOIN pos_item_uom_conversions c ON c.parent=i.item_code AND c.uom=COALESCE(b.uom,i.stock_uom)
     LEFT JOIN pos_item_stock s ON s.item_code=i.item_code AND s.warehouse=?
+    LEFT JOIN pos_fbr_item_config f ON f.item_code=i.item_code
     WHERE i.is_sales_item=1 AND i.disabled=0 AND (i.item_code LIKE ? OR i.item_name LIKE ? OR b.barcode IS NOT NULL)
     ORDER BY CASE WHEN i.item_code=? THEN 0 ELSE 1 END, i.item_name LIMIT 50`).all(query, warehouse, `%${query}%`, `%${query}%`, query) as CatalogSearchResult[];
 }
@@ -620,7 +622,7 @@ export function lookupCatalog(query: string, warehouse: string): { exact: Catalo
       (SELECT p.currency FROM pos_item_prices p WHERE p.item_code=i.item_code AND COALESCE(p.uom,'')=COALESCE(b.uom,i.stock_uom,'') ORDER BY p.modified DESC LIMIT 1),
       (SELECT p.currency FROM pos_item_prices p WHERE p.item_code=i.item_code AND COALESCE(p.uom,'')=COALESCE(i.stock_uom,'') ORDER BY p.modified DESC LIMIT 1)
     ) currency,
-    s.actual_qty actualStock,s.warehouse warehouse FROM pos_items i LEFT JOIN pos_item_stock s ON s.item_code=i.item_code AND s.warehouse=? LEFT JOIN pos_item_barcodes b ON b.parent=i.item_code AND b.barcode=? LEFT JOIN pos_item_uom_conversions c ON c.parent=i.item_code AND c.uom=COALESCE(b.uom,i.stock_uom) WHERE i.is_sales_item=1 AND i.disabled=0`;
+    s.actual_qty actualStock,s.warehouse warehouse,f.custom_mrp mrp FROM pos_items i LEFT JOIN pos_item_stock s ON s.item_code=i.item_code AND s.warehouse=? LEFT JOIN pos_item_barcodes b ON b.parent=i.item_code AND b.barcode=? LEFT JOIN pos_item_uom_conversions c ON c.parent=i.item_code AND c.uom=COALESCE(b.uom,i.stock_uom) LEFT JOIN pos_fbr_item_config f ON f.item_code=i.item_code WHERE i.is_sales_item=1 AND i.disabled=0`;
   const barcode = database.prepare(`${base} AND b.barcode=? LIMIT 1`).get(warehouse, query, query) as CatalogSearchResult | undefined;
   if (barcode) return { exact: barcode, results: [] };
   const code = database.prepare(`${base} AND i.item_code=? LIMIT 1`).get(warehouse, query, query) as CatalogSearchResult | undefined;

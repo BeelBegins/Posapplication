@@ -162,7 +162,7 @@ interface PosSessionSummary {
 }
 
 interface CatalogTotals { items: number; prices: number; barcodes: number; stockRows: number; lastSynced: string | null; }
-interface CatalogSearchResult { itemCode: string; itemName: string; barcode: string | null; uom: string; conversionFactor: number; sellingPrice: number | null; currency: string | null; actualStock: number | null; warehouse: string | null; }
+interface CatalogSearchResult { itemCode: string; itemName: string; barcode: string | null; uom: string; conversionFactor: number; sellingPrice: number | null; currency: string | null; actualStock: number | null; warehouse: string | null; mrp: number | null; }
 interface CartLine extends CatalogSearchResult { quantity: number; }
 interface CustomerResult { name:string; customer_name:string; customer_group:string; mobile_no:string; email_id:string; tax_id:string; }
 interface PaymentRow { method:string; amount:number; }
@@ -2261,10 +2261,20 @@ function pushCustomerDisplayUpdate(totals: FbrTotalsView): void {
     rate: line.sellingPrice ?? 0,
     amount: (line.sellingPrice ?? 0) * line.quantity
   }));
+  // MRP (pos_fbr_item_config.custom_mrp, synced for FBR Third Schedule tax
+  // purposes) doubles as a "you saved X" figure whenever it's above the
+  // actual selling price — a nice, reassuring thing to show a waiting
+  // customer, not just tax plumbing.
+  const totalSavings = cartLines.reduce((sum, line) => {
+    const mrp = line.mrp ?? 0;
+    const rate = line.sellingPrice ?? 0;
+    return mrp > rate ? sum + (mrp - rate) * line.quantity : sum;
+  }, 0);
   window.posAPI.pushCustomerDisplay({
     lines,
     itemCount: cartLines.length,
     grandTotal: totals.grandTotal,
+    totalSavings,
     customerName: selectedCustomer?.customer_name || selectedCustomer?.name || ""
   });
 }
