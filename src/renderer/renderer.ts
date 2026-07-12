@@ -83,10 +83,7 @@ interface PosAPI {
   onUpdateStatus: (callback: (payload: Record<string, unknown>) => void) => void;
   listReleases: () => Promise<{ releases: ReleaseEntry[]; error: string | null }>;
   installRelease: (input: Record<string, unknown>) => Promise<{ ok: boolean; error: string | null }>;
-  getAdminPinStatus: (input?: Record<string, unknown>) => Promise<{ configured: boolean; locked: boolean; secondsRemaining: number; failedAttempts: number; pinScope?: string }>;
-  verifyAdminPin: (input: Record<string, unknown>) => Promise<{ ok: boolean; error: string | null; locked?: boolean; secondsRemaining?: number }>;
   authorizeAdminAction: (input: Record<string, unknown>) => Promise<{ ok: boolean; token: string; error: string | null }>;
-  setAdminPin: (input: Record<string, unknown>) => Promise<{ ok: boolean; error: string | null }>;
   resetCashierOfflinePin: (input: Record<string, unknown>) => Promise<{ ok: boolean; error: string | null }>;
   pushCustomerDisplay: (payload: Record<string, unknown>) => void;
   previewCustomerDisplay: () => Promise<"opened-fullscreen" | "opened-windowed" | "focused" | "no-second-display">;
@@ -2535,7 +2532,6 @@ function setupUpdateUi(): void {
   dlBtn?.addEventListener("click", async () => { setStatus("Starting download…"); if (dlBtn) dlBtn.disabled = true; const r = await window.posAPI.downloadUpdate(); if (dlBtn) dlBtn.disabled = false; if (!r.ok && r.error) setStatus(`Download failed: ${r.error}`); });
   installBtn?.addEventListener("click", () => { setStatus("Restarting to install…"); void window.posAPI.installUpdate(); });
   document.querySelector<HTMLButtonElement>("#save-update-token")?.addEventListener("click", async () => {
-    if (!(await requireAdminPin("change_credentials", "Saving this token changes update credentials for private release downloads."))) return;
     const input = document.querySelector<HTMLInputElement>("#update-token");
     const token = input?.value.trim() ?? "";
     await window.posAPI.saveUpdateToken(token);
@@ -3069,43 +3065,30 @@ async function populatePosProfileDropdown(): Promise<void> {
   showSettingsMessage(result.profiles.length ? "POS Profiles Loaded" : "No POS Profiles available");
 }
 
-type ProtectedAction = "setup_pin" | "reset_pin" | "change_credentials" | "start_shift" | "close_shift" | "settings" | "force_sync" | "diagnostics";
-type PinScope = "settings" | "shift";
-
 function adminMessage(id: string, text: string): void {
   const el = document.querySelector<HTMLElement>(id);
   if (el) el.textContent = text;
 }
 
-function pinScopeForAction(action: ProtectedAction): PinScope {
-  return action === "start_shift" || action === "close_shift" ? "shift" : "settings";
-}
-
-function pinLabel(scope: PinScope): string {
-  return scope === "shift" ? "Shift PIN" : "Settings PIN";
-}
-
-async function requestSupervisorPinSetup(action: "setup_pin" | "reset_pin", pinScope: PinScope, cashierUser?: string): Promise<boolean> {
+// Resetting a specific cashier's forgotten Offline PIN: a supervisor verifies
+// their own ERPNext credentials (never the cashier's) to authorize it. This
+// is the one remaining PIN concept that needs supervisor sign-off - Settings
+// access (requestSettingsAuthorization, below) and shift start/close
+// (cashierSession.canStartShift/canCloseShift) no longer go through any PIN
+// at all.
+async function requestSupervisorPinSetup(action: "reset_pin", cashierUser: string): Promise<boolean> {
   const dialog = document.querySelector<HTMLDialogElement>("#admin-supervisor-dialog");
   const title = document.querySelector<HTMLElement>("#admin-supervisor-title");
   const note = document.querySelector<HTMLElement>("#admin-supervisor-note");
   const form = document.querySelector<HTMLFormElement>("#admin-supervisor-form");
   if (!dialog || !form) return false;
-  // Resetting a specific cashier's Offline Cashier PIN reuses this same supervisor-
-  // authorization dialog/flow (and the server's "reset_pin" action/role check, which
-  // doesn't differentiate by action) rather than the terminal-wide Settings/Shift PIN
-  // storage - see resetCashierOfflinePinWithAuthorization in main.ts.
-  const label = cashierUser ? "Offline Cashier PIN" : pinLabel(pinScope);
+  const label = "Offline Cashier PIN";
   if (!navigator.onLine) {
     appAlert(`${label} reset requires an online connection and authorized ERPNext supervisor credentials.`);
     return false;
   }
-  if (title) title.textContent = cashierUser ? `Reset ${label} for ${cashierUser}` : (action === "setup_pin" ? `Create ${label}` : `Reset ${label}`);
-  if (note) note.textContent = cashierUser
-    ? `A supervisor verifies their own ERPNext credentials to reset ${cashierUser}'s Offline Cashier PIN - ${cashierUser}'s own password is not needed.`
-    : action === "setup_pin"
-      ? `First-time ${label} setup requires online ERPNext supervisor verification.`
-      : `Forgot ${label} requires online ERPNext supervisor verification.`;
+  if (title) title.textContent = `Reset ${label} for ${cashierUser}`;
+  if (note) note.textContent = `A supervisor verifies their own ERPNext credentials to reset ${cashierUser}'s Offline Cashier PIN - ${cashierUser}'s own password is not needed.`;
   ["#admin-supervisor-user","#admin-supervisor-password","#admin-new-pin","#admin-confirm-pin"].forEach((id)=>{const input=document.querySelector<HTMLInputElement>(id);if(input)input.value="";});
   adminMessage("#admin-supervisor-message", "");
   return new Promise((resolve) => {
@@ -3121,12 +3104,10 @@ async function requestSupervisorPinSetup(action: "setup_pin" | "reset_pin", pinS
       const pin = pinInput?.value ?? "";
       const confirmPin = confirmInput?.value ?? "";
       adminMessage("#admin-supervisor-message", "Verifying supervisor...");
-      const auth = await window.posAPI.authorizeAdminAction({ username, password, action, pinScope, cashierUser, terminal_id: (document.querySelector<HTMLInputElement>("#terminal-id")?.value ?? "") });
+      const auth = await window.posAPI.authorizeAdminAction({ username, password, action, cashierUser, terminal_id: (document.querySelector<HTMLInputElement>("#terminal-id")?.value ?? "") });
       if (passwordInput) passwordInput.value = "";
       if (!auth.ok) { adminMessage("#admin-supervisor-message", auth.error ?? "Supervisor authorization failed."); return; }
-      const saved = cashierUser
-        ? await window.posAPI.resetCashierOfflinePin({ cashierUser, token: auth.token, pin, confirmPin })
-        : await window.posAPI.setAdminPin({ action, pinScope, token: auth.token, pin, confirmPin });
+      const saved = await window.posAPI.resetCashierOfflinePin({ cashierUser, token: auth.token, pin, confirmPin });
       if (pinInput) pinInput.value = "";
       if (confirmInput) confirmInput.value = "";
       if (!saved.ok) { adminMessage("#admin-supervisor-message", saved.error ?? `Unable to save ${label}.`); return; }
@@ -3139,51 +3120,46 @@ async function requestSupervisorPinSetup(action: "setup_pin" | "reset_pin", pinS
   });
 }
 
-async function requireAdminPin(action: ProtectedAction, note: string): Promise<boolean> {
-  const pinScope = pinScopeForAction(action);
-  const status = await window.posAPI.getAdminPinStatus({ action, pinScope });
-  if (!status.configured) return requestSupervisorPinSetup("setup_pin", pinScope);
-  if (status.locked) { appAlert(`${pinLabel(pinScope)} is locked. Try again in ${status.secondsRemaining}s.`); return false; }
-  const dialog = document.querySelector<HTMLDialogElement>("#admin-pin-dialog");
-  const form = document.querySelector<HTMLFormElement>("#admin-pin-form");
+// Settings always requires a fresh username+password check (server-side role
+// check via the "change_credentials" admin action) rather than a stored PIN -
+// deliberately NOT based on inspecting cashierSession.roles client-side,
+// since the same role (e.g. System Manager) can also be what grants a
+// regular cashier canCloseShift; being logged in as that cashier must never
+// silently unlock Settings too. This is always a separate, explicit step.
+async function requestSettingsAuthorization(): Promise<boolean> {
+  const dialog = document.querySelector<HTMLDialogElement>("#settings-auth-dialog");
+  const form = document.querySelector<HTMLFormElement>("#settings-auth-form");
   if (!dialog || !form) return false;
-  const title = document.querySelector<HTMLElement>("#admin-pin-title"); if (title) title.textContent = `${pinLabel(pinScope)} Required`;
-  const noteEl = document.querySelector<HTMLElement>("#admin-pin-note"); if (noteEl) noteEl.textContent = note;
-  const input = document.querySelector<HTMLInputElement>("#admin-pin-input"); if (input) input.value = "";
-  adminMessage("#admin-pin-message", "");
+  if (!navigator.onLine) { appAlert("Settings requires an online connection to verify your ERPNext account."); return false; }
+  ["#settings-auth-user","#settings-auth-password"].forEach((id)=>{const input=document.querySelector<HTMLInputElement>(id);if(input)input.value="";});
+  adminMessage("#settings-auth-message", "");
   return new Promise((resolve) => {
-    const cleanup = (value: boolean) => { form.onsubmit = null; resolve(value); };
-    document.querySelector<HTMLButtonElement>("#admin-pin-cancel")!.onclick = () => { dialog.close(); cleanup(false); };
-    document.querySelector<HTMLButtonElement>("#admin-pin-forgot")!.onclick = async () => {
-      dialog.close();
-      const ok = await requestSupervisorPinSetup("reset_pin", pinScope);
-      cleanup(ok);
-    };
+    const cleanup = () => { form.onsubmit = null; resolve(false); };
+    document.querySelector<HTMLButtonElement>("#settings-auth-cancel")!.onclick = () => { dialog.close(); cleanup(); };
     form.onsubmit = async (event) => {
       event.preventDefault();
-      const pin = document.querySelector<HTMLInputElement>("#admin-pin-input")?.value ?? "";
-      adminMessage("#admin-pin-message", "Checking PIN...");
-      const result = await window.posAPI.verifyAdminPin({ pin, action, pinScope });
-      const pinInput = document.querySelector<HTMLInputElement>("#admin-pin-input"); if (pinInput) pinInput.value = "";
-      if (!result.ok) { adminMessage("#admin-pin-message", result.error ?? "Wrong Admin PIN."); return; }
+      const username = document.querySelector<HTMLInputElement>("#settings-auth-user")?.value.trim() ?? "";
+      const passwordInput = document.querySelector<HTMLInputElement>("#settings-auth-password");
+      const password = passwordInput?.value ?? "";
+      adminMessage("#settings-auth-message", "Verifying...");
+      const auth = await window.posAPI.authorizeAdminAction({ username, password, action: "change_credentials", terminal_id: (document.querySelector<HTMLInputElement>("#terminal-id")?.value ?? "") });
+      if (passwordInput) passwordInput.value = "";
+      if (!auth.ok) { adminMessage("#settings-auth-message", auth.error ?? "Settings authorization failed."); return; }
       dialog.close();
-      cleanup(true);
+      form.onsubmit = null;
+      resolve(true);
     };
     dialog.showModal();
-    window.setTimeout(()=>input?.focus(),0);
+    window.setTimeout(()=>document.querySelector<HTMLInputElement>("#settings-auth-user")?.focus(),0);
   });
 }
 
-async function runProtected(action: ProtectedAction, note: string, fn: () => void | Promise<void>): Promise<void> {
-  if (!(await requireAdminPin(action, note))) return;
-  await fn();
-}
-
-async function requireIfAdminConfigured(action: ProtectedAction, note: string): Promise<boolean> {
-  const pinScope = pinScopeForAction(action);
-  const status = await window.posAPI.getAdminPinStatus({ action, pinScope });
-  if (!status.configured) return true;
-  return requireAdminPin(action, note);
+// For the three entry points reached while a cashier session already exists
+// (start-shift screen, POS header gear icon, session-invalid overlay) -
+// still always prompts fresh credentials, same as requestSettingsAuthorization,
+// rather than trusting the existing session's role for the reason above.
+async function openSettingsIfAuthorized(): Promise<void> {
+  if (await requestSettingsAuthorization()) showScreen("settings");
 }
 
 window.addEventListener("DOMContentLoaded", () => {
@@ -3209,37 +3185,104 @@ window.addEventListener("DOMContentLoaded", () => {
     if (!cashierUser) { if (msg) msg.textContent = "Enter the cashier's username above first, then Reset Offline PIN."; return; }
     // Supervisor-authorized: unlike "Change", this cashier doesn't need to know/enter
     // their own ERPNext password - a supervisor authorizes the reset instead.
-    void requestSupervisorPinSetup("reset_pin", "settings", cashierUser).then((ok) => {
+    void requestSupervisorPinSetup("reset_pin", cashierUser).then((ok) => {
       if (ok) setCashierPinMode("login", `Offline PIN reset for ${cashierUser}. They can now log in offline with the new PIN.`);
     });
   });
-  document.querySelector<HTMLButtonElement>("#cashier-login-settings")?.addEventListener("click", () => void runProtected("settings", "Settings contain terminal credentials and sync controls.", () => showScreen("settings")));
+  document.querySelector<HTMLButtonElement>("#cashier-login-settings")?.addEventListener("click", () => void openSettingsIfAuthorized());
   document.querySelector<HTMLButtonElement>("#cashier-login-retry")?.addEventListener("click", () => void runPosBootstrap("cashier-login-retry"));
+  // Deliberately ungated (no admin PIN, no cashier login): the full Settings
+  // screen behind #cashier-login-settings requires an admin PIN, but setting
+  // one up (when none exists yet) itself requires reaching the ERPNext server
+  // to verify a supervisor — a deadlock on a brand-new terminal with no
+  // server URL saved yet, or one saved with a typo. This is the escape hatch.
+  document.querySelector<HTMLButtonElement>("#cashier-login-quick-connect")?.addEventListener("click", async () => {
+    const current = await window.posAPI.loadSettings();
+    const urlInput = document.querySelector<HTMLInputElement>("#quick-connect-url");
+    const keyInput = document.querySelector<HTMLInputElement>("#quick-connect-api-key");
+    const secretInput = document.querySelector<HTMLInputElement>("#quick-connect-api-secret");
+    const terminalInput = document.querySelector<HTMLInputElement>("#quick-connect-terminal-id");
+    if (urlInput) urlInput.value = current.erpnextUrl ?? "";
+    if (keyInput) keyInput.value = current.apiKey ?? "";
+    if (secretInput) secretInput.value = "";
+    if (terminalInput) terminalInput.value = current.terminalId ?? "";
+    const msg = document.querySelector<HTMLElement>("#quick-connect-message");
+    if (msg) msg.textContent = "";
+    document.querySelector<HTMLDialogElement>("#quick-connect-dialog")?.showModal();
+    window.setTimeout(() => urlInput?.focus(), 0);
+  });
+  document.querySelector<HTMLButtonElement>("#quick-connect-cancel")?.addEventListener("click", () => document.querySelector<HTMLDialogElement>("#quick-connect-dialog")?.close());
+  document.querySelector<HTMLFormElement>("#quick-connect-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const msg = document.querySelector<HTMLElement>("#quick-connect-message");
+    const button = document.querySelector<HTMLButtonElement>("#quick-connect-save");
+    const url = document.querySelector<HTMLInputElement>("#quick-connect-url")?.value.trim() ?? "";
+    const apiKey = document.querySelector<HTMLInputElement>("#quick-connect-api-key")?.value.trim() ?? "";
+    const apiSecret = document.querySelector<HTMLInputElement>("#quick-connect-api-secret")?.value ?? "";
+    const terminalId = document.querySelector<HTMLInputElement>("#quick-connect-terminal-id")?.value.trim() ?? "";
+    if (!url || !apiKey || !terminalId) { if (msg) msg.textContent = "Server URL, API Key and Terminal ID are required."; return; }
+    if (button) button.disabled = true;
+    if (msg) msg.textContent = "Saving...";
+    try {
+      // Merge onto the full current settings (not just these 4 fields) so a
+      // quick URL fix here can't silently wipe out posProfile/branch/warehouse
+      // that were already configured.
+      const current = await window.posAPI.loadSettings();
+      await window.posAPI.saveSettings({
+        erpnextUrl: url,
+        apiKey,
+        apiSecret,
+        terminalId,
+        posProfile: current.posProfile ?? "",
+        branch: current.branch ?? "",
+        warehouse: current.warehouse ?? ""
+      });
+      document.querySelector<HTMLDialogElement>("#quick-connect-dialog")?.close();
+      await runPosBootstrap("quick-connect");
+    } catch (error) {
+      if (msg) msg.textContent = error instanceof Error ? error.message : "Failed to save server connection.";
+    } finally {
+      if (button) button.disabled = false;
+    }
+  });
   document.querySelector<HTMLButtonElement>("#complete-setup")?.addEventListener("click", (e) => { /* form submit handles save + bootstrap */ void e; });
-  document.querySelector<HTMLButtonElement>("#refresh-config")?.addEventListener("click", () => void runProtected("force_sync", "This will refresh POS configuration from ERPNext.", () => syncConfigNow()));
-  document.querySelector<HTMLButtonElement>("#start-shift")?.addEventListener("click", () => void runProtected("start_shift", "Start Shift will open a POS Opening Entry for sales on this terminal.", () => startShift()));
+  document.querySelector<HTMLButtonElement>("#refresh-config")?.addEventListener("click", () => void syncConfigNow());
+  document.querySelector<HTMLButtonElement>("#start-shift")?.addEventListener("click", () => {
+    if (!cashierSession?.canStartShift) { appAlert("Your account is not permitted to start a shift."); return; }
+    void startShift();
+  });
   document.querySelector<HTMLButtonElement>("#start-shift-refresh")?.addEventListener("click", () => void refreshFromStartShift());
   document.querySelector<HTMLButtonElement>("#start-shift-cancel")?.addEventListener("click", () => void goToPos());
-  document.querySelector<HTMLButtonElement>("#start-shift-settings")?.addEventListener("click", () => void runProtected("settings", "Settings contain terminal credentials and sync controls.", () => showScreen("settings")));
+  document.querySelector<HTMLButtonElement>("#start-shift-settings")?.addEventListener("click", () => void openSettingsIfAuthorized());
   // Close Shift + Shift History actions.
-  document.querySelector<HTMLButtonElement>("#pos-close-shift")?.addEventListener("click", () => void runProtected("close_shift", "Close Shift will reconcile payments and prepare the POS Closing Entry.", () => showCloseShift()));
+  document.querySelector<HTMLButtonElement>("#pos-close-shift")?.addEventListener("click", () => {
+    if (!cashierSession?.canCloseShift) { appAlert("Your account is not permitted to close this shift."); return; }
+    void showCloseShift();
+  });
   document.querySelector<HTMLButtonElement>("#cashier-logout")?.addEventListener("click", () => { if (txnInProgress()) { cartMessage("Finish the current payment/refund before switching cashier."); return; } logoutCashier(); });
   document.querySelector<HTMLButtonElement>("#pos-sync-queue")?.addEventListener("click", () => void syncQueueNow(true));
   void updateOfflineUi();
   document.querySelector<HTMLButtonElement>("#close-shift-back")?.addEventListener("click", () => showScreen("pos"));
   document.querySelector<HTMLButtonElement>("#close-shift-cancel")?.addEventListener("click", () => showScreen("pos"));
-  document.querySelector<HTMLButtonElement>("#close-shift-submit")?.addEventListener("click", () => void runProtected("close_shift", "Submitting Close Shift will create the ERPNext POS Closing Entry, close this shift, print the shift summary, delete held sales, and require a new shift before selling again.", () => submitCloseShift()));
+  document.querySelector<HTMLButtonElement>("#close-shift-submit")?.addEventListener("click", () => {
+    if (!cashierSession?.canCloseShift) { appAlert("Your account is not permitted to close this shift."); return; }
+    void submitCloseShift();
+  });
   document.querySelector<HTMLButtonElement>("#close-shift-print")?.addEventListener("click", () => void printShiftSummary());
   document.querySelector<HTMLButtonElement>("#close-shift-hold")?.addEventListener("click", () => void holdCurrentSale());
   document.querySelector<HTMLButtonElement>("#open-shift-history")?.addEventListener("click", () => void openShiftHistory());
   document.querySelector<HTMLButtonElement>("#shift-history-back")?.addEventListener("click", () => { if (shiftClosed) void showStartShift(); else void goToPos(); });
-  document.querySelector<HTMLButtonElement>("#open-settings")?.addEventListener("click", () => void runProtected("settings", "Settings contain terminal credentials and sync controls.", () => showScreen("settings")));
+  document.querySelector<HTMLButtonElement>("#open-settings")?.addEventListener("click", () => void openSettingsIfAuthorized());
   document.querySelector<HTMLButtonElement>("#back-to-pos")?.addEventListener("click", () => void goToPos());
   // Session-invalid overlay actions (non-destructive — cart/customer/payment preserved).
   document.querySelector<HTMLButtonElement>("#session-refresh")?.addEventListener("click", () => void revalidateLive("refresh"));
   document.querySelector<HTMLButtonElement>("#session-switch")?.addEventListener("click", () => void switchToActiveShift());
   document.querySelector<HTMLButtonElement>("#session-go-shift")?.addEventListener("click", () => { clearSessionInvalid(); void showStartShift(); });
-  document.querySelector<HTMLButtonElement>("#session-open-settings")?.addEventListener("click", () => void runProtected("settings", "Settings contain terminal credentials and sync controls.", () => { clearSessionInvalid(); showScreen("settings"); }));
+  document.querySelector<HTMLButtonElement>("#session-open-settings")?.addEventListener("click", () => void (async () => {
+    if (!(await requestSettingsAuthorization())) return;
+    clearSessionInvalid();
+    showScreen("settings");
+  })());
   // Revalidate the POS session whenever the window regains focus.
   window.addEventListener("focus", () => { if (isOnline()) void revalidateLive("focus"); });
   // Server-health poll (online/offline + reconnect-driven session revalidation).
@@ -3253,7 +3296,6 @@ window.addEventListener("DOMContentLoaded", () => {
   // Primary action: Save and Complete Setup -> save settings, then run the one bootstrap chain.
   document.querySelector<HTMLFormElement>("#settings-form")?.addEventListener("submit", async (event) => {
     event.preventDefault();
-    if (!(await requireIfAdminConfigured("change_credentials", "Saving settings can change ERPNext URL, API credentials, terminal ID, profile, and warehouse."))) return;
     const button = document.querySelector<HTMLButtonElement>("#complete-setup");
     if (button) button.disabled = true;
     try {
@@ -3329,7 +3371,6 @@ window.addEventListener("DOMContentLoaded", () => {
   });
 
   document.querySelector<HTMLSelectElement>("#pos-profile")?.addEventListener("change", async () => {
-    if (!(await requireIfAdminConfigured("change_credentials", "Changing POS Profile changes terminal configuration."))) return;
     try {
       await window.posAPI.saveSettings(getSettingsFromForm());
       showSettingsMessage("POS Profile Saved");
@@ -3339,7 +3380,6 @@ window.addEventListener("DOMContentLoaded", () => {
   });
 
   document.querySelector<HTMLButtonElement>("#load-pos-profile")?.addEventListener("click", async () => {
-    if (!(await requireAdminPin("force_sync", "This will force reload POS Profiles from ERPNext."))) return;
     const button = document.querySelector<HTMLButtonElement>("#load-pos-profile");
     if (button) {
       button.disabled = true;
@@ -3364,7 +3404,6 @@ window.addEventListener("DOMContentLoaded", () => {
   });
 
   document.querySelector<HTMLButtonElement>("#sync-pos-configuration")?.addEventListener("click", async () => {
-    if (!(await requireAdminPin("force_sync", "This will force full POS configuration sync from ERPNext."))) return;
     const button = document.querySelector<HTMLButtonElement>("#sync-pos-configuration");
     if (button) { button.disabled = true; button.textContent = "Syncing…"; }
     try { await window.posAPI.saveSettings(getSettingsFromForm()); await syncConfigNow(); showSettingsMessage("POS Configuration synced"); }
@@ -3396,7 +3435,6 @@ window.addEventListener("DOMContentLoaded", () => {
   });
 
   document.querySelector<HTMLButtonElement>("#sync-item-catalog")?.addEventListener("click", async () => {
-    if (!(await requireAdminPin("force_sync", "This will force full Item Catalogue sync from ERPNext."))) return;
     const button = document.querySelector<HTMLButtonElement>("#sync-item-catalog");
     if (button) { button.disabled = true; button.textContent = "Syncing…"; }
     try { showCatalogProgress("Catalog sync started…"); await syncItemsNow("full"); showCatalogProgress("Catalog sync complete."); showSettingsMessage("Item catalogue synced"); }
@@ -3404,8 +3442,8 @@ window.addEventListener("DOMContentLoaded", () => {
     finally { if (button) { button.disabled = false; button.textContent = "Force Full Item Catalogue Sync"; } }
   });
 
-  document.querySelector<HTMLButtonElement>("#sync-customers")?.addEventListener("click", async () => { if (!(await requireAdminPin("force_sync", "This will force full Customer sync from ERPNext."))) return; await syncCustomersNow("full"); const state = await window.posAPI.getCustomerSyncState(); showSettingsMessage(`Customers synced: ${state.count}`); });
-  document.querySelector<HTMLButtonElement>("#sync-fbr-config")?.addEventListener("click", async () => { if (!(await requireAdminPin("force_sync", "This will force full FBR configuration sync from ERPNext."))) return; const button=document.querySelector<HTMLButtonElement>("#sync-fbr-config"); if(button){button.disabled=true;button.textContent="Syncing...";} try { await syncFbrNow("full"); showSettingsMessage("FBR configuration synced"); } catch { showSettingsMessage("FBR sync failed"); } finally { if(button){button.disabled=false;button.textContent="Force Full FBR Configuration Sync";} } });
+  document.querySelector<HTMLButtonElement>("#sync-customers")?.addEventListener("click", async () => { await syncCustomersNow("full"); const state = await window.posAPI.getCustomerSyncState(); showSettingsMessage(`Customers synced: ${state.count}`); });
+  document.querySelector<HTMLButtonElement>("#sync-fbr-config")?.addEventListener("click", async () => { const button=document.querySelector<HTMLButtonElement>("#sync-fbr-config"); if(button){button.disabled=true;button.textContent="Syncing...";} try { await syncFbrNow("full"); showSettingsMessage("FBR configuration synced"); } catch { showSettingsMessage("FBR sync failed"); } finally { if(button){button.disabled=false;button.textContent="Force Full FBR Configuration Sync";} } });
   document.querySelector<HTMLButtonElement>("#preview-customer-display")?.addEventListener("click", async () => {
     const statusEl = document.querySelector<HTMLElement>("#customer-display-status");
     const result = await window.posAPI.previewCustomerDisplay();
@@ -3419,14 +3457,9 @@ window.addEventListener("DOMContentLoaded", () => {
           : "Customer display window focused.";
   });
   setupUpdateUi();
-  document.querySelectorAll<HTMLDetailsElement>(".diagnostics-block").forEach((details) => {
-    const summary = details.querySelector("summary");
-    summary?.addEventListener("click", (event) => {
-      if (details.open) return;
-      event.preventDefault();
-      void runProtected("diagnostics", "Advanced Diagnostics can expose local paths, cache state, sync controls, and credential utilities.", () => { details.open = true; });
-    });
-  });
+  // No gate here: reaching this point already means Settings itself was
+  // reached (fresh install, ungated, or an already-authorized admin), so a
+  // further per-<details> gate on top would be redundant.
   customerInput()?.addEventListener("input", () => void searchCustomer());
   document.querySelector<HTMLButtonElement>("#new-customer")?.addEventListener("click", () => void openNewCustomer());
   document.querySelector<HTMLButtonElement>("#cancel-new-customer")?.addEventListener("click", () => { document.querySelector<HTMLDialogElement>("#new-customer-dialog")?.close(); focusCart(); });
