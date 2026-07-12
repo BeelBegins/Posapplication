@@ -16,6 +16,7 @@ export interface AppSettings {
   posProfile: string;
   branch: string;
   warehouse: string;
+  receiptPrinter: string;
 }
 
 export interface RendererSettings {
@@ -26,6 +27,7 @@ export interface RendererSettings {
   branch: string;
   warehouse: string;
   hasApiSecret: boolean;
+  receiptPrinter: string;
 }
 
 export interface PosProfileCacheStatus {
@@ -56,7 +58,7 @@ export interface CatalogSearchResult {
 
 export interface CartState { cartKey: string; lines: unknown[]; }
 
-const settingKeys = ["erpnextUrl", "apiKey", "apiSecret", "terminalId", "posProfile", "branch", "warehouse"] as const;
+const settingKeys = ["erpnextUrl", "apiKey", "apiSecret", "terminalId", "posProfile", "branch", "warehouse", "receiptPrinter"] as const;
 
 let database: Database.Database | null = null;
 let databasePath = "";
@@ -753,7 +755,8 @@ export function getSettingsForRenderer(): RendererSettings {
     posProfile: settings.posProfile,
     branch: settings.branch,
     warehouse: settings.warehouse,
-    hasApiSecret: Boolean(settings.apiSecret)
+    hasApiSecret: Boolean(settings.apiSecret),
+    receiptPrinter: settings.receiptPrinter
   };
 }
 
@@ -765,7 +768,8 @@ export function loadSettings(): AppSettings {
     terminalId: "",
     posProfile: "",
     branch: "",
-    warehouse: ""
+    warehouse: "",
+    receiptPrinter: ""
   };
 
   if (!database) {

@@ -10,6 +10,7 @@ interface PosAPI {
   onFocusScanner: (callback: () => void) => void;
   saveSettings: (settings: AppSettings) => Promise<void>;
   loadSettings: () => Promise<RendererSettings>;
+  listPrinters: () => Promise<{ name: string; displayName: string }[]>;
   testServer: () => Promise<{ connected: boolean }>;
   testLogin: () => Promise<{ success: boolean; loggedUser: string | null }>;
   cashierLogin: (input: Record<string, unknown>) => Promise<CashierLoginResult>;
@@ -172,6 +173,7 @@ interface AppSettings {
   posProfile: string;
   branch: string;
   warehouse: string;
+  receiptPrinter: string;
 }
 
 interface RendererSettings {
@@ -182,6 +184,7 @@ interface RendererSettings {
   branch: string;
   warehouse: string;
   hasApiSecret: boolean;
+  receiptPrinter: string;
 }
 
 interface Window {
@@ -2693,8 +2696,26 @@ function getSettingsFromForm(): AppSettings {
     terminalId: document.querySelector<HTMLInputElement>("#terminal-id")?.value ?? "",
     posProfile: document.querySelector<HTMLSelectElement>("#pos-profile")?.value ?? "",
     branch: document.querySelector<HTMLInputElement>("#branch")?.value ?? "",
-    warehouse: document.querySelector<HTMLInputElement>("#warehouse")?.value ?? ""
+    warehouse: document.querySelector<HTMLInputElement>("#warehouse")?.value ?? "",
+    receiptPrinter: document.querySelector<HTMLSelectElement>("#receipt-printer")?.value ?? ""
   };
+}
+
+// Local system printers (no server round-trip) - repopulated whenever the
+// Settings screen loads so a newly-attached printer shows up without
+// restarting the app. Keeps whatever was already selected/saved even if the
+// printer is temporarily offline/not enumerated (rather than silently
+// resetting to "System Default" and losing the saved choice).
+async function populatePrinterDropdown(savedValue: string): Promise<void> {
+  const select = document.querySelector<HTMLSelectElement>("#receipt-printer");
+  if (!select) return;
+  const printers = await window.posAPI.listPrinters().catch(() => []);
+  select.replaceChildren(new Option("System Default (show print dialog)", ""));
+  for (const p of printers) select.add(new Option(p.displayName, p.name));
+  if (savedValue && !Array.from(select.options).some((o) => o.value === savedValue)) {
+    select.add(new Option(`${savedValue} (not currently detected)`, savedValue));
+  }
+  select.value = savedValue;
 }
 
 function populateSettingsForm(settings: RendererSettings): void {
@@ -2715,6 +2736,7 @@ function populateSettingsForm(settings: RendererSettings): void {
   }
   (document.querySelector<HTMLInputElement>("#branch") as HTMLInputElement).value = settings.branch;
   (document.querySelector<HTMLInputElement>("#warehouse") as HTMLInputElement).value = settings.warehouse;
+  void populatePrinterDropdown(settings.receiptPrinter);
 }
 
 function showSettingsMessage(message: string): void {
@@ -3240,7 +3262,8 @@ window.addEventListener("DOMContentLoaded", () => {
         terminalId,
         posProfile: current.posProfile ?? "",
         branch: current.branch ?? "",
-        warehouse: current.warehouse ?? ""
+        warehouse: current.warehouse ?? "",
+        receiptPrinter: current.receiptPrinter ?? ""
       });
       document.querySelector<HTMLDialogElement>("#quick-connect-dialog")?.close();
       await runPosBootstrap("quick-connect");
