@@ -88,6 +88,12 @@ body { margin: 0; min-width: 320px; }
 /* --- Cashier login --- */
 .cashier-login-screen {
   min-height: 100vh;
+  /* The card's content (username/password/PIN rows + numeric keypad, all
+     visible at once in "setup" mode) can be taller than a smaller screen's
+     viewport — without a scroll container here, anything past the fold
+     (including the Settings/Retry Connection/Server Connection buttons)
+     would be genuinely unreachable, not just visually below the fold. */
+  overflow-y: auto;
   display: grid;
   place-items: center;
   padding: 32px;

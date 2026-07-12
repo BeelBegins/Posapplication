@@ -260,7 +260,25 @@
             <button id="cashier-login-settings" type="button" class="secondary-button">Settings</button>
             <button id="cashier-login-retry" type="button" class="secondary-button">Retry Connection</button>
           </div>
+          <div class="form-actions">
+            <button id="cashier-login-quick-connect" type="button" class="secondary-button">Server Connection</button>
+          </div>
         </div>
+        <dialog id="quick-connect-dialog" class="customer-dialog admin-dialog">
+          <form id="quick-connect-form">
+            <h3>Server Connection</h3>
+            <p class="card-meta">Set the ERPNext server URL and API credentials for this terminal. No cashier login or admin PIN required — this is meant to unblock first-time setup.</p>
+            <label>Server URL<input id="quick-connect-url" type="text" placeholder="https://erp.example.com" /></label>
+            <label>API Key<input id="quick-connect-api-key" type="text" autocomplete="off" /></label>
+            <label>API Secret<input id="quick-connect-api-secret" type="password" autocomplete="off" placeholder="Enter to save or replace" /></label>
+            <label>Terminal ID<input id="quick-connect-terminal-id" type="text" /></label>
+            <p id="quick-connect-message" class="settings-message"></p>
+            <div class="form-actions">
+              <button id="quick-connect-save" type="submit">Save &amp; Retry Connection</button>
+              <button id="quick-connect-cancel" type="button" class="secondary-button">Cancel</button>
+            </div>
+          </form>
+        </dialog>
       </section>
 
       <section id="start-shift-screen" class="app-screen shift-screen" hidden>
@@ -520,16 +538,16 @@
           <div class="form-actions"><button value="ok">OK</button><button id="name-dialog-cancel" value="cancel" type="button" class="secondary-button">Cancel</button></div>
         </form>
       </dialog>
-      <dialog id="admin-pin-dialog" class="customer-dialog admin-dialog">
-        <form id="admin-pin-form">
-          <h3 id="admin-pin-title">Admin PIN Required</h3>
-          <p id="admin-pin-note" class="card-meta"></p>
-          <label>Admin PIN<input id="admin-pin-input" type="password" inputmode="numeric" autocomplete="off" /></label>
-          <p id="admin-pin-message" class="settings-message"></p>
+      <dialog id="settings-auth-dialog" class="customer-dialog admin-dialog">
+        <form id="settings-auth-form">
+          <h3>Settings Access</h3>
+          <p class="card-meta">Enter your ERPNext username and password. This account needs permission to change terminal settings — no PIN is used for Settings, only your normal ERPNext login.</p>
+          <label>ERPNext Username / Email<input id="settings-auth-user" type="text" autocomplete="username" /></label>
+          <label>ERPNext Password<input id="settings-auth-password" type="password" autocomplete="current-password" /></label>
+          <p id="settings-auth-message" class="settings-message"></p>
           <div class="form-actions">
-            <button id="admin-pin-submit" type="submit">Continue</button>
-            <button id="admin-pin-forgot" type="button" class="secondary-button">Forgot Admin PIN?</button>
-            <button id="admin-pin-cancel" type="button" class="secondary-button">Cancel</button>
+            <button id="settings-auth-submit" type="submit">Continue</button>
+            <button id="settings-auth-cancel" type="button" class="secondary-button">Cancel</button>
           </div>
         </form>
       </dialog>
@@ -539,11 +557,11 @@
           <p id="admin-supervisor-note" class="card-meta"></p>
           <label>ERPNext Username / Email<input id="admin-supervisor-user" type="text" autocomplete="username" /></label>
           <label>ERPNext Password<input id="admin-supervisor-password" type="password" autocomplete="current-password" /></label>
-          <label>New Admin PIN<input id="admin-new-pin" type="password" inputmode="numeric" autocomplete="off" /></label>
-          <label>Confirm New PIN<input id="admin-confirm-pin" type="password" inputmode="numeric" autocomplete="off" /></label>
+          <label>New Offline PIN<input id="admin-new-pin" type="password" inputmode="numeric" autocomplete="off" /></label>
+          <label>Confirm New Offline PIN<input id="admin-confirm-pin" type="password" inputmode="numeric" autocomplete="off" /></label>
           <p id="admin-supervisor-message" class="settings-message"></p>
           <div class="form-actions">
-            <button id="admin-supervisor-submit" type="submit">Save Admin PIN</button>
+            <button id="admin-supervisor-submit" type="submit">Save Offline PIN</button>
             <button id="admin-supervisor-cancel" type="button" class="secondary-button">Cancel</button>
           </div>
         </form>
