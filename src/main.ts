@@ -77,7 +77,16 @@ function createCustomerDisplayWindow(options: { forceWindowed?: boolean } = {}):
     y: windowed ? undefined : target.bounds.y,
     width: windowed ? 480 : target.bounds.width,
     height: windowed ? 800 : target.bounds.height,
-    fullscreen: !windowed,
+    // Deliberately NOT setting `fullscreen` here (unlike the position/size
+    // above) - setting it in the same constructor call as x/y/width/height
+    // is an Electron/Windows footgun where the fullscreen transition can
+    // resolve against whichever display the window materializes on first
+    // (often the primary) instead of sticking to the just-set position, so
+    // the window ends up sized/fit to the wrong monitor. Positioning first
+    // and calling setFullScreen() as a separate step once the window
+    // already exists at the right bounds (below) makes it reliably fullscreen
+    // on the intended secondary display instead.
+    show: false,
     frame: windowed,
     autoHideMenuBar: true,
     title: `Aimatic POS App — Customer Display${windowed ? " (Preview)" : ""}`,
@@ -89,6 +98,14 @@ function createCustomerDisplayWindow(options: { forceWindowed?: boolean } = {}):
   });
   customerDisplayWindow = win;
   win.loadFile(path.join(__dirname, "renderer", "customer-display.html"));
+  win.once("ready-to-show", () => {
+    if (win.isDestroyed()) return;
+    if (!windowed) {
+      win.setBounds(target.bounds);
+      win.setFullScreen(true);
+    }
+    win.show();
+  });
   win.on("closed", () => {
     if (customerDisplayWindow === win) customerDisplayWindow = null;
   });
