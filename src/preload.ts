@@ -106,4 +106,5 @@ contextBridge.exposeInMainWorld("posAPI", {
   ,resetCashierOfflinePin: (input: Record<string, unknown>) => ipcRenderer.invoke("cashier:reset-pin-with-authorization", input)
   ,pushCustomerDisplay: (payload: Record<string, unknown>) => ipcRenderer.send("customer-display:cart-update", payload)
   ,onCustomerDisplayUpdate: (callback: (payload: Record<string, unknown>) => void) => ipcRenderer.on("customer-display:render", (_event, payload: Record<string, unknown>) => callback(payload))
+  ,previewCustomerDisplay: () => ipcRenderer.invoke("customer-display:preview") as Promise<"opened-fullscreen" | "opened-windowed" | "focused" | "no-second-display">
 });

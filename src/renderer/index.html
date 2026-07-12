@@ -131,7 +131,9 @@
               <button id="sync-item-catalog" type="button" class="secondary-button">Force Full Item Catalogue Sync</button>
               <button id="sync-customers" type="button" class="secondary-button">Force Full Customer Sync</button>
               <button id="sync-fbr-config" type="button" class="secondary-button">Force Full FBR Configuration Sync</button>
+              <button id="preview-customer-display" type="button" class="secondary-button">Preview Customer Display</button>
             </div>
+            <p id="customer-display-status" class="card-meta"></p>
           </div>
         </details>
 
@@ -372,16 +374,37 @@
           </div>
           <aside class="pos-summary">
             <div class="summary-scroll">
-              <p>Item count <strong id="cart-item-count">0</strong></p><p>Total quantity <strong id="cart-quantity">0</strong></p>
-              <p>FBR Sales Tax <strong id="cart-sales-tax">0.00</strong></p>
-              <p>FBR POS Service Fee <strong id="cart-service-fee">0.00</strong></p>
-              <div id="cart-tax-breakdown" class="tax-breakdown"></div>
-              <p class="grand-total">Grand Total <strong id="cart-grand-total">0.00</strong></p>
-              <p id="cart-loyalty-display"></p><p id="cart-coupon-display"></p><p id="cart-gift-voucher-display"></p>
-              <p>Paid <strong id="cart-paid">0.00</strong></p>
-              <p>Change <strong id="cart-change">0.00</strong></p>
-              <p id="cart-validation" class="validation-status">Offline Estimate — Not Server Validated</p><small id="cart-calculating"></small>
-              <button id="open-payment" type="button">Pay (F6)</button><button id="open-benefits" type="button" class="secondary-button">Benefits (F7)</button><button id="hold-sale" type="button" class="secondary-button">Hold Sale</button><button id="open-held-sales" type="button" class="secondary-button">Held Sales</button><button id="open-sales-history" type="button" class="secondary-button">Sales History</button><button id="cart-clear" type="button" class="secondary-button">Clear Cart</button>
+              <section class="summary-group">
+                <p class="summary-group-title">Cart</p>
+                <p class="summary-row"><span>Item count</span><strong id="cart-item-count">0</strong></p>
+                <p class="summary-row"><span>Total quantity</span><strong id="cart-quantity">0</strong></p>
+              </section>
+              <section class="summary-group">
+                <p class="summary-group-title">Taxes &amp; Fees</p>
+                <p class="summary-row"><span>FBR Sales Tax</span><strong id="cart-sales-tax">0.00</strong></p>
+                <p class="summary-row"><span>FBR POS Service Fee</span><strong id="cart-service-fee">0.00</strong></p>
+                <div id="cart-tax-breakdown" class="tax-breakdown"></div>
+              </section>
+              <section class="summary-group summary-group-total">
+                <p class="grand-total">Grand Total <strong id="cart-grand-total">0.00</strong></p>
+                <p id="cart-loyalty-display" class="summary-note"></p><p id="cart-coupon-display" class="summary-note"></p><p id="cart-gift-voucher-display" class="summary-note"></p>
+              </section>
+              <section class="summary-group">
+                <p class="summary-group-title">Payment</p>
+                <p class="summary-row"><span>Paid</span><strong id="cart-paid">0.00</strong></p>
+                <p class="summary-row"><span>Change</span><strong id="cart-change">0.00</strong></p>
+                <p id="cart-validation" class="validation-status">Offline Estimate — Not Server Validated</p><small id="cart-calculating"></small>
+              </section>
+              <section class="summary-actions-group">
+                <button id="open-payment" type="button" class="primary-action summary-pay-button">Pay (F6)</button>
+                <div class="summary-secondary-actions">
+                  <button id="open-benefits" type="button" class="secondary-button">Benefits (F7)</button>
+                  <button id="hold-sale" type="button" class="secondary-button">Hold Sale</button>
+                  <button id="open-held-sales" type="button" class="secondary-button">Held Sales</button>
+                  <button id="open-sales-history" type="button" class="secondary-button">Sales History</button>
+                  <button id="cart-clear" type="button" class="secondary-button summary-clear-button">Clear Cart</button>
+                </div>
+              </section>
             </div>
             <div class="summary-action">
               <button id="complete-sale" type="button" class="complete-sale-button">Complete Sale &amp; Print (F9)</button>
