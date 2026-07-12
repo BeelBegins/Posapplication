@@ -2223,6 +2223,10 @@ async function openPayment():Promise<void>{
 function renderCart(): void {
   const container = document.querySelector<HTMLElement>("#cart-rows"); if (!container) return; container.replaceChildren();
   cartLines.forEach((line, index) => { const row = document.createElement("div"); row.setAttribute("role", "button"); row.tabIndex = -1; row.className = `cart-row${index === selectedCartIndex ? " selected" : ""}`; const cells = [line.itemCode,line.itemName,line.uom,String(line.quantity),String(line.sellingPrice ?? 0),"0.00",((line.sellingPrice ?? 0) * line.quantity).toFixed(2),`${line.actualStock ?? "—"}${line.actualStock !== null && line.quantity > line.actualStock ? " ⚠" : ""}`,"Void"]; cells.forEach((text) => { const cell=document.createElement("span");cell.textContent=text;row.append(cell); }); row.onpointerdown = (event) => event.preventDefault(); row.onclick = () => { selectedCartIndex = index; renderCart(); focusCart(true); }; container.append(row); });
+  // Keep the most recently scanned/selected line in view automatically -
+  // cashiers on a compact 19" screen shouldn't have to scroll the cart list
+  // by hand to see what was just rung up.
+  if (selectedCartIndex >= 0) (container.children[selectedCartIndex] as HTMLElement | undefined)?.scrollIntoView({ block: "nearest" });
   const quantity = cartLines.reduce((sum, line) => sum + line.quantity, 0);
   const totals = fbrTotalsView();
   const paid = paymentRows.reduce((sum, row) => sum + row.amount, 0);
@@ -2272,7 +2276,8 @@ function pushCustomerDisplayUpdate(totals: FbrTotalsView): void {
     itemCount: cartLines.length,
     grandTotal: totals.grandTotal,
     totalSavings,
-    customerName: selectedCustomer?.customer_name || selectedCustomer?.name || ""
+    customerName: selectedCustomer?.customer_name || selectedCustomer?.name || "",
+    companyName: sessionState.company || ""
   });
 }
 async function afterCartMutation(message: string): Promise<void> {

@@ -539,6 +539,15 @@ function createMainWindow(): void {
     minWidth: 760,
     minHeight: 560,
     title: "Aimatic POS App",
+    // True OS-level fullscreen (not just maximized) so the window covers the
+    // whole display including the area the taskbar would otherwise reserve -
+    // maximized-only left the bottom shortcut bar clipped/squeezed behind the
+    // taskbar on real cashier machines. Frameless + no menu bar to match
+    // (same choice already made for the customer display window below) and
+    // to keep dev-tools/reload out of reach on a cashier-facing kiosk.
+    fullscreen: true,
+    frame: false,
+    autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -559,6 +568,15 @@ function createMainWindow(): void {
     if (input.type === "keyDown" && (input.key === "F9" || input.code === "F9")) {
       event.preventDefault();
       mainWindow.webContents.send("pos:complete-sale-shortcut");
+    }
+    // Esc is already claimed by the POS screen itself ("Return to Scanner"),
+    // so F11 is the escape hatch out of the fullscreen launched by default
+    // above - toggles back and forth rather than only ever leaving fullscreen,
+    // so a cashier/admin who steps out to the desktop can get back to a full,
+    // untruncated view the same way.
+    if (input.type === "keyDown" && (input.key === "F11" || input.code === "F11")) {
+      event.preventDefault();
+      mainWindow.setFullScreen(!mainWindow.isFullScreen());
     }
   });
 }

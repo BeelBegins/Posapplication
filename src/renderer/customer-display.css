@@ -51,6 +51,14 @@ body {
   letter-spacing: -0.03em;
   color: var(--color-text);
 }
+.cd-idle-company {
+  margin: 4px 0 0;
+  color: var(--color-text);
+  font-size: 1.7rem;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+}
+.cd-idle-company:empty { display: none; }
 .cd-idle-sub {
   margin: 0;
   color: var(--color-text-muted);
@@ -72,7 +80,18 @@ body {
   background: var(--color-header);
   color: var(--color-header-contrast);
 }
+.cd-company {
+  flex: 1 1 auto;
+  text-align: center;
+  font-size: 1.5rem;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--color-accent-on-dark);
+}
+.cd-company:empty { display: none; }
 .cd-customer {
+  flex: 0 0 auto;
   margin-left: auto;
   font-size: 1.3rem;
   font-weight: 700;
