@@ -88,6 +88,12 @@ function createCustomerDisplayWindow(options: { forceWindowed?: boolean } = {}):
     // on the intended secondary display instead.
     show: false,
     frame: windowed,
+    // A resizable frameless window keeps an invisible OS resize border on
+    // Windows, whose bounds extend a few pixels past what's actually drawn -
+    // that was making the real fullscreen display end up "a little bigger
+    // than the screen". This display is never meant to be manually resized
+    // anyway (kiosk-style, always sized to the target display's own bounds).
+    resizable: false,
     autoHideMenuBar: true,
     title: `Aimatic POS App — Customer Display${windowed ? " (Preview)" : ""}`,
     webPreferences: {
@@ -556,14 +562,18 @@ function createMainWindow(): void {
     minWidth: 760,
     minHeight: 560,
     title: "Aimatic POS App",
-    // True OS-level fullscreen (not just maximized) so the window covers the
-    // whole display including the area the taskbar would otherwise reserve -
-    // maximized-only left the bottom shortcut bar clipped/squeezed behind the
-    // taskbar on real cashier machines. Frameless + no menu bar to match
-    // (same choice already made for the customer display window below) and
-    // to keep dev-tools/reload out of reach on a cashier-facing kiosk.
-    fullscreen: true,
+    // Frameless + no menu bar for a cashier-facing kiosk (no title bar to
+    // show, no dev-tools/reload menu reachable). Deliberately NOT setting
+    // `fullscreen` here alongside `frame`/`show` - doing all three atomically
+    // at construction is the same race already fixed for the customer
+    // display window below (setFullScreen resolving inconsistently), and on
+    // this window it manifested as the native minimize/close caption
+    // reappearing after leaving fullscreen via F11. Positioning/framing the
+    // window first and switching to fullscreen as a separate step once it
+    // already exists (in `ready-to-show` below) avoids that.
     frame: false,
+    show: false,
+    resizable: false,
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
@@ -574,6 +584,11 @@ function createMainWindow(): void {
   mainWindowRef = mainWindow;
 
   mainWindow.loadFile(path.join(__dirname, "renderer", "index.html"));
+  mainWindow.once("ready-to-show", () => {
+    if (mainWindow.isDestroyed()) return;
+    mainWindow.setFullScreen(true);
+    mainWindow.show();
+  });
   mainWindow.on("closed", () => {
     if (mainWindowRef === mainWindow) mainWindowRef = null;
     // The app is meant to quit when its main window closes (see window-all-closed
@@ -594,6 +609,16 @@ function createMainWindow(): void {
     if (input.type === "keyDown" && (input.key === "F11" || input.code === "F11")) {
       event.preventDefault();
       mainWindow.setFullScreen(!mainWindow.isFullScreen());
+    }
+    // Alt+F4 normally falls back to the OS's native "close window" system
+    // command via the window's system menu - a frameless window has no such
+    // menu, so that fallback isn't guaranteed, and without this the keydown
+    // was instead reaching the renderer's own bare-F4 shortcut ("change
+    // quantity"). Handle it explicitly here so Alt+F4 reliably closes the
+    // app regardless.
+    if (input.type === "keyDown" && input.alt && (input.key === "F4" || input.code === "F4")) {
+      event.preventDefault();
+      mainWindow.close();
     }
   });
 }
