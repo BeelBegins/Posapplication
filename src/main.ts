@@ -52,22 +52,35 @@ const core = createPosCore({ db: database, fetch });
 // otherwise (the only other BrowserWindow is a hidden print-rendering one, not
 // a persistent display). Skips creation entirely — not an error — when only
 // one display is connected, since not every terminal has this hardware yet.
-function createCustomerDisplayWindow(): void {
+type CustomerDisplayResult = "opened-fullscreen" | "opened-windowed" | "focused" | "no-second-display";
+
+// `forceWindowed` is only ever honored when there's genuinely no second monitor
+// — it's the escape hatch for testing/previewing the display on a single-screen
+// dev machine (see the "Preview Customer Display" Settings button). When a real
+// second display exists it always wins and gets the real fullscreen treatment,
+// so the preview affordance can never accidentally shadow the real hardware.
+function createCustomerDisplayWindow(options: { forceWindowed?: boolean } = {}): CustomerDisplayResult {
+  if (customerDisplayWindow && !customerDisplayWindow.isDestroyed()) {
+    customerDisplayWindow.focus();
+    return "focused";
+  }
   const primary = screen.getPrimaryDisplay();
   const secondary = screen.getAllDisplays().find((display) => display.id !== primary.id);
-  if (!secondary) {
+  if (!secondary && !options.forceWindowed) {
     console.log("Customer display: only one monitor detected, skipping second window.");
-    return;
+    return "no-second-display";
   }
+  const windowed = !secondary;
+  const target = secondary ?? primary;
   const win = new BrowserWindow({
-    x: secondary.bounds.x,
-    y: secondary.bounds.y,
-    width: secondary.bounds.width,
-    height: secondary.bounds.height,
-    fullscreen: true,
-    frame: false,
+    x: windowed ? undefined : target.bounds.x,
+    y: windowed ? undefined : target.bounds.y,
+    width: windowed ? 480 : target.bounds.width,
+    height: windowed ? 800 : target.bounds.height,
+    fullscreen: !windowed,
+    frame: windowed,
     autoHideMenuBar: true,
-    title: "Aimatic POS App — Customer Display",
+    title: `Aimatic POS App — Customer Display${windowed ? " (Preview)" : ""}`,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -79,6 +92,7 @@ function createCustomerDisplayWindow(): void {
   win.on("closed", () => {
     if (customerDisplayWindow === win) customerDisplayWindow = null;
   });
+  return windowed ? "opened-windowed" : "opened-fullscreen";
 }
 
 function missingCashierLoginEndpointMessage(): string {
@@ -681,6 +695,7 @@ app.whenReady().then(() => {
   ipcMain.on("customer-display:cart-update", (_event, payload) => {
     customerDisplayWindow?.webContents.send("customer-display:render", payload);
   });
+  ipcMain.handle("customer-display:preview", () => createCustomerDisplayWindow({ forceWindowed: true }));
   ipcMain.handle("payments:methods", () => core.getPaymentMethods());
   ipcMain.handle("payments:load", () => { const id=core.getCartIdentity(); const cartKey=`${id.terminalId}::${id.openingEntry}`; return loadPaymentDraft(cartKey); });
   ipcMain.handle("payments:save", (_event, payments) => { const id=core.getCartIdentity(); savePaymentDraft(`${id.terminalId}::${id.openingEntry}`,Array.isArray(payments)?payments:[]); });

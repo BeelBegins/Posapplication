@@ -89,6 +89,7 @@ interface PosAPI {
   setAdminPin: (input: Record<string, unknown>) => Promise<{ ok: boolean; error: string | null }>;
   resetCashierOfflinePin: (input: Record<string, unknown>) => Promise<{ ok: boolean; error: string | null }>;
   pushCustomerDisplay: (payload: Record<string, unknown>) => void;
+  previewCustomerDisplay: () => Promise<"opened-fullscreen" | "opened-windowed" | "focused" | "no-second-display">;
 }
 
 interface ReleaseEntry { tag: string; version: string; name: string; notes: string; publishedAt: string; prerelease: boolean; exeName: string; exeUrl: string; exeApiUrl: string; }
@@ -472,6 +473,22 @@ function focusCart(sticky = false, nativeFocus = false): void {
   window.setTimeout(tick, 0);
   window.requestAnimationFrame(tick);
 }
+// Electron/Chromium blurs the BrowserWindow at the OS level when a native
+// confirm()/alert() dialog opens, and does not reliably restore it afterward —
+// leaving keyboard input dead (Enter, digit shortcuts, typing) until the user
+// alt-tabs away and back. window:focus-pos (focusPosWindow) already exists
+// for exactly this class of problem (used by afterCartMutation) but wasn't
+// wired to the many confirm()/alert() call sites — these two wrappers are
+// drop-in replacements that add that native refocus on close.
+function appConfirm(message: string): boolean {
+  const result = confirm(message);
+  void window.posAPI.focusPosWindow();
+  return result;
+}
+function appAlert(message: string): void {
+  alert(message);
+  void window.posAPI.focusPosWindow();
+}
 function cartMessage(message: string): void { const e = document.querySelector<HTMLElement>("#cart-message"); if (e) e.textContent = message; }
 function clearCartSearch(): void { cartSearchResults = []; selectedSearchIndex = 0; const input = cartInput(); if (input) input.value = ""; document.querySelector<HTMLElement>("#cart-search-results")?.replaceChildren(); }
 type PosScreen = "pos" | "settings" | "cashier-login" | "start-shift" | "close-shift" | "shift-history" | "held-sales" | "sales-history" | "refund";
@@ -837,8 +854,8 @@ async function submitCloseShift(): Promise<void> {
   const rows = reconRows();
   const totalDiff = rows.reduce((sum, r) => sum + (r.actual - r.expected), 0);
   const heldCount = await window.posAPI.listHeldSales().then((rows) => rows.length).catch(() => 0);
-  if (!confirm(`Close Shift will submit an ERPNext POS Closing Entry, mark this shift closed, print the shift summary, delete ${heldCount} held sale(s), and block new sales until a new shift is opened. Continue?`)) return;
-  if (Math.abs(totalDiff) >= 0.005 && !confirm(`There is a difference of ${fmtMoney(totalDiff)} between counted and expected amounts. Submit the closing entry anyway?`)) return;
+  if (!appConfirm(`Close Shift will submit an ERPNext POS Closing Entry, mark this shift closed, print the shift summary, delete ${heldCount} held sale(s), and block new sales until a new shift is opened. Continue?`)) return;
+  if (Math.abs(totalDiff) >= 0.005 && !appConfirm(`There is a difference of ${fmtMoney(totalDiff)} between counted and expected amounts. Submit the closing entry anyway?`)) return;
   closeShiftInFlight = true;
   if (button) button.disabled = true;
   if (message) message.textContent = "Submitting closing entry…";
@@ -914,7 +931,7 @@ function shiftReportText(r: ShiftHistoryRow): string {
   lines.push(``, `Net Sales: ${fmtMoney(r.netSales)}`, `Cash Difference: ${fmtMoney(r.difference)}`);
   return lines.join("\n");
 }
-function showShiftHistorySummary(r: ShiftHistoryRow): void { alert(shiftReportText(r)); }
+function showShiftHistorySummary(r: ShiftHistoryRow): void { appAlert(shiftReportText(r)); }
 function printShiftReport(r: ShiftHistoryRow): void {
   const html = `<pre style="font:13px monospace;padding:16px;white-space:pre-wrap">${shiftReportText(r).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c] ?? c))}</pre>`;
   void window.posAPI.printReceipt(html);
@@ -1203,10 +1220,11 @@ async function finalizePaymentReady():Promise<void>{
   if(msg)msg.textContent="Payment Ready";
   updateCompleteSaleState();
   document.querySelector<HTMLDialogElement>("#payment-dialog")?.close();
+  void window.posAPI.focusPosWindow();
   window.setTimeout(()=>document.querySelector<HTMLButtonElement>("#complete-sale")?.focus(),0);
 }
 
-function closePaymentDialog():void{ document.querySelector<HTMLDialogElement>('#payment-dialog')?.close(); focusCart(); }
+function closePaymentDialog():void{ document.querySelector<HTMLDialogElement>('#payment-dialog')?.close(); focusCart(true, true); }
 // Single source of truth for why the sale cannot be completed (null === ready).
 function blockedSaleReason():string|null{
   const opening=document.querySelector<HTMLElement>("#session-opening-entry")?.textContent??"";
@@ -1949,7 +1967,7 @@ async function submitRefund():Promise<void>{
   if(!mode){if(msg)msg.textContent="Select a refund mode of payment.";return;}
   const reason=document.querySelector<HTMLInputElement>("#refund-reason")?.value??"";
   const totalQty=items.reduce((sum,it)=>sum+it.qty,0);
-  if(!confirm(`Refund ${totalQty} item(s) from ${String(refundData.original_invoice??"")}?`))return;
+  if(!appConfirm(`Refund ${totalQty} item(s) from ${String(refundData.original_invoice??"")}?`))return;
   await verifyAndSubmitRefund(items,mode,reason,false);
 }
 
@@ -2198,7 +2216,13 @@ async function openPayment():Promise<void>{
     const blocker=await offlineLocalBlocker(false);
     if(blocker){cartMessage(blocker);return;}
   }
-  if(paymentsOutdated&&paymentRows.length){if(!confirm("Cart changed. Clear outdated payments?"))return;paymentRows=[];await persistPayments();paymentsOutdated=false;}paymentMethods=sortPaymentMethodsCashFirst(await window.posAPI.getPaymentMethods());paymentRows=await window.posAPI.loadPaymentDraft();changeDue=0;selectedPaymentMethodIndex=0;renderPaymentMethods();const amountInput=document.querySelector<HTMLInputElement>("#payment-amount");if(amountInput)amountInput.value="";const payMsg=document.querySelector<HTMLElement>("#payment-message");if(payMsg)payMsg.textContent="";renderPayments();document.querySelector<HTMLDialogElement>("#payment-dialog")?.showModal();window.setTimeout(()=>amountInput?.focus(),0);}
+  if(paymentsOutdated&&paymentRows.length){if(!appConfirm("Cart changed. Clear outdated payments?"))return;paymentRows=[];await persistPayments();paymentsOutdated=false;}paymentMethods=sortPaymentMethodsCashFirst(await window.posAPI.getPaymentMethods());paymentRows=await window.posAPI.loadPaymentDraft();changeDue=0;selectedPaymentMethodIndex=0;
+  // A row left mid-"Edit" from a previous open of this dialog (e.g. the cashier
+  // went back to add more items instead of finishing the edit) must not survive
+  // into this fresh session — addPayment() would otherwise silently overwrite
+  // that stale row instead of adding a new payment.
+  paymentEditIndex=null;
+  renderPaymentMethods();const amountInput=document.querySelector<HTMLInputElement>("#payment-amount");if(amountInput)amountInput.value="";const payMsg=document.querySelector<HTMLElement>("#payment-message");if(payMsg)payMsg.textContent="";renderPayments();document.querySelector<HTMLDialogElement>("#payment-dialog")?.showModal();window.setTimeout(()=>amountInput?.focus(),0);}
 function renderCart(): void {
   const container = document.querySelector<HTMLElement>("#cart-rows"); if (!container) return; container.replaceChildren();
   cartLines.forEach((line, index) => { const row = document.createElement("div"); row.setAttribute("role", "button"); row.tabIndex = -1; row.className = `cart-row${index === selectedCartIndex ? " selected" : ""}`; const cells = [line.itemCode,line.itemName,line.uom,String(line.quantity),String(line.sellingPrice ?? 0),"0.00",((line.sellingPrice ?? 0) * line.quantity).toFixed(2),`${line.actualStock ?? "—"}${line.actualStock !== null && line.quantity > line.actualStock ? " ⚠" : ""}`,"Void"]; cells.forEach((text) => { const cell=document.createElement("span");cell.textContent=text;row.append(cell); }); row.onpointerdown = (event) => event.preventDefault(); row.onclick = () => { selectedCartIndex = index; renderCart(); focusCart(true); }; container.append(row); });
@@ -2385,7 +2409,7 @@ async function runSessionValidation(_trigger: string): Promise<boolean> {
   if (sessionState.openingEntry && name !== sessionState.openingEntry) {
     // A different open entry is returned — never switch silently.
     if (cartLines.length) return failSession(`A different shift (${name}) is active. Confirm to switch.`, name);
-    if (!confirm(`A different shift (${name}) is active. Switch to it?`)) return failSession(`A different shift (${name}) is active`, name);
+    if (!appConfirm(`A different shift (${name}) is active. Switch to it?`)) return failSession(`A different shift (${name}) is active`, name);
   }
   sessionState = { openingEntry: name, status, user, posProfile: profile || selectedProfile, company: company || selectedCompany, postingDate, periodStart, lastChecked: Date.now(), lastError: "", valid: true, reason: "" };
   pendingSwitchEntry = "";
@@ -2400,7 +2424,7 @@ async function revalidateLive(trigger: string): Promise<void> {
 }
 async function switchToActiveShift(): Promise<void> {
   if (!pendingSwitchEntry) return;
-  if (cartLines.length && !confirm("Switching shifts keeps the current cart, customer and payment. Continue?")) return;
+  if (cartLines.length && !appConfirm("Switching shifts keeps the current cart, customer and payment. Continue?")) return;
   sessionState.openingEntry = ""; // drop cached entry so the returned one is adopted
   const ok = await validateSession("switch");
   if (ok) {
@@ -3063,7 +3087,7 @@ async function requestSupervisorPinSetup(action: "setup_pin" | "reset_pin", pinS
   // storage - see resetCashierOfflinePinWithAuthorization in main.ts.
   const label = cashierUser ? "Offline Cashier PIN" : pinLabel(pinScope);
   if (!navigator.onLine) {
-    alert(`${label} reset requires an online connection and authorized ERPNext supervisor credentials.`);
+    appAlert(`${label} reset requires an online connection and authorized ERPNext supervisor credentials.`);
     return false;
   }
   if (title) title.textContent = cashierUser ? `Reset ${label} for ${cashierUser}` : (action === "setup_pin" ? `Create ${label}` : `Reset ${label}`);
@@ -3109,7 +3133,7 @@ async function requireAdminPin(action: ProtectedAction, note: string): Promise<b
   const pinScope = pinScopeForAction(action);
   const status = await window.posAPI.getAdminPinStatus({ action, pinScope });
   if (!status.configured) return requestSupervisorPinSetup("setup_pin", pinScope);
-  if (status.locked) { alert(`${pinLabel(pinScope)} is locked. Try again in ${status.secondsRemaining}s.`); return false; }
+  if (status.locked) { appAlert(`${pinLabel(pinScope)} is locked. Try again in ${status.secondsRemaining}s.`); return false; }
   const dialog = document.querySelector<HTMLDialogElement>("#admin-pin-dialog");
   const form = document.querySelector<HTMLFormElement>("#admin-pin-form");
   if (!dialog || !form) return false;
@@ -3372,6 +3396,18 @@ window.addEventListener("DOMContentLoaded", () => {
 
   document.querySelector<HTMLButtonElement>("#sync-customers")?.addEventListener("click", async () => { if (!(await requireAdminPin("force_sync", "This will force full Customer sync from ERPNext."))) return; await syncCustomersNow("full"); const state = await window.posAPI.getCustomerSyncState(); showSettingsMessage(`Customers synced: ${state.count}`); });
   document.querySelector<HTMLButtonElement>("#sync-fbr-config")?.addEventListener("click", async () => { if (!(await requireAdminPin("force_sync", "This will force full FBR configuration sync from ERPNext."))) return; const button=document.querySelector<HTMLButtonElement>("#sync-fbr-config"); if(button){button.disabled=true;button.textContent="Syncing...";} try { await syncFbrNow("full"); showSettingsMessage("FBR configuration synced"); } catch { showSettingsMessage("FBR sync failed"); } finally { if(button){button.disabled=false;button.textContent="Force Full FBR Configuration Sync";} } });
+  document.querySelector<HTMLButtonElement>("#preview-customer-display")?.addEventListener("click", async () => {
+    const statusEl = document.querySelector<HTMLElement>("#customer-display-status");
+    const result = await window.posAPI.previewCustomerDisplay();
+    if (!statusEl) return;
+    statusEl.textContent = result === "no-second-display"
+      ? "No second monitor detected — this shouldn't happen, the preview always falls back to a small window."
+      : result === "opened-windowed"
+        ? "Opened a preview window on this screen — scan/search items on the main POS screen to see it update live."
+        : result === "opened-fullscreen"
+          ? "Opened on the detected second monitor."
+          : "Customer display window focused.";
+  });
   setupUpdateUi();
   document.querySelectorAll<HTMLDetailsElement>(".diagnostics-block").forEach((details) => {
     const summary = details.querySelector("summary");
@@ -3398,7 +3434,7 @@ window.addEventListener("DOMContentLoaded", () => {
   });
   document.querySelector("#cart-qty")?.addEventListener("click", () => void editSelectedQuantity());
   document.querySelector("#cart-remove")?.addEventListener("click", () => void removeSelectedCartRow());
-  document.querySelector("#cart-clear")?.addEventListener("click", async () => { if (!cartLines.length || !confirm("Clear the full cart?")) return; cartLines=[]; selectedCartIndex=-1; await afterCartMutation("Cart cleared"); });
+  document.querySelector("#cart-clear")?.addEventListener("click", async () => { if (!cartLines.length || !appConfirm("Clear the full cart?")) return; cartLines=[]; selectedCartIndex=-1; await afterCartMutation("Cart cleared"); });
   document.querySelector<HTMLFormElement>("#quantity-form")?.addEventListener("submit", (event) => { event.preventDefault(); const submitter = event.submitter as HTMLButtonElement | null; if (submitter?.value === "cancel") { document.querySelector<HTMLDialogElement>("#quantity-dialog")?.close(); focusCart(); } else void saveDialogQuantity(); });
   document.querySelector<HTMLDialogElement>("#quantity-dialog")?.addEventListener("cancel", () => focusCart());
   // Payment dialog controls
@@ -3408,7 +3444,9 @@ window.addEventListener("DOMContentLoaded", () => {
   document.querySelector<HTMLButtonElement>('#payment-add')?.addEventListener('click', () => void addPayment());
   document.querySelector<HTMLButtonElement>('#payment-complete')?.addEventListener('click', () => void completePaymentAllocation());
   document.querySelector<HTMLButtonElement>('#complete-sale')?.addEventListener('click', () => void submitCurrentSale());
-  document.querySelector<HTMLInputElement>('#payment-amount')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); void addPayment(); } });
+  // Enter-to-add is handled by the capture-phase global keydown listener
+  // (search for "pressing Enter on the Payment screen") — a listener bound
+  // here would never fire, since capture always runs first.
   document.querySelector<HTMLInputElement>('#payment-amount')?.addEventListener('input', () => refreshPaymentSummary());
   // Receipt preview controls
   document.querySelector<HTMLButtonElement>('#receipt-print')?.addEventListener('click', () => void printReceiptNow());
@@ -3477,8 +3515,19 @@ window.addEventListener("DOMContentLoaded", () => {
         const idx = Number(event.key) - 1;
         if (idx < paymentMethods.length) { event.preventDefault(); event.stopPropagation(); selectedPaymentMethodIndex = idx; renderPaymentMethods(); document.querySelector<HTMLInputElement>('#payment-amount')?.focus(); return; }
       }
-      if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); // select highlighted method -> focus amount
-        document.querySelector<HTMLInputElement>('#payment-amount')?.focus(); return; }
+      if (event.key === 'Enter') {
+        event.preventDefault(); event.stopPropagation();
+        // This handler runs in the capture phase, so it always wins over any
+        // listener bound directly to #payment-amount — Enter must be handled
+        // here, not delegated, or it silently does nothing (the bug where
+        // pressing Enter on the Payment screen didn't add the amount).
+        if (document.activeElement === document.querySelector('#payment-amount')) { void addPayment(); return; }
+        // Otherwise (e.g. a payment-method tile is keyboard-highlighted via the
+        // arrow keys above): move focus to the amount field first, so the very
+        // next Enter actually submits it.
+        document.querySelector<HTMLInputElement>('#payment-amount')?.focus();
+        return;
+      }
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closePaymentDialog(); return; }
     }
     if (event.ctrlKey && event.key.toLowerCase() === "h") { event.preventDefault(); event.stopPropagation(); void holdCurrentSale(); }
