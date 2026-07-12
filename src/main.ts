@@ -499,7 +499,14 @@ async function printReceiptHtml(html: string): Promise<{ success: boolean; error
       resolve(result);
     };
     printWindow.webContents.once("did-finish-load", () => {
-      printWindow.webContents.print({ silent: false, printBackground: true }, (ok, failureReason) => {
+      // scaleFactor pinned to 100 so the OS print dialog never auto-shrinks
+      // the 80mm-designed receipt layout to "fit printable area" - that
+      // downscale-then-rasterize step was the likely cause of receipts
+      // printed from this app looking visibly lighter/thinner than the same
+      // server-rendered HTML printed via a regular browser's own print
+      // dialog (which keeps whatever 100%/saved scale that browser already
+      // had for the site), even though the underlying HTML/CSS is identical.
+      printWindow.webContents.print({ silent: false, printBackground: true, scaleFactor: 100 }, (ok, failureReason) => {
         finish({ success: ok, error: ok ? null : (failureReason || "Printing was cancelled.") });
       });
     });
