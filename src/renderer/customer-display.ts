@@ -18,7 +18,14 @@ interface CustomerDisplayPayload {
   grandTotal: number;
   totalSavings: number;
   customerName: string;
+  companyName: string;
 }
+
+// Persisted across renders (and across the idle <-> active toggle) since the
+// company only needs to be picked up once config loads, not re-sent on every
+// keystroke — an empty payload.companyName mid-sale shouldn't blank out a
+// name we already know.
+let lastCompanyName = "";
 
 function money(value: number): string {
   return (Number.isFinite(value) ? value : 0).toFixed(2);
@@ -34,6 +41,10 @@ function friendlyMessage(totalSavings: number): string {
 }
 
 function renderCustomerDisplay(payload: CustomerDisplayPayload): void {
+  if (payload.companyName) lastCompanyName = payload.companyName;
+  const idleCompanyEl = document.querySelector<HTMLElement>("#cd-idle-company");
+  if (idleCompanyEl) idleCompanyEl.textContent = lastCompanyName;
+
   const idle = document.querySelector<HTMLElement>("#cd-idle");
   const active = document.querySelector<HTMLElement>("#cd-active");
   const hasItems = payload.itemCount > 0;
@@ -41,6 +52,8 @@ function renderCustomerDisplay(payload: CustomerDisplayPayload): void {
   if (active) active.hidden = !hasItems;
   if (!hasItems) return;
 
+  const companyEl = document.querySelector<HTMLElement>("#cd-company");
+  if (companyEl) companyEl.textContent = lastCompanyName;
   const customerEl = document.querySelector<HTMLElement>("#cd-customer");
   if (customerEl) customerEl.textContent = payload.customerName || "";
 
