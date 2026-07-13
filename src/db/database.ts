@@ -17,6 +17,7 @@ export interface AppSettings {
   branch: string;
   warehouse: string;
   receiptPrinter: string;
+  colorTheme?: string;
 }
 
 export interface RendererSettings {
@@ -28,6 +29,7 @@ export interface RendererSettings {
   warehouse: string;
   hasApiSecret: boolean;
   receiptPrinter: string;
+  colorTheme: string;
 }
 
 export interface PosProfileCacheStatus {
@@ -58,7 +60,7 @@ export interface CatalogSearchResult {
 
 export interface CartState { cartKey: string; lines: unknown[]; }
 
-const settingKeys = ["erpnextUrl", "apiKey", "apiSecret", "terminalId", "posProfile", "branch", "warehouse", "receiptPrinter"] as const;
+const settingKeys = ["erpnextUrl", "apiKey", "apiSecret", "terminalId", "posProfile", "branch", "warehouse", "receiptPrinter", "colorTheme"] as const;
 
 let database: Database.Database | null = null;
 let databasePath = "";
@@ -724,6 +726,35 @@ export function getPosProfileCacheStatus(): PosProfileCacheStatus {
   return { isReady: true, lastSynced: row?.synced_at ?? null };
 }
 
+// Wipes every site-scoped cache table plus sync watermarks in app_meta. Called when
+// erpnextUrl/apiKey changes (see main.ts's "settings:save" handler) since none of this
+// data is keyed by site — e.g. pos_bootstrap_cache/pos_profile_cache key only on POS
+// Profile name, so a new site reusing the same profile name would otherwise silently
+// serve the old site's cached config. Cart/held-sale state is included because it
+// references item codes/prices from the old site's catalog and is not yet a final
+// transaction. Deliberately excludes app_settings (just-saved new settings) and
+// pos_sales_history/pos_shift_history/pos_refund_log (submitted/closed financial
+// records, never auto-deleted).
+export function clearSiteScopedCache(): void {
+  if (!database) {
+    throw new Error("Database is not initialized.");
+  }
+
+  const clear = database.transaction(() => {
+    for (const table of [
+      "pos_items", "pos_item_prices", "pos_item_stock", "pos_item_barcodes", "pos_item_uom_conversions",
+      "pos_fbr_item_config", "fbr_sync_state", "catalog_sync_state",
+      "pos_customers", "pos_customer_cache", "customer_sync_state",
+      "pos_profile_cache", "pos_bootstrap_cache", "pos_session_cache", "pos_receipt_cache",
+      "pos_cart_state", "pos_payment_draft", "pos_benefits_draft", "held_sales"
+    ]) {
+      database!.prepare(`DELETE FROM ${table}`).run();
+    }
+    database!.prepare("DELETE FROM app_meta WHERE key LIKE '%_last_sync' OR key LIKE '%_last_full_sync'").run();
+  });
+  clear();
+}
+
 export function saveSettings(settings: AppSettings): { saved: true } {
   if (!database) {
     throw new Error("Database is not initialized.");
@@ -738,7 +769,7 @@ export function saveSettings(settings: AppSettings): { saved: true } {
       if (key === "apiSecret" && !settings.apiSecret) {
         continue;
       }
-      saveSetting.run(key, key === "erpnextUrl" ? normalizeErpnextUrl(settings[key]) : settings[key]);
+      saveSetting.run(key, key === "erpnextUrl" ? normalizeErpnextUrl(settings[key] ?? "") : settings[key] ?? (key === "colorTheme" ? "warm-market" : ""));
     }
   });
 
@@ -756,12 +787,14 @@ export function getSettingsForRenderer(): RendererSettings {
     branch: settings.branch,
     warehouse: settings.warehouse,
     hasApiSecret: Boolean(settings.apiSecret),
-    receiptPrinter: settings.receiptPrinter
+    receiptPrinter: settings.receiptPrinter,
+    colorTheme: settings.colorTheme ?? "warm-market"
   };
 }
 
 export function loadSettings(): AppSettings {
   const settings: AppSettings = {
+    colorTheme: "warm-market",
     erpnextUrl: "",
     apiKey: "",
     apiSecret: "",

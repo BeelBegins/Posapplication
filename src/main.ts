@@ -38,6 +38,7 @@ import {
   ,getMeta
   ,setMeta
   ,normalizeErpnextUrl
+  ,clearSiteScopedCache
 } from "./db/database";
 import type { ShiftHistoryRow } from "./db/database";
 import type { CashierLoginResult } from "./core/types";
@@ -639,7 +640,17 @@ function createMainWindow(): void {
 app.whenReady().then(() => {
   initDatabase();
   ipcMain.handle("db:getStatus", () => getDatabaseStatus());
-  ipcMain.handle("settings:save", (_event, settings) => saveSettings(settings));
+  ipcMain.handle("settings:save", (_event, settings) => {
+    // Site-scoped local cache (catalog, POS Profile/bootstrap config, customers, cart,
+    // held sales, ...) is keyed by name/profile, never by site — switching erpnextUrl/apiKey
+    // without wiping it would let stale data from the old site keep bleeding into billing.
+    const previous = loadSettings();
+    const result = saveSettings(settings);
+    const siteChanged = previous.erpnextUrl !== normalizeErpnextUrl(settings.erpnextUrl)
+      || (Boolean(settings.apiKey) && previous.apiKey !== settings.apiKey);
+    if (siteChanged) clearSiteScopedCache();
+    return result;
+  });
   ipcMain.handle("settings:load", () => getSettingsForRenderer());
   ipcMain.handle("printer:list", async () => {
     const win = mainWindowRef;

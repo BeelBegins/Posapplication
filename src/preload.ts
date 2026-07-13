@@ -9,6 +9,7 @@ interface AppSettings {
   branch: string;
   warehouse: string;
   receiptPrinter: string;
+  colorTheme?: string;
 }
 
 interface RendererSettings {
@@ -20,6 +21,7 @@ interface RendererSettings {
   warehouse: string;
   hasApiSecret: boolean;
   receiptPrinter: string;
+  colorTheme: string;
 }
 
 contextBridge.exposeInMainWorld("posAPI", {
