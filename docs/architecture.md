@@ -187,9 +187,9 @@ Owns:
 
 Important shortcuts:
 
-- F6: payment flow.
+- F6: payment flow — open payment dialog, then (once fully covered) confirm and complete the sale in one press. See "Payments" section below.
 - F7: benefits.
-- F9: complete sale and print.
+- F9: complete sale and print (manual fallback/retry; no longer required after F6 confirms a fully-covered payment).
 
 ### `src/db/database.ts`
 
@@ -510,6 +510,8 @@ Cash can exceed payable and create change.
 Non-cash cannot exceed remaining payable.
 
 Payment draft is invalidated when cart, customer, session, or benefits change.
+
+Once the payment dialog's remaining amount hits zero, pressing/clicking Complete Payment (F6) a second time — the existing "Payment Ready" confirmation step, kept deliberately as a beat to catch a mistyped split leg — now also submits the sale immediately (`finalizePaymentReady()` calls `submitCurrentSale()` directly), instead of requiring a separate F9 press afterward. F9 still works as a manual fallback/retry (e.g. if submission was blocked for an unrelated reason such as session/customer state) — it's just no longer a mandatory extra step in the common single-tender flow.
 
 F9 sale submit is blocked when:
 
