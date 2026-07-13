@@ -1211,7 +1211,12 @@ async function completePaymentAllocation():Promise<void>{
   await finalizePaymentReady();
 }
 
-// Mark the prepared payment for this exact cart version, then hand off to Complete Sale & Print.
+// Mark the prepared payment for this exact cart version, then immediately submit —
+// pressing/clicking Complete Payment when the amount is already fully covered (the
+// "Payment Ready" state) IS the cashier's explicit confirmation; a separate F9 press
+// right after was a redundant extra step. If submission is blocked for an unrelated
+// reason (session, customer, etc.) submitCurrentSale() reports it and leaves focus on
+// Complete Sale & Print, same as before, so F9 still works as a manual fallback/retry.
 async function finalizePaymentReady():Promise<void>{
   await persistPayments();
   paymentsOutdated=false;
@@ -1224,6 +1229,7 @@ async function finalizePaymentReady():Promise<void>{
   document.querySelector<HTMLDialogElement>("#payment-dialog")?.close();
   void window.posAPI.focusPosWindow();
   window.setTimeout(()=>document.querySelector<HTMLButtonElement>("#complete-sale")?.focus(),0);
+  void submitCurrentSale();
 }
 
 function closePaymentDialog():void{ document.querySelector<HTMLDialogElement>('#payment-dialog')?.close(); focusCart(true, true); }
