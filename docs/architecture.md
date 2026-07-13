@@ -224,6 +224,8 @@ Local tables include:
 
 Database schema is versioned through local migrations.
 
+None of these tables are keyed by site/server URL — they hold exactly one site's data at a time (e.g. `pos_bootstrap_cache`/`pos_profile_cache` key only on POS Profile name). `clearSiteScopedCache()` wipes all of them (plus `app_meta`'s `*_last_sync`/`*_last_full_sync` sync watermarks) except `app_settings`, `pos_sales_history`, `pos_shift_history`, and `pos_refund_log`. `main.ts`'s `settings:save` IPC handler calls it whenever `erpnextUrl` or `apiKey` changes, so a terminal repointed at a different site always does a full resync instead of silently mixing in stale data from the old site.
+
 ### `src/domain/fbr-calculation.ts`
 
 Owns local FBR estimate logic only.
@@ -290,6 +292,8 @@ ERPNext URL is normalized before save/use:
 Packaged production should require HTTPS for supervisor authorization.
 
 Development may use relaxed rules only when explicit development bypass exists.
+
+Settings also stores a `colorTheme` (default `warm-market`), a purely cosmetic per-terminal UI palette choice — `modern-blue`, `emerald-retail`, `dark-premium`, `orange-energy`, or `teal-professional`. It's persisted through the same `app_settings` key/value mechanism as the other settings fields (`settingKeys` in `src/db/database.ts`) and applied client-side only, via `document.documentElement.dataset.theme` (`applyColorTheme()` in `renderer.ts`) driving `:root[data-theme="..."]` CSS variable overrides in `styles.css`. It carries no server meaning and is not part of `clearSiteScopedCache()` — a site switch does not reset it.
 
 ## Authentication Model
 

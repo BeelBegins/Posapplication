@@ -174,6 +174,7 @@ interface AppSettings {
   branch: string;
   warehouse: string;
   receiptPrinter: string;
+  colorTheme?: string;
 }
 
 interface RendererSettings {
@@ -185,6 +186,7 @@ interface RendererSettings {
   warehouse: string;
   hasApiSecret: boolean;
   receiptPrinter: string;
+  colorTheme: string;
 }
 
 interface Window {
@@ -2697,8 +2699,13 @@ function getSettingsFromForm(): AppSettings {
     posProfile: document.querySelector<HTMLSelectElement>("#pos-profile")?.value ?? "",
     branch: document.querySelector<HTMLInputElement>("#branch")?.value ?? "",
     warehouse: document.querySelector<HTMLInputElement>("#warehouse")?.value ?? "",
-    receiptPrinter: document.querySelector<HTMLSelectElement>("#receipt-printer")?.value ?? ""
+    receiptPrinter: document.querySelector<HTMLSelectElement>("#receipt-printer")?.value ?? "",
+    colorTheme: document.querySelector<HTMLSelectElement>("#color-theme")?.value ?? "warm-market"
   };
+}
+
+function applyColorTheme(theme: string): void {
+  document.documentElement.dataset.theme = theme || "warm-market";
 }
 
 // Local system printers (no server round-trip) - repopulated whenever the
@@ -2737,6 +2744,9 @@ function populateSettingsForm(settings: RendererSettings): void {
   (document.querySelector<HTMLInputElement>("#branch") as HTMLInputElement).value = settings.branch;
   (document.querySelector<HTMLInputElement>("#warehouse") as HTMLInputElement).value = settings.warehouse;
   void populatePrinterDropdown(settings.receiptPrinter);
+  const themeSelect = document.querySelector<HTMLSelectElement>("#color-theme");
+  if (themeSelect) themeSelect.value = settings.colorTheme || "warm-market";
+  applyColorTheme(settings.colorTheme);
 }
 
 function showSettingsMessage(message: string): void {
@@ -3263,7 +3273,8 @@ window.addEventListener("DOMContentLoaded", () => {
         posProfile: current.posProfile ?? "",
         branch: current.branch ?? "",
         warehouse: current.warehouse ?? "",
-        receiptPrinter: current.receiptPrinter ?? ""
+        receiptPrinter: current.receiptPrinter ?? "",
+        colorTheme: current.colorTheme ?? "warm-market"
       });
       document.querySelector<HTMLDialogElement>("#quick-connect-dialog")?.close();
       await runPosBootstrap("quick-connect");
@@ -3340,6 +3351,7 @@ window.addEventListener("DOMContentLoaded", () => {
         || previous.posProfile !== next.posProfile
         || Boolean(next.apiSecret);
       await window.posAPI.saveSettings(next);
+      applyColorTheme(next.colorTheme ?? "warm-market");
       if (identityChanged) cashierSession = null;
       updatePosHeader();
       showSettingsMessage(identityChanged ? "Settings saved — completing setup…" : "Settings saved.");
