@@ -39,6 +39,7 @@ import {
   ,setMeta
   ,normalizeErpnextUrl
   ,clearSiteScopedCache
+  ,getOrCreateHardwareId
 } from "./db/database";
 import type { ShiftHistoryRow } from "./db/database";
 import type { CashierLoginResult } from "./core/types";
@@ -136,7 +137,7 @@ async function posCashierLogin(input: Record<string, unknown>): Promise<CashierL
   };
   if (!username || !password) return { ...empty, error: "Cashier username and password are required." };
   if (!settings.erpnextUrl || !settings.apiKey || !settings.apiSecret || !settings.terminalId || !settings.posProfile) {
-    return { ...empty, error: "Terminal settings are required before cashier login." };
+    return { ...empty, error: "This POS Profile has no Terminal ID assigned on the server yet. Sync POS Profile or contact your administrator." };
   }
   let base: URL;
   try { base = new URL(normalizeErpnextUrl(settings.erpnextUrl)); } catch { return { ...empty, error: "ERPNext URL is invalid." }; }
@@ -205,15 +206,18 @@ function normalizeCashierUser(user: string): string {
   return normalizeIdentityPart(user);
 }
 
+// Cache keys are scoped by hardwareId (per-physical-machine), not the logical terminalId — since
+// terminalId is now shared across every terminal assigned to the same POS Profile, keying these on
+// it would let one machine's cached offline PIN / remembered-cashier list validate on another.
 function cashierCacheKey(user: string): string {
   const settings = loadSettings();
-  const identity = `${normalizeIdentityPart(settings.terminalId)}|${normalizeIdentityPart(settings.posProfile)}|${normalizeCashierUser(user)}`;
+  const identity = `${normalizeIdentityPart(getOrCreateHardwareId())}|${normalizeIdentityPart(settings.posProfile)}|${normalizeCashierUser(user)}`;
   return `cashier_offline_v1_${hashSecret(identity)}`;
 }
 
 function legacyCashierCacheKey(user: string): string {
   const settings = loadSettings();
-  const identity = `${settings.terminalId.trim()}|${settings.posProfile.trim()}|${normalizeCashierUser(user)}`;
+  const identity = `${getOrCreateHardwareId()}|${settings.posProfile.trim()}|${normalizeCashierUser(user)}`;
   return `cashier_offline_v1_${hashSecret(identity)}`;
 }
 
@@ -223,7 +227,7 @@ function getCashierCacheRaw(user: string): string | null {
 
 function rememberedCashiersKey(): string {
   const settings = loadSettings();
-  return `cashier_remembered_v1_${hashSecret(`${normalizeIdentityPart(settings.terminalId)}|${normalizeIdentityPart(settings.posProfile)}`)}`;
+  return `cashier_remembered_v1_${hashSecret(`${normalizeIdentityPart(getOrCreateHardwareId())}|${normalizeIdentityPart(settings.posProfile)}`)}`;
 }
 
 function rememberedCashiers(): string[] {
@@ -260,7 +264,7 @@ function cacheCashierOfflinePin(cashier: CashierLoginResult, pin: string): { ok:
   const settings = loadSettings();
   const formatError = validatePinFormat(pin);
   if (formatError) return { ok: false, error: `Offline Cashier PIN: ${formatError}` };
-  if (!settings.terminalId || !settings.posProfile || !cashier.user) return { ok: false, error: "Terminal and POS Profile are required before saving offline cashier PIN." };
+  if (!settings.posProfile || !cashier.user) return { ok: false, error: "POS Profile is required before saving offline cashier PIN." };
   if (!cashier.canOfflineSale) return { ok: false, error: "This cashier is not allowed to use offline sales." };
   if (!cashier.offlineLoginExpiresAt) return { ok: false, error: "Server did not return offline login expiry for this cashier." };
   const cached = {
@@ -275,7 +279,7 @@ function cacheCashierOfflinePin(cashier: CashierLoginResult, pin: string): { ok:
     canOfflineSale: cashier.canOfflineSale,
     lastOnlineVerifiedAt: new Date().toISOString(),
     offlineLoginExpiresAt: cashier.offlineLoginExpiresAt,
-    terminalId: settings.terminalId.trim(),
+    hardwareId: getOrCreateHardwareId(),
     posProfile: settings.posProfile.trim(),
     pinHash: pinHash(pin)
   };
@@ -296,7 +300,7 @@ async function cashierOfflineLogin(input: Record<string, unknown>): Promise<Cash
     requirePinSetup: false, error: null
   };
   if (!username || !pin) return { ...empty, error: "Cashier username and offline PIN are required." };
-  if (!settings.terminalId || !settings.posProfile) return { ...empty, error: "Terminal settings are required before offline cashier login." };
+  if (!settings.posProfile) return { ...empty, error: "POS Profile is required before offline cashier login." };
 
   const lockUntil = Number(getMeta(cashierLockKey(username)) || 0);
   if (lockUntil > Date.now()) {
@@ -315,7 +319,7 @@ async function cashierOfflineLogin(input: Record<string, unknown>): Promise<Cash
   }
 
   const stored = textValue(cached, "pinHash");
-  if (normalizeIdentityPart(textValue(cached, "terminalId")) !== normalizeIdentityPart(settings.terminalId) || normalizeIdentityPart(textValue(cached, "posProfile")) !== normalizeIdentityPart(settings.posProfile) || !stored) {
+  if (normalizeIdentityPart(textValue(cached, "hardwareId")) !== normalizeIdentityPart(getOrCreateHardwareId()) || normalizeIdentityPart(textValue(cached, "posProfile")) !== normalizeIdentityPart(settings.posProfile) || !stored) {
     return { ...empty, error: "Offline cashier PIN is not valid for this terminal or POS Profile." };
   }
   const allowedProfiles = Array.isArray(cached.allowedPosProfiles) ? cached.allowedPosProfiles.map(String) : [];
@@ -639,6 +643,7 @@ function createMainWindow(): void {
 
 app.whenReady().then(() => {
   initDatabase();
+  console.log(`Hardware ID: ${getOrCreateHardwareId()}`);
   ipcMain.handle("db:getStatus", () => getDatabaseStatus());
   ipcMain.handle("settings:save", (_event, settings) => {
     // Site-scoped local cache (catalog, POS Profile/bootstrap config, customers, cart,
@@ -686,15 +691,15 @@ app.whenReady().then(() => {
   ipcMain.handle("fbr:state", () => getFbrSyncState());
   ipcMain.handle("catalog:search", (_event, query) => searchCatalog(String(query), textValue(asRecord(getPosBootstrap(loadSettings().posProfile)?.pos_profile), "warehouse")));
   ipcMain.handle("catalog:lookup", (_event, query) => lookupCatalog(String(query), textValue(asRecord(getPosBootstrap(loadSettings().posProfile)?.pos_profile), "warehouse")));
-  ipcMain.handle("cart:load", () => { const id = core.getCartIdentity(); return loadCartState(id.terminalId, id.openingEntry); });
-  ipcMain.handle("cart:save", (_event, lines) => { const id = core.getCartIdentity(); saveCartState(id.terminalId, id.openingEntry, Array.isArray(lines) ? lines : []); });
+  ipcMain.handle("cart:load", () => { const id = core.getCartIdentity(); return loadCartState(id.hardwareId, id.openingEntry); });
+  ipcMain.handle("cart:save", (_event, lines) => { const id = core.getCartIdentity(); saveCartState(id.hardwareId, id.openingEntry, Array.isArray(lines) ? lines : []); });
   ipcMain.on("customer-display:cart-update", (_event, payload) => {
     customerDisplayWindow?.webContents.send("customer-display:render", payload);
   });
   ipcMain.handle("customer-display:preview", () => createCustomerDisplayWindow({ forceWindowed: true }));
   ipcMain.handle("payments:methods", () => core.getPaymentMethods());
-  ipcMain.handle("payments:load", () => { const id=core.getCartIdentity(); const cartKey=`${id.terminalId}::${id.openingEntry}`; return loadPaymentDraft(cartKey); });
-  ipcMain.handle("payments:save", (_event, payments) => { const id=core.getCartIdentity(); savePaymentDraft(`${id.terminalId}::${id.openingEntry}`,Array.isArray(payments)?payments:[]); });
+  ipcMain.handle("payments:load", () => { const id=core.getCartIdentity(); const cartKey=`${id.hardwareId}::${id.openingEntry}`; return loadPaymentDraft(cartKey); });
+  ipcMain.handle("payments:save", (_event, payments) => { const id=core.getCartIdentity(); savePaymentDraft(`${id.hardwareId}::${id.openingEntry}`,Array.isArray(payments)?payments:[]); });
   ipcMain.handle("customers:sync", (_event, mode) => core.syncCustomers(mode === "full" ? "full" : "auto"));
   ipcMain.handle("customers:state", () => getCustomerSyncState());
   ipcMain.handle("customers:search", (_event, query) => searchCustomers(String(query)));
@@ -703,8 +708,8 @@ app.whenReady().then(() => {
   ipcMain.handle("customers:create", (_event, input) => core.createCustomer(asRecord(input) ?? {}));
   ipcMain.handle("cart:preview", (_event, input) => core.previewCart(asRecord(input) ?? {}));
   ipcMain.handle("fbr:preview", (_event, input) => core.calculateFbrCart(asRecord(input) ?? {}));
-  ipcMain.handle("benefits:load", () => { const id = core.getCartIdentity(); return loadBenefitsDraft(`${id.terminalId}::${id.openingEntry}`); });
-  ipcMain.handle("benefits:save", (_event, benefits) => { const id = core.getCartIdentity(); const data = asRecord(benefits); if (data) saveBenefitsDraft(`${id.terminalId}::${id.openingEntry}`, data); });
+  ipcMain.handle("benefits:load", () => { const id = core.getCartIdentity(); return loadBenefitsDraft(`${id.hardwareId}::${id.openingEntry}`); });
+  ipcMain.handle("benefits:save", (_event, benefits) => { const id = core.getCartIdentity(); const data = asRecord(benefits); if (data) saveBenefitsDraft(`${id.hardwareId}::${id.openingEntry}`, data); });
   ipcMain.handle("benefits:customer", (_event, customerName) => core.getCustomerBenefits(String(customerName)));
   ipcMain.handle("benefits:validate-coupon", (_event, couponCode) => core.validateCoupon(String(couponCode)));
   ipcMain.handle("benefits:gift-vouchers", (_event, customerName) => core.listCustomerGiftVouchers(String(customerName)));

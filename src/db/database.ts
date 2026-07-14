@@ -1,6 +1,7 @@
 import { app } from "electron";
 import Database from "better-sqlite3";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 
 export interface DatabaseStatus {
   isReady: boolean;
@@ -125,6 +126,18 @@ export function getMeta(key: string): string | null {
 export function setMeta(key: string, value: string): void {
   if (!database) return;
   database.prepare("INSERT INTO app_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(key, value);
+}
+
+// Per-install, auto-generated device identifier — minted once and persisted in app_meta, never
+// user-editable/shown. Distinct from settings.terminalId (a shared, server-derived label that
+// multiple physical terminals assigned to the same POS Profile may have in common); this is the
+// true per-machine uniqueness key for cart/offline-batch/open-invoice/offline-PIN local state.
+export function getOrCreateHardwareId(): string {
+  const existing = getMeta("hardware_id");
+  if (existing) return existing;
+  const id = randomUUID();
+  setMeta("hardware_id", id);
+  return id;
 }
 
 // Applies every migration with version > current, each in its own transaction.
@@ -453,7 +466,7 @@ export function getQueueCounts(): { queued: number; failed: number } {
   return { queued: Number(queued) || 0, failed: Number(failed) || 0 };
 }
 
-export function getOpenTerminalInvoice(terminalId:string,createId:()=>string):string{if(!database)throw new Error("Database is not initialized.");const row=database.prepare("SELECT terminal_invoice_id FROM pos_sales_history WHERE status='Open' AND json_extract(payload_json, '$.terminal_id')=? ORDER BY created_at DESC LIMIT 1").get(terminalId) as {terminal_invoice_id:string}|undefined;if(row)return row.terminal_invoice_id;const id=createId();saveSaleHistory(id,"Open",{terminal_id:terminalId});return id;}
+export function getOpenTerminalInvoice(hardwareId:string,createId:()=>string):string{if(!database)throw new Error("Database is not initialized.");const row=database.prepare("SELECT terminal_invoice_id FROM pos_sales_history WHERE status='Open' AND json_extract(payload_json, '$.hardware_id')=? ORDER BY created_at DESC LIMIT 1").get(hardwareId) as {terminal_invoice_id:string}|undefined;if(row)return row.terminal_invoice_id;const id=createId();saveSaleHistory(id,"Open",{hardware_id:hardwareId});return id;}
 
 // ----- Shift history (Close Shift) -----
 export interface ShiftHistoryRow {
@@ -529,20 +542,20 @@ export function findCustomerByNormalizedMobile(normalizedMobile: string): Record
 export function cacheCustomer(name: string, data: Record<string, unknown>): void { if (!database) throw new Error("Database is not initialized."); database.prepare("INSERT INTO pos_customer_cache VALUES (?, ?, ?) ON CONFLICT(name) DO UPDATE SET json_data=excluded.json_data,synced_at=excluded.synced_at").run(name,JSON.stringify(data),new Date().toISOString()); }
 export function getCachedCustomer(name: string): Record<string, unknown> | null { if (!database||!name)return null; const row=database.prepare("SELECT json_data FROM pos_customer_cache WHERE name=?").get(name) as {json_data:string}|undefined; try { const data=row?JSON.parse(row.json_data):null; return typeof data==="object"&&data&&!Array.isArray(data)?data as Record<string,unknown>:null; } catch{return null;} }
 
-export function loadCartState(terminalId: string, openingEntry: string): CartState {
+export function loadCartState(hardwareId: string, openingEntry: string): CartState {
   if (!database) return { cartKey: "", lines: [] };
-  const cartKey = `${terminalId}::${openingEntry}`;
+  const cartKey = `${hardwareId}::${openingEntry}`;
   const row = database.prepare("SELECT json_data FROM pos_cart_state WHERE cart_key=?").get(cartKey) as { json_data: string } | undefined;
   if (!row) return { cartKey, lines: [] };
   try { const lines = JSON.parse(row.json_data); return { cartKey, lines: Array.isArray(lines) ? lines : [] }; } catch { return { cartKey, lines: [] }; }
 }
 
-export function saveCartState(terminalId: string, openingEntry: string, lines: unknown[]): void {
+export function saveCartState(hardwareId: string, openingEntry: string, lines: unknown[]): void {
   if (!database) throw new Error("Database is not initialized.");
-  const cartKey = `${terminalId}::${openingEntry}`;
+  const cartKey = `${hardwareId}::${openingEntry}`;
   database.prepare(`INSERT INTO pos_cart_state VALUES (?, ?, ?, ?, ?)
     ON CONFLICT(cart_key) DO UPDATE SET json_data=excluded.json_data,updated_at=excluded.updated_at`)
-    .run(cartKey, terminalId, openingEntry, JSON.stringify(lines), new Date().toISOString());
+    .run(cartKey, hardwareId, openingEntry, JSON.stringify(lines), new Date().toISOString());
 }
 
 export function upsertCatalog(data: {
@@ -767,6 +780,12 @@ export function saveSettings(settings: AppSettings): { saved: true } {
   const saveAll = database.transaction(() => {
     for (const key of settingKeys) {
       if (key === "apiSecret" && !settings.apiSecret) {
+        continue;
+      }
+      // terminalId is now server-derived (from the assigned POS Profile), not user-typed — a blank
+      // value here just means "not sourced yet from a settings-form/Quick-Connect round trip", so
+      // never let it clobber a previously-synced value (mirrors the apiSecret skip-if-blank rule above).
+      if (key === "terminalId" && !settings.terminalId) {
         continue;
       }
       saveSetting.run(key, key === "erpnextUrl" ? normalizeErpnextUrl(settings[key] ?? "") : settings[key] ?? (key === "colorTheme" ? "warm-market" : ""));

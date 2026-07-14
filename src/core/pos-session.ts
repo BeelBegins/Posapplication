@@ -1,7 +1,10 @@
-import { randomUUID } from "node:crypto";
 import type { PosCoreDeps, PosSessionSummary, ShiftPaymentRow, ShiftSummary } from "./types";
 import { asRecord, textValue, sameIdentity, unwrapFrappePayload, getResponseError } from "./http";
 import type { ShiftHistoryRow } from "../db/database";
+
+function randomUUID(): string {
+  return globalThis.crypto.randomUUID();
+}
 
 function sessionFromPayload(payload: Record<string, unknown>): Record<string, unknown> | null {
   const nested = asRecord(payload.session) ?? asRecord(payload.pos_opening_entry) ?? asRecord(payload.opening_entry_doc);
@@ -313,26 +316,31 @@ export function createPosSessionCore(deps: PosCoreDeps) {
     return summarizePosSession(deps.db.getCachedPosSession(deps.db.loadSettings().posProfile));
   }
 
-  function getOfflineBatchId(terminalId: string): string {
-    const key = `offline_batch_${terminalId}_${todayKey()}`;
+  function getOfflineBatchId(hardwareId: string): string {
+    const key = `offline_batch_${hardwareId}_${todayKey()}`;
     const existing = deps.db.getMeta(key);
     if (existing) return existing;
-    const id = `OFFLINE-${terminalId}-${todayKey()}-${randomUUID()}`;
+    const id = `OFFLINE-${hardwareId}-${todayKey()}-${randomUUID()}`;
     deps.db.setMeta(key, id);
     return id;
   }
 
-  function getCartIdentity(): { terminalId: string; openingEntry: string; offlineBatchId: string } {
+  // terminalId is the shared, server-derived label for the assigned POS Profile (reporting only —
+  // multiple physical terminals may share it); hardwareId is the per-install unique id used for all
+  // local state keys below, so it never needs a "default-terminal" fallback (always present after
+  // getOrCreateHardwareId's first run).
+  function getCartIdentity(): { terminalId: string; hardwareId: string; openingEntry: string; offlineBatchId: string } {
     const settings = deps.db.loadSettings();
     const session = getCachedSessionSummary();
-    const terminalId = settings.terminalId || "default-terminal";
+    const terminalId = settings.terminalId;
+    const hardwareId = deps.db.getOrCreateHardwareId();
     const openingEntry = realOpeningEntry(session.openingEntry || "");
-    return { terminalId, openingEntry, offlineBatchId: openingEntry ? "" : getOfflineBatchId(terminalId) };
+    return { terminalId, hardwareId, openingEntry, offlineBatchId: openingEntry ? "" : getOfflineBatchId(hardwareId) };
   }
 
   function getTerminalInvoiceId(): string {
     const id = getCartIdentity();
-    return deps.db.getOpenTerminalInvoice(id.terminalId, () => `${id.terminalId}-${randomUUID()}`);
+    return deps.db.getOpenTerminalInvoice(id.hardwareId, () => `${id.hardwareId}-${randomUUID()}`);
   }
 
   return {

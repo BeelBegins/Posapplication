@@ -6,6 +6,9 @@
   "scripts": {
     "start": "npm run build && set ELECTRON_RUN_AS_NODE=&& electron .",
     "build": "tsc && copyfiles -u 1 src/renderer/*.html src/renderer/*.css dist",
+    "build:android:web": "npm run build && node scripts/build-android-web.cjs",
+    "android:sync": "npm run build:android:web && cap sync android",
+    "android:apk": "node scripts/build-android-apk.cjs",
     "obfuscate": "node scripts/obfuscate.cjs",
     "dist": "npm run build && electron-builder --win nsis",
     "dist:protected": "npm run build && npm run obfuscate && electron-builder --win nsis",
@@ -17,6 +20,7 @@
     "test": "rimraf .test-out && tsc -p tsconfig.test.json && cross-env ELECTRON_RUN_AS_NODE=1 electron --experimental-test-module-mocks --test .test-out/test"
   },
   "devDependencies": {
+    "@capacitor/cli": "^8.4.2",
     "@electron/rebuild": "^4.0.4",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.10.2",
@@ -26,12 +30,15 @@
     "dotenv-cli": "^8.0.0",
     "electron": "^33.2.1",
     "electron-builder": "^25.1.8",
+    "esbuild": "^0.25.6",
     "javascript-obfuscator": "^4.2.2",
     "rimraf": "^6.1.3",
     "typescript": "^5.7.2",
     "wait-on": "^8.0.1"
   },
   "dependencies": {
+    "@capacitor/android": "^8.4.2",
+    "@capacitor/core": "^8.4.2",
     "better-sqlite3": "^12.11.1",
     "electron-updater": "^6.8.9"
   },

@@ -8,6 +8,7 @@ const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
 const tag = `v${pkg.version}`;
 const token = (process.env.GH_TOKEN || process.env.GITHUB_TOKEN || "").trim();
 const dryRun = process.argv.includes("--dry-run") || process.argv.includes("--help");
+const requireApk = process.argv.includes("--require-apk");
 
 if (!dryRun && !token) {
   console.error("GH_TOKEN or GITHUB_TOKEN is required to publish the GitHub release.");
@@ -114,13 +115,22 @@ function expectedAssets() {
   }
 
   const names = [installerName.trim(), `${installerName.trim()}.blockmap`, "latest.yml"];
-  return names.map((name) => {
+  const assets = names.map((name) => {
     const filePath = path.join(outputDir, name);
     if (!fs.existsSync(filePath)) {
       throw new Error(`${filePath} is missing. Rebuild the installer before publishing.`);
     }
     return { name, filePath };
   });
+
+  const apkName = `Aimatic-POS-App-${pkg.version}.apk`;
+  const apkPath = path.join("dist-apk", apkName);
+  if (fs.existsSync(apkPath)) {
+    assets.push({ name: apkName, filePath: apkPath });
+  } else if (requireApk) {
+    throw new Error(`${apkPath} is missing. Build the signed Android release before publishing.`);
+  }
+  return assets;
 }
 
 async function deleteExistingAssets(releaseId, names) {
@@ -142,6 +152,9 @@ function contentType(name) {
   }
   if (name.endsWith(".exe")) {
     return "application/vnd.microsoft.portable-executable";
+  }
+  if (name.endsWith(".apk")) {
+    return "application/vnd.android.package-archive";
   }
   return "application/octet-stream";
 }

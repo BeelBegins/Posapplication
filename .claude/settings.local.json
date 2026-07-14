@@ -4,7 +4,8 @@
       "Bash(npx tsc *)",
       "Bash(npm run *)",
       "Bash(echo \"EXIT:$?\")",
-      "PowerShell(Get-Process electron -ErrorAction SilentlyContinue)"
+      "PowerShell(Get-Process electron -ErrorAction SilentlyContinue)",
+      "Read(//home/nabeel/frappe-bench/apps/aimatic/**)"
     ]
   }
 }

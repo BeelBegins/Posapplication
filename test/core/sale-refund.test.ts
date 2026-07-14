@@ -17,6 +17,7 @@ function fakeDeps(fake: FakeDb, fetchImpl: typeof fetch): PosCoreDeps {
     db: {
       loadSettings: () => ({ erpnextUrl: "https://example.com", apiKey: "key", apiSecret: "secret", terminalId: "T1", posProfile: "Main", branch: "Branch A", warehouse: "WH-A" }),
       getCachedPosSession: () => null,
+      getOrCreateHardwareId: () => "hardware-test-1",
       getOpenTerminalInvoice: (terminalId: string, createId: () => string) => createId(),
       getMeta: (key: string) => fake.meta.get(key) ?? null,
       setMeta: (key: string, value: string) => { fake.meta.set(key, value); },

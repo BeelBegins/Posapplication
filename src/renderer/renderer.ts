@@ -1250,7 +1250,7 @@ function blockedSaleReason():string|null{
     :remainingAmount()>0.0001?"Payment is incomplete"
     :paymentPreparedVersion!==currentCartVersion?"Payment not prepared for current cart"
     :paymentsOutdated?"Payment draft is outdated"
-    :!terminal?"Missing Terminal ID"
+    :!terminal?"Missing Terminal ID — assign a Terminal ID to this POS Profile on the server"
     :!profile?"Missing POS Profile"
     :!selectedCustomer?"Missing Customer"
     :null;
@@ -2638,9 +2638,9 @@ async function runStartup(reason: string = "startup"): Promise<void> {
     setStep("settings", "running"); if (progress) progress.textContent = "Loading settings…";
     await loadSettingsIntoForm();
     const saved = await window.posAPI.loadSettings();
-    if (!saved.erpnextUrl || !saved.apiKey || !saved.hasApiSecret || !saved.terminalId) {
+    if (!saved.erpnextUrl || !saved.apiKey || !saved.hasApiSecret || !saved.posProfile) {
       setStep("settings", "failed"); setOverallBadge("Setup Required", "warn");
-      if (progress) progress.textContent = "Terminal settings required"; showSettingsMessage("Enter ERPNext URL, API Key/Secret and Terminal ID, then Save and Complete Setup."); showScreen("settings"); return;
+      if (progress) progress.textContent = "Terminal settings required"; showSettingsMessage("Enter ERPNext URL, API Key/Secret and select a POS Profile, then Save and Complete Setup."); showScreen("settings"); return;
     }
     setStep("settings", "complete");
     // 2) Server (silent)
@@ -3147,7 +3147,7 @@ async function requestSupervisorPinSetup(action: "reset_pin", cashierUser: strin
       const pin = pinInput?.value ?? "";
       const confirmPin = confirmInput?.value ?? "";
       adminMessage("#admin-supervisor-message", "Verifying supervisor...");
-      const auth = await window.posAPI.authorizeAdminAction({ username, password, action, cashierUser, terminal_id: (document.querySelector<HTMLInputElement>("#terminal-id")?.value ?? "") });
+      const auth = await window.posAPI.authorizeAdminAction({ username, password, action, cashierUser });
       if (passwordInput) passwordInput.value = "";
       if (!auth.ok) { adminMessage("#admin-supervisor-message", auth.error ?? "Supervisor authorization failed."); return; }
       const saved = await window.posAPI.resetCashierOfflinePin({ cashierUser, token: auth.token, pin, confirmPin });
@@ -3185,7 +3185,7 @@ async function requestSettingsAuthorization(): Promise<boolean> {
       const passwordInput = document.querySelector<HTMLInputElement>("#settings-auth-password");
       const password = passwordInput?.value ?? "";
       adminMessage("#settings-auth-message", "Verifying...");
-      const auth = await window.posAPI.authorizeAdminAction({ username, password, action: "change_credentials", terminal_id: (document.querySelector<HTMLInputElement>("#terminal-id")?.value ?? "") });
+      const auth = await window.posAPI.authorizeAdminAction({ username, password, action: "change_credentials" });
       if (passwordInput) passwordInput.value = "";
       if (!auth.ok) { adminMessage("#settings-auth-message", auth.error ?? "Settings authorization failed."); return; }
       dialog.close();
@@ -3244,11 +3244,9 @@ window.addEventListener("DOMContentLoaded", () => {
     const urlInput = document.querySelector<HTMLInputElement>("#quick-connect-url");
     const keyInput = document.querySelector<HTMLInputElement>("#quick-connect-api-key");
     const secretInput = document.querySelector<HTMLInputElement>("#quick-connect-api-secret");
-    const terminalInput = document.querySelector<HTMLInputElement>("#quick-connect-terminal-id");
     if (urlInput) urlInput.value = current.erpnextUrl ?? "";
     if (keyInput) keyInput.value = current.apiKey ?? "";
     if (secretInput) secretInput.value = "";
-    if (terminalInput) terminalInput.value = current.terminalId ?? "";
     const msg = document.querySelector<HTMLElement>("#quick-connect-message");
     if (msg) msg.textContent = "";
     document.querySelector<HTMLDialogElement>("#quick-connect-dialog")?.showModal();
@@ -3262,20 +3260,20 @@ window.addEventListener("DOMContentLoaded", () => {
     const url = document.querySelector<HTMLInputElement>("#quick-connect-url")?.value.trim() ?? "";
     const apiKey = document.querySelector<HTMLInputElement>("#quick-connect-api-key")?.value.trim() ?? "";
     const apiSecret = document.querySelector<HTMLInputElement>("#quick-connect-api-secret")?.value ?? "";
-    const terminalId = document.querySelector<HTMLInputElement>("#quick-connect-terminal-id")?.value.trim() ?? "";
-    if (!url || !apiKey || !terminalId) { if (msg) msg.textContent = "Server URL, API Key and Terminal ID are required."; return; }
+    if (!url || !apiKey) { if (msg) msg.textContent = "Server URL and API Key are required."; return; }
     if (button) button.disabled = true;
     if (msg) msg.textContent = "Saving...";
     try {
-      // Merge onto the full current settings (not just these 4 fields) so a
+      // Merge onto the full current settings (not just these 3 fields) so a
       // quick URL fix here can't silently wipe out posProfile/branch/warehouse
-      // that were already configured.
+      // that were already configured. terminalId is passed through unchanged —
+      // it's server-derived (from the assigned POS Profile), not user-editable here.
       const current = await window.posAPI.loadSettings();
       await window.posAPI.saveSettings({
         erpnextUrl: url,
         apiKey,
         apiSecret,
-        terminalId,
+        terminalId: current.terminalId ?? "",
         posProfile: current.posProfile ?? "",
         branch: current.branch ?? "",
         warehouse: current.warehouse ?? "",

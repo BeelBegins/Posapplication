@@ -92,10 +92,11 @@ export function createSaleRefundCore(
     const openingEntry = offlineAuthenticated ? "" : posSession.realOpeningEntry(requestedOpening);
     let localOfflineSessionId = String(input.local_offline_session_id || "").trim();
     if (!localOfflineSessionId && posSession.isOfflineBatchId(requestedOpening)) localOfflineSessionId = requestedOpening.trim();
-    if (!localOfflineSessionId && offlineAuthenticated) localOfflineSessionId = identity.offlineBatchId || posSession.getOfflineBatchId(identity.terminalId);
+    if (!localOfflineSessionId && offlineAuthenticated) localOfflineSessionId = identity.offlineBatchId || posSession.getOfflineBatchId(identity.hardwareId);
     return {
       terminal_invoice_id: id,
       terminal_id: identity.terminalId,
+      hardware_id: identity.hardwareId,
       pos_profile: settings.posProfile,
       opening_entry: openingEntry,
       local_offline_session_id: localOfflineSessionId,

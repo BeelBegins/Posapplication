@@ -1,4 +1,4 @@
-name: Build Windows Release
+name: Build Desktop and Android Release
 
 on:
   push:
@@ -9,31 +9,103 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm test
+
+  windows:
+    needs: test
     runs-on: windows-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
-
-      - name: Install dependencies (rebuilds better-sqlite3 for Electron via postinstall)
-        run: npm ci
-
-      - name: Run tests
-        run: npm test
-
-      - name: Compile TypeScript + copy renderer assets
-        run: npm run build
-
+      - run: npm ci
+      - run: npm run build
       - name: Build Windows NSIS installer
         run: npx electron-builder --win nsis --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-release
+          path: dist-installer/
+          if-no-files-found: error
 
-      - name: Publish GitHub release
-        run: node scripts/publish-github-release.cjs
+  android:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+      - uses: android-actions/setup-android@v3
+      - run: npm ci
+      - run: npm run android:sync
+      - name: Restore Android release keystore
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          test -n "$ANDROID_KEYSTORE_BASE64" || (echo "ANDROID_KEYSTORE_BASE64 secret is required" && exit 1)
+          test -n "$ANDROID_KEYSTORE_PASSWORD" || (echo "ANDROID_KEYSTORE_PASSWORD secret is required" && exit 1)
+          test -n "$ANDROID_KEY_ALIAS" || (echo "ANDROID_KEY_ALIAS secret is required" && exit 1)
+          test -n "$ANDROID_KEY_PASSWORD" || (echo "ANDROID_KEY_PASSWORD secret is required" && exit 1)
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/aimatic-release.jks"
+      - name: Build signed Android APK
+        working-directory: android
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/aimatic-release.jks
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: ./gradlew assembleRelease
+      - name: Name Android release artifact
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          mkdir -p dist-apk
+          cp android/app/build/outputs/apk/release/app-release.apk "dist-apk/Aimatic-POS-App-$VERSION.apk"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-release
+          path: dist-apk/
+          if-no-files-found: error
+
+  publish:
+    needs: [windows, android]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-release
+          path: dist-installer
+      - uses: actions/download-artifact@v4
+        with:
+          name: android-release
+          path: dist-apk
+      - name: Publish combined GitHub release
+        run: node scripts/publish-github-release.cjs --require-apk
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

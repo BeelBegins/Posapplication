@@ -100,7 +100,8 @@ export function createPosConfigCore(deps: PosCoreDeps, http: ReturnType<typeof c
         synced_at: syncedAt
       };
       const branch = textValue(profile, "branch") || textValue(profile, "custom_branch");
-      deps.db.saveSettings({ ...settings, branch });
+      const terminalId = textValue(profile, "custom_terminal_id");
+      deps.db.saveSettings({ ...settings, branch, terminalId });
       deps.db.cachePosBootstrap(posProfile, configuration, syncedAt);
 
       return { success: true, summary: summarizePosConfiguration(configuration), error: null };
@@ -228,8 +229,9 @@ export function createPosConfigCore(deps: PosCoreDeps, http: ReturnType<typeof c
           ? profileData.payment_methods
           : [];
       const branch = value("branch") || value("custom_branch");
+      const terminalId = value("custom_terminal_id");
 
-      deps.db.saveSettings({ ...settings, branch });
+      deps.db.saveSettings({ ...settings, branch, terminalId });
       const syncedAt = deps.db.cachePosProfile(value("name") || posProfile, profileData);
 
       return {
@@ -240,6 +242,7 @@ export function createPosConfigCore(deps: PosCoreDeps, http: ReturnType<typeof c
           company: value("company"),
           warehouse: value("warehouse"),
           branch,
+          terminalId,
           customer: value("customer"),
           priceList: value("selling_price_list"),
           currency: value("currency"),
