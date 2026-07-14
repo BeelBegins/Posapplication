@@ -12,7 +12,7 @@
   "restaurant": {
     "id": "restaurant",
     "name": "Ai Matic Restaurant",
-    "enabled": false,
+    "enabled": true,
     "platforms": ["capacitor"],
     "androidAppId": "com.beelbegins.aimaticrestaurant",
     "storageNamespace": "aimatic-restaurant",
