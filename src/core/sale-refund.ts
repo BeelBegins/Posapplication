@@ -2,6 +2,7 @@ import type { PosCoreDeps } from "./types";
 import type { createHttpCore } from "./http";
 import type { createPosSessionCore } from "./pos-session";
 import { asRecord, textValue, formatResponseError, getResponseError } from "./http";
+import { authFetch, hasUsableCredentials } from "./auth-fetch";
 import type { HeldSaleInput, SalesHistoryFilter } from "../db/database";
 
 function isCashierPermissionSyncError(message: string): boolean {
@@ -135,13 +136,13 @@ export function createSaleRefundCore(
     const payload = buildSalePayload(input);
     const id = String(payload.terminal_invoice_id);
     deps.db.saveSaleHistory(id, "Submitting", payload);
-    if (!settings.erpnextUrl || !settings.apiKey || !settings.apiSecret) {
+    if (!hasUsableCredentials(deps, settings) || !settings.erpnextUrl) {
       deps.db.saveSaleHistory(id, "Failed", payload);
       return { success: false, response: null, error: "ERPNext URL and API credentials are required." };
     }
     try {
       const base = new URL(settings.erpnextUrl).toString().replace(/\/+$/, "");
-      const response = await deps.fetch(`${base}/api/method/aimatic.offline_pos.api.submit_online_sale`, { method: "POST", headers: { Authorization: `token ${settings.apiKey}:${settings.apiSecret}`, "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      const response = await authFetch(deps, `${base}/api/method/aimatic.offline_pos.api.submit_online_sale`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
       const rawBody = await response.text();
       let parsed: { message?: unknown; data?: unknown } = {};
       try { parsed = JSON.parse(rawBody) as { message?: unknown; data?: unknown }; } catch { /* non-JSON response */ }
@@ -181,7 +182,7 @@ export function createSaleRefundCore(
   async function syncSaleQueue(): Promise<{ synced: number; failed: number; remaining: number; error: string | null }> {
     const settings = deps.db.loadSettings();
     const counts0 = deps.db.getQueueCounts();
-    if (!settings.erpnextUrl || !settings.apiKey || !settings.apiSecret) return { synced: 0, failed: 0, remaining: counts0.queued, error: "ERPNext URL and API credentials are required." };
+    if (!hasUsableCredentials(deps, settings) || !settings.erpnextUrl) return { synced: 0, failed: 0, remaining: counts0.queued, error: "ERPNext URL and API credentials are required." };
     const auth = await http.testApiAuthentication();
     if (!auth.success) return { synced: 0, failed: 0, remaining: counts0.queued, error: "Terminal API credentials could not be revalidated." };
     let base: string;
@@ -195,7 +196,7 @@ export function createSaleRefundCore(
         if (opening.error || !opening.openingEntry) { failed += 1; error = opening.error || "Unable to prepare POS Opening Entry for queued sale."; break; }
         if (posSession.isOfflineBatchId(opening.openingEntry)) { failed += 1; error = "Offline batch ID could not be converted to a real POS Opening Entry."; break; }
         payload.opening_entry = opening.openingEntry;
-        const response = await deps.fetch(`${base}/api/method/aimatic.offline_pos.api.submit_online_sale`, { method: "POST", headers: { Authorization: `token ${settings.apiKey}:${settings.apiSecret}`, "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+        const response = await authFetch(deps, `${base}/api/method/aimatic.offline_pos.api.submit_online_sale`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
         const rawBody = await response.text();
         let parsed: { message?: unknown; data?: unknown } = {};
         try { parsed = JSON.parse(rawBody) as { message?: unknown; data?: unknown }; } catch { /* non-JSON */ }
@@ -215,10 +216,10 @@ export function createSaleRefundCore(
     return { synced, failed, remaining: deps.db.getQueueCounts().queued, error };
   }
 
-  async function findPosInvoicePrintFormat(base: string, apiKey: string, apiSecret: string): Promise<string> {
+  async function findPosInvoicePrintFormat(base: string): Promise<string> {
     try {
       const query = new URLSearchParams({ filters: JSON.stringify([["doc_type", "=", "POS Invoice"], ["disabled", "=", 0]]), fields: JSON.stringify(["name", "standard"]), limit_page_length: "50" });
-      const response = await deps.fetch(`${base}/api/resource/Print%20Format?${query.toString()}`, { headers: { Authorization: `token ${apiKey}:${apiSecret}` } });
+      const response = await authFetch(deps, `${base}/api/resource/Print%20Format?${query.toString()}`);
       if (!response.ok) return "";
       const body = await response.json() as { data?: unknown };
       const rows = Array.isArray(body.data) ? body.data.map(asRecord).filter((row): row is Record<string, unknown> => Boolean(row)) : [];
@@ -233,13 +234,13 @@ export function createSaleRefundCore(
     const s = deps.db.loadSettings();
     if (!posInvoice.trim()) return { html: null, error: "Missing POS Invoice name." };
     const cached = deps.db.getCachedReceiptHtml(posInvoice);
-    if (!s.erpnextUrl || !s.apiKey || !s.apiSecret) return cached ? { html: cached, error: null } : { html: null, error: "Online connection required to load receipt." };
+    if (!hasUsableCredentials(deps, s) || !s.erpnextUrl) return cached ? { html: cached, error: null } : { html: null, error: "Online connection required to load receipt." };
     try {
       const base = new URL(s.erpnextUrl).toString().replace(/\/+$/, "");
-      const printFormat = await findPosInvoicePrintFormat(base, s.apiKey, s.apiSecret);
+      const printFormat = await findPosInvoicePrintFormat(base);
       const params = new URLSearchParams({ doctype: "POS Invoice", name: posInvoice, no_letterhead: "1", trigger_print: "0", _lang: "en" });
       if (printFormat) params.set("format", printFormat);
-      const response = await deps.fetch(`${base}/printview?${params.toString()}`, { headers: { Authorization: `token ${s.apiKey}:${s.apiSecret}` } });
+      const response = await authFetch(deps, `${base}/printview?${params.toString()}`);
       if (!response.ok) return { html: null, error: await getResponseError(response) };
       const html = await response.text();
       if (!html || !html.trim()) return { html: null, error: "Receipt HTML was not returned." };
@@ -274,12 +275,10 @@ export function createSaleRefundCore(
   // Online refund: read original invoice + refundable quantities from the server (authoritative).
   async function getInvoiceForRefund(invoiceName: string): Promise<{ data: Record<string, unknown> | null; error: string | null }> {
     const s = deps.db.loadSettings();
-    if (!s.erpnextUrl || !s.apiKey || !s.apiSecret) return { data: null, error: "Online connection required to load the invoice." };
+    if (!hasUsableCredentials(deps, s) || !s.erpnextUrl) return { data: null, error: "Online connection required to load the invoice." };
     try {
       const base = new URL(s.erpnextUrl).toString().replace(/\/+$/, "");
-      const response = await deps.fetch(`${base}/api/method/aimatic.offline_pos.api.get_pos_invoice_for_refund?invoice_name=${encodeURIComponent(invoiceName)}`, {
-        headers: { Authorization: `token ${s.apiKey}:${s.apiSecret}` }
-      });
+      const response = await authFetch(deps, `${base}/api/method/aimatic.offline_pos.api.get_pos_invoice_for_refund?invoice_name=${encodeURIComponent(invoiceName)}`);
       if (!response.ok) return { data: null, error: await getResponseError(response) };
       const body = await response.json() as { message?: unknown };
       const data = asRecord(body.message);
@@ -292,13 +291,14 @@ export function createSaleRefundCore(
   // Online refund submission. Electron never calls FBR — the server return hook handles FBR once.
   async function submitPosRefund(input: Record<string, unknown>): Promise<{ result: Record<string, unknown> | null; error: string | null }> {
     const s = deps.db.loadSettings();
-    if (!s.erpnextUrl || !s.apiKey || !s.apiSecret) return { result: null, error: "Online connection required to submit a refund." };
+    if (!hasUsableCredentials(deps, s) || !s.erpnextUrl) return { result: null, error: "Online connection required to submit a refund." };
     try {
       const base = new URL(s.erpnextUrl).toString().replace(/\/+$/, "");
-      const response = await deps.fetch(`${base}/api/method/aimatic.offline_pos.api.submit_pos_refund`, {
+      const payload = { ...input, hardware_id: input.hardware_id ?? posSession.getCartIdentity().hardwareId };
+      const response = await authFetch(deps, `${base}/api/method/aimatic.offline_pos.api.submit_pos_refund`, {
         method: "POST",
-        headers: { Authorization: `token ${s.apiKey}:${s.apiSecret}`, "Content-Type": "application/json" },
-        body: JSON.stringify(input)
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
       });
       const rawBody = await response.text();
       let parsed: { message?: unknown } = {};

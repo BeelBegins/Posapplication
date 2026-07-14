@@ -31,6 +31,8 @@ contextBridge.exposeInMainWorld("posAPI", {
   onFocusScanner: (callback: () => void) => ipcRenderer.on("pos:focus-scanner", () => callback()),
   saveSettings: (settings: AppSettings) => ipcRenderer.invoke("settings:save", settings),
   loadSettings: () => ipcRenderer.invoke("settings:load") as Promise<RendererSettings>,
+  provisionCredentials: (input: { erpnextUrl: string; username: string; password: string }) =>
+    ipcRenderer.invoke("settings:provisionCredentials", input) as Promise<{ success: boolean; apiKey: string; apiSecret: string; error: string | null }>,
   listPrinters: () => ipcRenderer.invoke("printer:list") as Promise<{ name: string; displayName: string }[]>,
   testServer: () => ipcRenderer.invoke("server:test"),
   testLogin: () => ipcRenderer.invoke("auth:test"),

@@ -1,4 +1,5 @@
 import type { IDatabaseService } from "../db/IDatabaseService";
+import type { CredentialProvider } from "../api/client";
 
 /**
  * Dependencies every src/core/ function is parameterized on, instead of importing
@@ -6,10 +7,15 @@ import type { IDatabaseService } from "../db/IDatabaseService";
  * reusable by a future non-Electron (e.g. Capacitor) shell: swap `db` for a different
  * IDatabaseService implementation and `fetch` for a platform-appropriate one, and the
  * business logic here is unchanged.
+ *
+ * `credentials` is optional and additive: Electron's main.ts never sets it, so every
+ * authFetch() call (src/core/auth-fetch.ts) takes the terminal-token branch exactly as
+ * before. Android's mobile.ts sets it to opt into Bearer/OAuth-session requests instead.
  */
 export interface PosCoreDeps {
   db: IDatabaseService;
   fetch: typeof fetch;
+  credentials?: CredentialProvider;
 }
 
 export interface PosProfileDetails {

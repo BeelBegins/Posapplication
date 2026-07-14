@@ -31,7 +31,7 @@ The preparation does not yet include offline order submission. A customer may re
 Before enabling the Shopping profile:
 
 1. Implement and permission-test the allow-listed Frappe endpoints.
-2. Integrate the final no-secret customer authentication/session design.
+2. Configure a separate public Shopping OAuth client and connect it through `src/products/shopping/auth.ts`. It must never reuse the employee POS OAuth client or terminal credentials.
 3. Add address creation/editing and delivery-area validation.
 4. Integrate selected payment methods and webhook verification.
 5. Add durable order-status refresh/push notifications.

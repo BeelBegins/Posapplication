@@ -1,5 +1,6 @@
 import type { PosCoreDeps, PosSessionSummary, ShiftPaymentRow, ShiftSummary } from "./types";
 import { asRecord, textValue, sameIdentity, unwrapFrappePayload, getResponseError } from "./http";
+import { authFetch, hasUsableCredentials } from "./auth-fetch";
 import type { ShiftHistoryRow } from "../db/database";
 
 function randomUUID(): string {
@@ -136,12 +137,12 @@ export function createPosSessionCore(deps: PosCoreDeps) {
   async function getActivePosSession(input: Record<string, unknown> = {}): Promise<{ success: boolean; session: Record<string, unknown> | null; error: string | null; diagnosticReason: string; apiUser: string; requestedPosProfile: string; entries: Record<string, unknown>[] }> {
     const s = deps.db.loadSettings();
     const cashierUser = textValue(input, "cashier_user");
-    if (!s.erpnextUrl || !s.apiKey || !s.apiSecret) return { success: false, session: null, error: "Online connection required to load POS session.", diagnosticReason: "Missing ERPNext URL or API credentials", apiUser: "", requestedPosProfile: s.posProfile, entries: [] };
+    if (!hasUsableCredentials(deps, s) || !s.erpnextUrl) return { success: false, session: null, error: "Online connection required to load POS session.", diagnosticReason: "Missing ERPNext URL or credentials", apiUser: "", requestedPosProfile: s.posProfile, entries: [] };
     if (!cashierUser) return { success: false, session: null, error: "Cashier user is required to load POS session.", diagnosticReason: "Cashier user missing", apiUser: "", requestedPosProfile: s.posProfile, entries: [] };
     try {
       const base = new URL(s.erpnextUrl).toString().replace(/\/+$/, "");
       const query = new URLSearchParams({ pos_profile: s.posProfile, cashier_user: cashierUser });
-      const r = await deps.fetch(`${base}/api/method/aimatic.offline_pos.api.get_active_pos_session?${query.toString()}`, { headers: { Authorization: `token ${s.apiKey}:${s.apiSecret}` } });
+      const r = await authFetch(deps, `${base}/api/method/aimatic.offline_pos.api.get_active_pos_session?${query.toString()}`);
       if (!r.ok) {
         const error = await getResponseError(r);
         return { success: false, session: null, error, diagnosticReason: error, apiUser: "", requestedPosProfile: s.posProfile, entries: [] };
@@ -165,12 +166,12 @@ export function createPosSessionCore(deps: PosCoreDeps) {
 
   async function startPosSession(input: Record<string, unknown>): Promise<{ success: boolean; session: Record<string, unknown> | null; error: string | null }> {
     const s = deps.db.loadSettings();
-    if (!s.erpnextUrl || !s.apiKey || !s.apiSecret) return { success: false, session: null, error: "Online connection required to start shift" };
+    if (!hasUsableCredentials(deps, s) || !s.erpnextUrl) return { success: false, session: null, error: "Online connection required to start shift" };
     const cashierUser = textValue(input, "cashier_user");
     if (!cashierUser) return { success: false, session: null, error: "Cashier user is required to start shift" };
     try {
       const base = new URL(s.erpnextUrl).toString().replace(/\/+$/, "");
-      const r = await deps.fetch(`${base}/api/method/aimatic.offline_pos.api.start_pos_session`, { method: "POST", headers: { Authorization: `token ${s.apiKey}:${s.apiSecret}`, "Content-Type": "application/json" }, body: JSON.stringify({ pos_profile: s.posProfile, opening_balances: JSON.stringify(Array.isArray(input.opening_balances) ? input.opening_balances : []), cashier_user: cashierUser, local_offline_session_id: textValue(input, "local_offline_session_id") }) });
+      const r = await authFetch(deps, `${base}/api/method/aimatic.offline_pos.api.start_pos_session`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pos_profile: s.posProfile, opening_balances: JSON.stringify(Array.isArray(input.opening_balances) ? input.opening_balances : []), cashier_user: cashierUser, local_offline_session_id: textValue(input, "local_offline_session_id") }) });
       if (!r.ok) {
         const body = await r.clone().json().catch(() => null) as unknown;
         const payload = unwrapFrappePayload(body);
@@ -241,15 +242,13 @@ export function createPosSessionCore(deps: PosCoreDeps) {
     const request = typeof input === "string" ? { opening_entry: input } : input;
     const openingEntry = textValue(request, "opening_entry");
     const cashierUser = textValue(request, "cashier_user");
-    if (!s.erpnextUrl || !s.apiKey || !s.apiSecret) return getLocalShiftSummary(openingEntry);
+    if (!hasUsableCredentials(deps, s) || !s.erpnextUrl) return getLocalShiftSummary(openingEntry);
     if (!openingEntry) return { success: false, summary: null, error: "Opening Entry is required." };
     if (!cashierUser) return { success: false, summary: null, error: "Cashier user is required to load closing summary." };
     try {
       const base = new URL(s.erpnextUrl).toString().replace(/\/+$/, "");
       const query = new URLSearchParams({ opening_entry: openingEntry, cashier_user: cashierUser });
-      const r = await deps.fetch(`${base}/api/method/aimatic.offline_pos.api.get_pos_closing_summary?${query.toString()}`, {
-        headers: { Authorization: `token ${s.apiKey}:${s.apiSecret}` }
-      });
+      const r = await authFetch(deps, `${base}/api/method/aimatic.offline_pos.api.get_pos_closing_summary?${query.toString()}`);
       if (!r.ok) return { success: false, summary: null, error: await getResponseError(r) };
       const b = await r.json() as { message?: unknown };
       const raw = asRecord(b.message);
@@ -281,7 +280,7 @@ export function createPosSessionCore(deps: PosCoreDeps) {
   // Submit the POS Closing Entry via the server (aimatic.offline_pos.api.close_pos_session). Online-only.
   async function closeShift(input: Record<string, unknown>): Promise<{ success: boolean; closingEntry: string; response: Record<string, unknown> | null; error: string | null }> {
     const s = deps.db.loadSettings();
-    if (!s.erpnextUrl || !s.apiKey || !s.apiSecret) return { success: false, closingEntry: "", response: null, error: "Online connection required to close shift." };
+    if (!hasUsableCredentials(deps, s) || !s.erpnextUrl) return { success: false, closingEntry: "", response: null, error: "Online connection required to close shift." };
     const openingEntry = textValue(input, "opening_entry");
     const cashierUser = textValue(input, "cashier_user");
     if (!openingEntry) return { success: false, closingEntry: "", response: null, error: "Opening Entry is required to close the shift." };
@@ -292,9 +291,9 @@ export function createPosSessionCore(deps: PosCoreDeps) {
     const pre = await getShiftSummary({ opening_entry: openingEntry, cashier_user: cashierUser });
     try {
       const base = new URL(s.erpnextUrl).toString().replace(/\/+$/, "");
-      const r = await deps.fetch(`${base}/api/method/aimatic.offline_pos.api.close_pos_session`, {
+      const r = await authFetch(deps, `${base}/api/method/aimatic.offline_pos.api.close_pos_session`, {
         method: "POST",
-        headers: { Authorization: `token ${s.apiKey}:${s.apiSecret}`, "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ opening_entry: openingEntry, cashier_user: cashierUser, closing_balances: JSON.stringify(closingBalances), notes })
       });
       if (!r.ok) return { success: false, closingEntry: "", response: null, error: await getResponseError(r) };
