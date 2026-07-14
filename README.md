@@ -133,7 +133,7 @@ npm run android:apk
 APK output:
 
 ```text
-dist-apk/Aimatic-POS-App-2.4.7-debug.apk
+dist-apk/Aimatic-POS-App-<version>-debug.apk
 ```
 
 The Android app runs in landscape and uses Android app storage and the Android print service. Electron-only auto-update and second-monitor controls are not shown on Android.

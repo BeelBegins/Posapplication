@@ -3,6 +3,7 @@ const path = require("node:path");
 const esbuild = require("esbuild");
 
 const root = path.resolve(__dirname, "..");
+const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
 const out = path.join(root, "android-web");
 fs.rmSync(out, { recursive: true, force: true });
 fs.mkdirSync(out, { recursive: true });
@@ -23,5 +24,6 @@ esbuild.buildSync({
   format: "iife",
   target: ["chrome120"],
   sourcemap: false,
-  minify: true
+  minify: true,
+  define: { __APP_VERSION__: JSON.stringify(pkg.version) }
 });
