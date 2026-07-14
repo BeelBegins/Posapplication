@@ -1,6 +1,8 @@
 import { createPosCore, asRecord, textValue, unwrapFrappePayload, formatResponseError } from "../core";
 import { mobileDatabase as db } from "./browser-database";
 
+declare const __APP_VERSION__: string;
+
 const core = createPosCore({ db, fetch: globalThis.fetch.bind(globalThis) });
 const catalogListeners: Array<(message: string) => void> = [];
 const completeSaleListeners: Array<() => void> = [];
@@ -66,7 +68,7 @@ const posAPI = {
   holdSale:async(x:Record<string,unknown>)=>db.holdSale(core.toHeldInput(x)),listHeldSales:async()=>db.listHeldSales(),getHeldSale:async(id:number)=>db.getHeldSale(id),deleteHeldSale:async(id:number)=>db.deleteHeldSale(id),renameHeldSale:async(id:number,n:string)=>db.renameHeldSale(id,n),
   listSalesHistory:async(x:Record<string,unknown>)=>db.listSalesHistory(core.toHistoryFilter(x)),getSaleHistory:async(id:string)=>db.getSaleHistory(id),recordReprint:async(id:string)=>db.recordReprint(id),setSaleStatus:async(id:string,s:string)=>db.setSaleHistoryStatus(id,s),
   getInvoiceForRefund:(x:string)=>core.getInvoiceForRefund(x),submitPosRefund:(x:Record<string,unknown>)=>core.submitPosRefund(x),getShiftSummary:(x?:Record<string,unknown>)=>core.getShiftSummary(x),closeShift:(x:Record<string,unknown>)=>core.closeShift(x),listShiftHistory:async()=>core.getShiftHistoryList(),getShiftHistory:async(x:string)=>db.getShiftHistory(x),
-  getAppVersion:async()=>"2.4.7 Android",checkForUpdate:async()=>({ok:false,error:"Install Android updates using a new APK."}),downloadUpdate:async()=>({ok:false,error:"Not available on Android."}),installUpdate:async()=>{},saveUpdateToken:async()=>({ok:false}),isUpdateTokenSet:async()=>false,onUpdateStatus:(cb:(p:Record<string,unknown>)=>void)=>updateListeners.push(cb),listReleases:async()=>({releases:[],error:"Windows releases are not applicable on Android."}),installRelease:async()=>({ok:false,error:"Windows installers cannot run on Android."}),
+  getAppVersion:async()=>`${__APP_VERSION__} Android`,checkForUpdate:async()=>({ok:false,error:"Install Android updates using a new APK."}),downloadUpdate:async()=>({ok:false,error:"Not available on Android."}),installUpdate:async()=>{},saveUpdateToken:async()=>({ok:false}),isUpdateTokenSet:async()=>false,onUpdateStatus:(cb:(p:Record<string,unknown>)=>void)=>updateListeners.push(cb),listReleases:async()=>({releases:[],error:"Windows releases are not applicable on Android."}),installRelease:async()=>({ok:false,error:"Windows installers cannot run on Android."}),
   authorizeAdminAction,resetCashierOfflinePin:async(x:Record<string,unknown>)=>{const user=textValue(x,"cashierUser").toLowerCase(),pin=textValue(x,"pin"),pending=pendingAdminAuthorization;pendingAdminAuthorization=null;if(!pending||pending.expiresAt<Date.now()||pending.action!=="reset_pin"||pending.cashierUser!==user||pending.token!==textValue(x,"token"))return{ok:false,error:"Supervisor authorization is missing, invalid, or expired."};if(!/^\d{4,8}$/.test(pin))return{ok:false,error:"Offline PIN must contain 4 to 8 digits."};if(pin!==textValue(x,"confirmPin"))return{ok:false,error:"PIN confirmation does not match."};let cached:Record<string,unknown>|null=null;try{cached=asRecord(JSON.parse(db.getMeta(cashierKey(user))||"null"));}catch{}if(!cached)return{ok:false,error:"No offline PIN is cached for this cashier."};cached.pinHash=await pinHash(pin);db.setMeta(cashierKey(user),JSON.stringify(cached));return{ok:true,error:null};},
   pushCustomerDisplay:(_x:Record<string,unknown>)=>{},previewCustomerDisplay:async()=>"no-second-display" as const
 };
