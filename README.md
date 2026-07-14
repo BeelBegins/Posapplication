@@ -1,4 +1,4 @@
-# Aimatic POS App
+# Ai Matic POS App
 
 Windows desktop POS for ERPNext retail stores.
 
@@ -7,7 +7,7 @@ Built with Electron, TypeScript, SQLite, ERPNext/Frappe APIs, and FBR-ready serv
 ## Current Version
 
 ```text
-2.1.1
+2.5.0
 ```
 
 ## What This App Does
@@ -42,6 +42,12 @@ Built with Electron, TypeScript, SQLite, ERPNext/Frappe APIs, and FBR-ready serv
 - ERPNext / Frappe custom app: `aimatic`
 - Electron Builder NSIS installer
 - Electron Updater
+
+## Product Profiles
+
+The repository now defines focused Ai Matic POS, Restaurant, Sales, and Shopping profiles. Phase 1 enables POS only; unfinished profiles fail at build time and cannot be accidentally packaged. The existing Electron and Android POS commands remain compatible.
+
+See [Product Architecture](docs/product-architecture.md), [Build Profiles](docs/build-profiles.md), [API Contracts](docs/api-contracts.md), and [Android Authentication Security](docs/mobile-authentication.md).
 
 ## Main Files
 

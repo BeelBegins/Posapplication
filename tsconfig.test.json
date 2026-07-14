@@ -4,5 +4,5 @@
     "rootDir": ".",
     "outDir": ".test-out"
   },
-  "include": ["src/domain/**/*.ts", "src/db/**/*.ts", "src/core/**/*.ts", "test/**/*.ts"]
+  "include": ["src/domain/**/*.ts", "src/db/**/*.ts", "src/core/**/*.ts", "src/api/**/*.ts", "src/config/**/*", "src/platform/**/*.ts", "test/**/*.ts"]
 }

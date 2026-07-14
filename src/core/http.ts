@@ -1,4 +1,5 @@
 import type { PosCoreDeps } from "./types";
+import { createApiClient } from "../api/client";
 
 // ----- Pure helpers, no deps needed — used both by the bound functions below and by
 // main.ts code not yet migrated into src/core/ (see the extraction plan). -----
@@ -66,6 +67,10 @@ export async function getResponseError(response: Response): Promise<string> {
 // ----- Functions bound to PosCoreDeps (need deps.fetch and/or deps.db) -----
 
 export function createHttpCore(deps: PosCoreDeps) {
+  function terminalClient(baseUrl: string, apiKey: string, apiSecret: string) {
+    return createApiClient({ baseUrl, authentication: { mode: "terminal-token", apiKey, apiSecret }, fetch: deps.fetch });
+  }
+
   async function testServerReachability(): Promise<{ connected: boolean }> {
     const { erpnextUrl } = deps.db.loadSettings();
 
@@ -101,10 +106,8 @@ export function createHttpCore(deps: PosCoreDeps) {
       return { success: false, loggedUser: null };
     }
 
-    let endpoint: string;
     try {
-      const baseUrl = new URL(erpnextUrl.trim()).toString().replace(/\/+$/, "");
-      endpoint = `${baseUrl}/api/method/frappe.auth.get_logged_user`;
+      new URL(erpnextUrl.trim());
     } catch {
       return { success: false, loggedUser: null };
     }
@@ -113,9 +116,9 @@ export function createHttpCore(deps: PosCoreDeps) {
     const timeout = setTimeout(() => controller.abort(), 5_000);
 
     try {
-      const response = await deps.fetch(endpoint, {
+      const client = terminalClient(erpnextUrl, apiKey, apiSecret);
+      const response = await client.callMethod("frappe.auth.get_logged_user", {
         method: "GET",
-        headers: { Authorization: `token ${apiKey}:${apiSecret}` },
         signal: controller.signal
       });
 
@@ -137,14 +140,12 @@ export function createHttpCore(deps: PosCoreDeps) {
   }
 
   async function fetchErpResource(baseUrl: string, apiKey: string, apiSecret: string, doctype: string, name: string): Promise<Record<string, unknown>> {
-    const endpoint = `${baseUrl}/api/resource/${encodeURIComponent(doctype)}/${encodeURIComponent(name)}`;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5_000);
 
     try {
-      const response = await deps.fetch(endpoint, {
+      const response = await terminalClient(baseUrl, apiKey, apiSecret).getResource(doctype, name, {
         method: "GET",
-        headers: { Authorization: `token ${apiKey}:${apiSecret}` },
         signal: controller.signal
       });
       if (!response.ok) {
@@ -165,8 +166,7 @@ export function createHttpCore(deps: PosCoreDeps) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5_000);
     try {
-      const response = await deps.fetch(`${baseUrl}/api/method/frappe.auth.get_logged_user`, {
-        headers: { Authorization: `token ${apiKey}:${apiSecret}` },
+      const response = await terminalClient(baseUrl, apiKey, apiSecret).callMethod("frappe.auth.get_logged_user", {
         signal: controller.signal
       });
       if (!response.ok) {
@@ -185,10 +185,8 @@ export function createHttpCore(deps: PosCoreDeps) {
   async function fetchPagedList(baseUrl: string, apiKey: string, apiSecret: string, doctype: string, fields: string[], filters?: unknown): Promise<Record<string, unknown>[]> {
     const rows: Record<string, unknown>[] = [];
     for (let start = 0; ; start += 500) {
-      const query = new URLSearchParams({ fields: JSON.stringify(fields), limit_start: String(start), limit_page_length: "500" });
-      if (filters) query.set("filters", JSON.stringify(filters));
-      const response = await deps.fetch(`${baseUrl}/api/resource/${encodeURIComponent(doctype)}?${query.toString()}`, {
-        headers: { Authorization: `token ${apiKey}:${apiSecret}` }
+      const response = await terminalClient(baseUrl, apiKey, apiSecret).listResources(doctype, {
+        fields, filters, limitStart: start, limitPageLength: 500
       });
       if (!response.ok) throw new Error(await getResponseError(response));
       const body = await response.json() as { data?: unknown };

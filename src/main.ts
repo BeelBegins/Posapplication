@@ -45,10 +45,12 @@ import type { ShiftHistoryRow } from "./db/database";
 import type { CashierLoginResult } from "./core/types";
 import * as database from "./db/database";
 import { createPosCore, asRecord, textValue, sameIdentity, unwrapFrappePayload, formatResponseError, getResponseError } from "./core";
+import { createPlatformService } from "./platform/platform-service";
 
 let mainWindowRef: BrowserWindow | null = null;
 let customerDisplayWindow: BrowserWindow | null = null;
 const core = createPosCore({ db: database, fetch });
+const runtimeInfo = createPlatformService("electron", "pos");
 
 // Second-monitor, customer-facing display. Greenfield: the app is single-window
 // otherwise (the only other BrowserWindow is a hidden print-rendering one, not
@@ -645,6 +647,7 @@ app.whenReady().then(() => {
   initDatabase();
   console.log(`Hardware ID: ${getOrCreateHardwareId()}`);
   ipcMain.handle("db:getStatus", () => getDatabaseStatus());
+  ipcMain.handle("app:runtime", () => runtimeInfo);
   ipcMain.handle("settings:save", (_event, settings) => {
     // Site-scoped local cache (catalog, POS Profile/bootstrap config, customers, cart,
     // held sales, ...) is keyed by name/profile, never by site — switching erpnextUrl/apiKey

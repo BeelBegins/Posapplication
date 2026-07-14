@@ -25,6 +25,7 @@ interface RendererSettings {
 }
 
 contextBridge.exposeInMainWorld("posAPI", {
+  getRuntimeInfo: () => ipcRenderer.invoke("app:runtime"),
   getDatabaseStatus: () => ipcRenderer.invoke("db:getStatus"),
   focusPosWindow: () => ipcRenderer.invoke("window:focus-pos"),
   onFocusScanner: (callback: () => void) => ipcRenderer.on("pos:focus-scanner", () => callback()),

@@ -2,9 +2,11 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
+const { loadProductProfile } = require("./product-profile.cjs");
 
 const root = path.resolve(__dirname, "..");
 const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+const profile = loadProductProfile(undefined, "capacitor");
 const home = os.homedir();
 const localJdks = path.join(home, ".local", "jdks");
 const detectedJdk = fs.existsSync(localJdks)
@@ -29,7 +31,8 @@ run(process.platform === "win32" ? "gradlew.bat" : "./gradlew", ["assembleDebug"
 
 const source = path.join(root, "android", "app", "build", "outputs", "apk", "debug", "app-debug.apk");
 const outputDir = path.join(root, "dist-apk");
-const target = path.join(outputDir, `Aimatic-POS-App-${pkg.version}-debug.apk`);
+const artifactProduct = profile.name.replace(/\s+/g, "-");
+const target = path.join(outputDir, `${artifactProduct}-${pkg.version}-debug.apk`);
 fs.mkdirSync(outputDir, { recursive: true });
 fs.copyFileSync(source, target);
 console.log(`APK: ${target}`);
