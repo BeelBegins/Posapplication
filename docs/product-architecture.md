@@ -11,7 +11,7 @@ Ai Matic is one repository with four focused products:
 
 Phase 2 Restaurant contracts and status invariants are documented in [restaurant-phase2.md](restaurant-phase2.md).
 
-Only Retail POS is enabled during Phase 1. A disabled product profile fails the build instead of silently packaging placeholder or unrelated screens.
+Retail POS remains the only Electron product. Restaurant is independently buildable during Phase 2; Sales and Shopping remain build-disabled. A disabled product profile fails the build instead of silently packaging placeholder or unrelated screens.
 
 ## Shared and product-specific code
 

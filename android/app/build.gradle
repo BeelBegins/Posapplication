@@ -3,6 +3,12 @@ import groovy.json.JsonSlurper
 apply plugin: 'com.android.application'
 
 def packageInfo = new JsonSlurper().parse(file('../../package.json'))
+def productProfiles = new JsonSlurper().parse(file('../../src/config/product-profiles.json'))
+def productId = System.getenv('AI_MATIC_PRODUCT') ?: 'pos'
+def productProfile = productProfiles[productId]
+if (!productProfile || !productProfile.enabled || !productProfile.platforms.contains('capacitor')) {
+    throw new GradleException("Ai Matic product '${productId}' is not enabled for Android")
+}
 def versionParts = packageInfo.version.toString().tokenize('.').collect { it as int }
 def releaseKeystore = System.getenv('ANDROID_KEYSTORE_PATH')
 
@@ -10,7 +16,8 @@ android {
     namespace = "com.beelbegins.aimaticpos"
     compileSdk = rootProject.ext.compileSdkVersion
     defaultConfig {
-        applicationId "com.beelbegins.aimaticpos"
+        applicationId productProfile.androidAppId
+        manifestPlaceholders = [appLabel: productProfile.name]
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode versionParts[0] * 10000 + versionParts[1] * 100 + versionParts[2]
