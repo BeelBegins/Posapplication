@@ -9,6 +9,8 @@ Ai Matic is one repository with four focused products:
 - Ai Matic Sales: salesperson ordering for Capacitor; Phase 3.
 - Ai Matic Shopping: customer shopping for Capacitor/web; Phase 4.
 
+Phase 2 Restaurant contracts and status invariants are documented in [restaurant-phase2.md](restaurant-phase2.md).
+
 Only Retail POS is enabled during Phase 1. A disabled product profile fails the build instead of silently packaging placeholder or unrelated screens.
 
 ## Shared and product-specific code
