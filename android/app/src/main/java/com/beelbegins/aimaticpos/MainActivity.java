@@ -16,6 +16,7 @@ import java.nio.charset.StandardCharsets;
 public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
+        registerPlugin(SecureStoragePlugin.class);
         super.onCreate(savedInstanceState);
         bridge.getWebView().addJavascriptInterface(new AppStore(this), "AndroidStore");
         bridge.getWebView().addJavascriptInterface(new ReceiptPrinter(this), "AndroidPrint");

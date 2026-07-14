@@ -18,7 +18,9 @@ const buildOptions = {
 if (profile.id === "pos") {
   let html = fs.readFileSync(path.join(root, "dist/renderer/index.html"), "utf8");
   html = html
-    .replace('<script src="renderer.js"></script>', '<script src="mobile.js"></script>\n    <script src="renderer.js"></script>')
+    .replace('<script src="renderer.js"></script>', '<script src="mobile.js"></script>')
+    .replace(/\s*<fieldset[^>]*data-terminal-credentials[^>]*>[\s\S]*?<\/fieldset>/g, "")
+    .replace(/\s*<label data-terminal-credentials>[\s\S]*?<\/label>/g, "")
     .replace("<p class=\"eyebrow\">Desktop POS</p>", "<p class=\"eyebrow\">Android POS</p>");
   fs.writeFileSync(path.join(out, "index.html"), html);
   fs.copyFileSync(path.join(root, "dist/renderer/renderer.js"), path.join(out, "renderer.js"));

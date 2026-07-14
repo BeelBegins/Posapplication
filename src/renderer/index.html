@@ -45,11 +45,26 @@
             ERPNext URL
             <input id="erpnext-url" name="erpnextUrl" type="text" placeholder="https://erp.example.com" />
           </label>
-          <label>
+          <fieldset class="provision-credentials" data-terminal-credentials>
+            <legend>Sign in to fetch API Key/Secret (optional — or enter them manually below)</legend>
+            <label>
+              Username
+              <input id="provision-username" type="text" autocomplete="username" />
+            </label>
+            <label>
+              Password
+              <input id="provision-password" type="password" autocomplete="current-password" />
+            </label>
+            <div class="form-actions">
+              <button id="provision-credentials" type="button" class="secondary-button">Fetch Credentials</button>
+              <p id="provision-message" class="settings-message" role="status"></p>
+            </div>
+          </fieldset>
+          <label data-terminal-credentials>
             API Key
             <input id="api-key" name="apiKey" type="text" autocomplete="off" />
           </label>
-          <label>
+          <label data-terminal-credentials>
             API Secret
             <input id="api-secret" name="apiSecret" type="password" autocomplete="off" placeholder="Enter to save or replace" />
           </label>
@@ -286,8 +301,8 @@
             <h3>Server Connection</h3>
             <p class="card-meta">Set the ERPNext server URL and API credentials for this terminal. No cashier login or admin PIN required — this is meant to unblock first-time setup.</p>
             <label>Server URL<input id="quick-connect-url" type="text" placeholder="https://erp.example.com" /></label>
-            <label>API Key<input id="quick-connect-api-key" type="text" autocomplete="off" /></label>
-            <label>API Secret<input id="quick-connect-api-secret" type="password" autocomplete="off" placeholder="Enter to save or replace" /></label>
+            <label data-terminal-credentials>API Key<input id="quick-connect-api-key" type="text" autocomplete="off" /></label>
+            <label data-terminal-credentials>API Secret<input id="quick-connect-api-secret" type="password" autocomplete="off" placeholder="Enter to save or replace" /></label>
             <p id="quick-connect-message" class="settings-message"></p>
             <div class="form-actions">
               <button id="quick-connect-save" type="submit">Save &amp; Retry Connection</button>

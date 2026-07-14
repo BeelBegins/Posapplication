@@ -2,11 +2,20 @@ import { createPosCore, asRecord, textValue, unwrapFrappePayload, formatResponse
 import { mobileDatabase as db } from "./browser-database";
 import { createPlatformService } from "../platform/platform-service";
 import type { ProductId } from "../config/product-profile";
+import { authFetch } from "../core/auth-fetch";
+import { androidSecureStorage } from "./secure-storage";
+import { capacitorOAuthBrowser } from "./capacitor-oauth-browser";
+import { OAuthPkceCredentialProvider } from "./credential-provider";
+import { DeviceEnrollmentService } from "./device-enrollment";
 
 declare const __APP_VERSION__: string;
 declare const __APP_PRODUCT__: ProductId;
 
-const core = createPosCore({ db, fetch: globalThis.fetch.bind(globalThis) });
+const platformFetch = globalThis.fetch.bind(globalThis);
+const enrollmentService = new DeviceEnrollmentService(androidSecureStorage, db, platformFetch);
+const credentials = new OAuthPkceCredentialProvider(() => enrollmentService.oauthConfig(), androidSecureStorage, capacitorOAuthBrowser, platformFetch);
+const coreDeps = { db, fetch: platformFetch, credentials };
+const core = createPosCore(coreDeps);
 const runtimeInfo = createPlatformService("capacitor", __APP_PRODUCT__);
 const catalogListeners: Array<(message: string) => void> = [];
 const completeSaleListeners: Array<() => void> = [];
@@ -16,7 +25,6 @@ let pendingAdminAuthorization: { token: string; action: string; cashierUser: str
 
 function settings() { return db.loadSettings(); }
 function baseUrl(): string { return new URL(settings().erpnextUrl).toString().replace(/\/+$/, ""); }
-function authHeaders(json=false): Record<string,string> { const s=settings();return {Authorization:`token ${s.apiKey}:${s.apiSecret}`,...(json?{"Content-Type":"application/json"}:{})}; }
 function remembered(): string[] { try{return JSON.parse(db.getMeta("mobile_cashiers")||"[]") as string[];}catch{return[];} }
 function remember(user:string): void { const all=[user,...remembered().filter(x=>x!==user)].slice(0,10);db.setMeta("mobile_cashiers",JSON.stringify(all)); }
 function cashierKey(user:string): string { return `mobile_cashier_${settings().terminalId.toLowerCase()}_${settings().posProfile.toLowerCase()}_${user.trim().toLowerCase()}`; }
@@ -25,14 +33,15 @@ async function pinHash(pin:string): Promise<string> { const data=new TextEncoder
 const emptyLogin = () => ({success:false,user:"",fullName:"",roles:[] as string[],allowedPosProfiles:[] as string[],defaultPosProfile:"",canStartShift:false,canRefund:false,canCloseShift:false,canOfflineSale:false,offlineLoginExpiresAt:"",requirePinSetup:false,error:null as string|null});
 
 async function cashierLogin(input:Record<string,unknown>) {
-  const username=textValue(input,"username").trim().toLowerCase(),password=textValue(input,"password"),pin=textValue(input,"offlinePin"),confirm=textValue(input,"offlinePinConfirm");
-  if(!username||!password)return{...emptyLogin(),error:"Cashier username and password are required."};
+  const pin=textValue(input,"offlinePin"),confirm=textValue(input,"offlinePinConfirm");
   try{
-    const response=await fetch(`${baseUrl()}/api/method/aimatic.offline_pos.api.pos_cashier_login`,{method:"POST",headers:authHeaders(true),body:JSON.stringify({username,password,terminal_id:settings().terminalId,pos_profile:settings().posProfile})});
+    if(!await credentials.getAccessToken())await credentials.login();
+    const hardwareId=db.getOrCreateHardwareId();
+    const response=await authFetch(coreDeps,`${baseUrl()}/api/method/aimatic.offline_pos.api.get_cashier_context`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({hardware_id:hardwareId,pos_profile:settings().posProfile})});
     const rawBody=await response.text();let parsed:Record<string,unknown>={};try{parsed=JSON.parse(rawBody) as Record<string,unknown>;}catch{/* handled below */}
     const payload=unwrapFrappePayload(parsed);if(!response.ok)return{...emptyLogin(),error:formatResponseError(response.status,response.statusText,rawBody)};
     if(payload.success===false)return{...emptyLogin(),error:textValue(payload,"error")||"Cashier login failed."};
-    const user=(textValue(payload,"user")||textValue(payload,"email")||username).toLowerCase();const canOfflineSale=payload.can_offline_sale===true;const cached=db.getMeta(cashierKey(user));
+    const user=(textValue(payload,"user")||textValue(payload,"email")).toLowerCase();const canOfflineSale=payload.can_offline_sale===true;const cached=db.getMeta(cashierKey(user));
     if(canOfflineSale&&!cached&&!pin)return{...emptyLogin(),requirePinSetup:true,error:"Create and confirm Offline Cashier PIN to enable offline selling for this cashier."};
     if(pin!==confirm)return{...emptyLogin(),requirePinSetup:true,error:"Offline Cashier PIN confirmation does not match."};
     const result={success:true,user,fullName:textValue(payload,"full_name")||user,roles:Array.isArray(payload.roles)?payload.roles.map(String):[],allowedPosProfiles:Array.isArray(payload.allowed_pos_profiles)?payload.allowed_pos_profiles.map(String):[],defaultPosProfile:textValue(payload,"default_pos_profile"),canStartShift:Boolean(payload.can_start_shift),canRefund:Boolean(payload.can_refund),canCloseShift:Boolean(payload.can_close_shift),canOfflineSale,offlineLoginExpiresAt:textValue(payload,"offline_login_expires_at"),requirePinSetup:false,error:null as string|null,offlineCached:Boolean(cached||pin)};
@@ -49,7 +58,7 @@ async function cashierOfflineLogin(input:Record<string,unknown>) {
 }
 
 async function authorizeAdminAction(input:Record<string,unknown>) {
-  try{const response=await fetch(`${baseUrl()}/api/method/aimatic.offline_pos.api.authorize_pos_admin_action`,{method:"POST",headers:authHeaders(true),body:JSON.stringify({username:textValue(input,"username"),password:textValue(input,"password"),action:textValue(input,"action"),terminal_id:settings().terminalId})});const raw=await response.text();let body:Record<string,unknown>={};try{body=JSON.parse(raw) as Record<string,unknown>;}catch{}const payload=unwrapFrappePayload(body);const token=textValue(payload,"token");if(response.ok&&token){pendingAdminAuthorization={token,action:textValue(input,"action"),cashierUser:textValue(input,"cashierUser").toLowerCase(),expiresAt:Date.now()+5*60_000};return{ok:true,token,error:null};}return{ok:false,token:"",error:textValue(payload,"error")||formatResponseError(response.status,response.statusText,raw)};}catch(e){return{ok:false,token:"",error:e instanceof Error?e.message:"Authorization failed."};}
+  try{const response=await authFetch(coreDeps,`${baseUrl()}/api/method/aimatic.offline_pos.api.authorize_pos_admin_action`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username:textValue(input,"username"),password:textValue(input,"password"),action:textValue(input,"action"),terminal_id:settings().terminalId})});const raw=await response.text();let body:Record<string,unknown>={};try{body=JSON.parse(raw) as Record<string,unknown>;}catch{}const payload=unwrapFrappePayload(body);const token=textValue(payload,"token");if(response.ok&&token){pendingAdminAuthorization={token,action:textValue(input,"action"),cashierUser:textValue(input,"cashierUser").toLowerCase(),expiresAt:Date.now()+5*60_000};return{ok:true,token,error:null};}return{ok:false,token:"",error:textValue(payload,"error")||formatResponseError(response.status,response.statusText,raw)};}catch(e){return{ok:false,token:"",error:e instanceof Error?e.message:"Authorization failed."};}
 }
 
 const posAPI = {
@@ -82,3 +91,48 @@ const posAPI = {
 document.documentElement.classList.add("android-app");
 document.documentElement.dataset.platform=runtimeInfo.platform;
 document.documentElement.dataset.product=runtimeInfo.product;
+
+function removeTerminalCredentialUi(): void {
+  document.querySelectorAll<HTMLElement>("[data-terminal-credentials]").forEach((element) => element.remove());
+  for (const selector of ["#api-key", "#api-secret", "#quick-connect-api-key", "#quick-connect-api-secret"]) {
+    document.querySelector<HTMLElement>(selector)?.closest("label")?.remove();
+  }
+  const quickDescription = document.querySelector<HTMLElement>("#quick-connect-form .card-meta");
+  if (quickDescription) quickDescription.textContent = "Android devices connect through one-time enrollment and per-cashier ERPNext sign-in.";
+  const quickButton = document.querySelector<HTMLButtonElement>("#cashier-login-quick-connect");
+  if (quickButton) quickButton.hidden = true;
+  const username = document.querySelector<HTMLInputElement>("#cashier-username")?.closest("label");
+  const password = document.querySelector<HTMLInputElement>("#cashier-password")?.closest("label");
+  if (username) username.classList.add("android-online-credential");
+  if (password) password.classList.add("android-online-credential");
+  const submit = document.querySelector<HTMLButtonElement>("#cashier-login-submit");
+  if (submit) submit.textContent = "Sign in with ERPNext";
+}
+
+function enrollmentScreen(error = ""): void {
+  document.querySelector<HTMLElement>(".app-shell")?.setAttribute("hidden", "");
+  let screen = document.querySelector<HTMLElement>("#device-enrollment-screen");
+  if (!screen) {
+    screen = document.createElement("section");
+    screen.id = "device-enrollment-screen";
+    screen.className = "device-enrollment-screen";
+    document.body.append(screen);
+  }
+  screen.innerHTML = `<div class="device-enrollment-card"><p class="eyebrow">Secure Android setup</p><h1>Enroll this POS device</h1><p>A supervisor generates a one-time Device Enrollment QR in ERPNext. Scan it with a QR app and paste its value here.</p>${error?`<p class="settings-message">${error.replace(/[&<>"']/g,(c)=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]!))}</p>`:""}<form id="device-enrollment-form"><label>Enrollment QR value<textarea id="device-enrollment-value" rows="5" autocomplete="off" required></textarea></label><button class="primary-action" type="submit">Enroll device</button></form><small>No API key or API secret is stored in this APK.</small></div>`;
+  document.querySelector<HTMLFormElement>("#device-enrollment-form")!.onsubmit=async(event)=>{event.preventDefault();const button=document.querySelector<HTMLButtonElement>("#device-enrollment-form button")!;button.disabled=true;button.textContent="Enrolling…";try{await enrollmentService.redeem(document.querySelector<HTMLTextAreaElement>("#device-enrollment-value")!.value);location.reload();}catch(cause){enrollmentScreen(cause instanceof Error?cause.message:"Enrollment failed");}};
+}
+
+async function startAndroidRenderer(): Promise<void> {
+  try {
+    if (!await enrollmentService.load()) { enrollmentScreen(); return; }
+  } catch (error) {
+    enrollmentScreen(error instanceof Error ? error.message : "Secure storage is unavailable.");
+    return;
+  }
+  removeTerminalCredentialUi();
+  const renderer = document.createElement("script");
+  renderer.src = "renderer.js";
+  document.body.append(renderer);
+}
+
+void startAndroidRenderer();

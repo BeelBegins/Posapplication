@@ -126,6 +126,40 @@ function missingCashierLoginEndpointMessage(): string {
   return "Cashier login requires server endpoint aimatic.offline_pos.api.pos_cashier_login";
 }
 
+// Terminal setup: exchange an ERPNext username+password for that user's api_key/api_secret,
+// so first-run setup never requires copying keys out of Frappe's User settings. No apiKey/apiSecret
+// is used or required for this call (unlike posCashierLogin) — the endpoint is allow_guest on the
+// server, gated by the password check itself.
+async function provisionTerminalCredentials(input: Record<string, unknown>): Promise<{ success: boolean; apiKey: string; apiSecret: string; error: string | null }> {
+  const erpnextUrl = textValue(input, "erpnextUrl");
+  const username = textValue(input, "username");
+  const password = textValue(input, "password");
+  const empty = { success: false, apiKey: "", apiSecret: "", error: null as string | null };
+  if (!erpnextUrl || !username || !password) return { ...empty, error: "ERPNext URL, username, and password are required." };
+  let base: URL;
+  try { base = new URL(normalizeErpnextUrl(erpnextUrl)); } catch { return { ...empty, error: "ERPNext URL is invalid." }; }
+  if (base.protocol !== "https:") return { ...empty, error: "HTTPS is required for terminal credential provisioning." };
+  const endpoint = `${base.toString().replace(/\/+$/, "")}/api/method/aimatic.offline_pos.api.provision_terminal_credentials`;
+  try {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password })
+    });
+    const rawBody = await response.text();
+    let parsed: { message?: unknown } = {};
+    try { parsed = JSON.parse(rawBody) as { message?: unknown }; } catch { /* non-JSON */ }
+    const payload = asRecord(parsed.message) ?? {};
+    if (!response.ok) return { ...empty, error: formatResponseError(response.status, response.statusText, rawBody) };
+    const apiKey = textValue(payload, "api_key");
+    const apiSecret = textValue(payload, "api_secret");
+    if (!apiKey || !apiSecret) return { ...empty, error: "Server returned no credentials." };
+    return { success: true, apiKey, apiSecret, error: null };
+  } catch (error) {
+    return { ...empty, error: error instanceof Error ? error.message : "Unable to reach ERPNext server." };
+  }
+}
+
 async function posCashierLogin(input: Record<string, unknown>): Promise<CashierLoginResult> {
   const settings = loadSettings();
   const username = normalizeCashierUser(textValue(input, "username"));
@@ -660,6 +694,7 @@ app.whenReady().then(() => {
     return result;
   });
   ipcMain.handle("settings:load", () => getSettingsForRenderer());
+  ipcMain.handle("settings:provisionCredentials", (_event, input) => provisionTerminalCredentials(asRecord(input) ?? {}));
   ipcMain.handle("printer:list", async () => {
     const win = mainWindowRef;
     if (!win || win.isDestroyed()) return [];

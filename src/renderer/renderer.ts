@@ -11,6 +11,7 @@ interface PosAPI {
   onFocusScanner: (callback: () => void) => void;
   saveSettings: (settings: AppSettings) => Promise<void>;
   loadSettings: () => Promise<RendererSettings>;
+  provisionCredentials: (input: { erpnextUrl: string; username: string; password: string }) => Promise<{ success: boolean; apiKey: string; apiSecret: string; error: string | null }>;
   listPrinters: () => Promise<{ name: string; displayName: string }[]>;
   testServer: () => Promise<{ connected: boolean }>;
   testLogin: () => Promise<{ success: boolean; loggedUser: string | null }>;
@@ -192,6 +193,10 @@ interface RendererSettings {
 
 interface Window {
   posAPI: PosAPI;
+}
+
+function isCapacitorRuntime(): boolean {
+  return document.documentElement.dataset.platform === "capacitor";
 }
 
 async function showDatabaseStatus(): Promise<void> {
@@ -2639,9 +2644,10 @@ async function runStartup(reason: string = "startup"): Promise<void> {
     setStep("settings", "running"); if (progress) progress.textContent = "Loading settings…";
     await loadSettingsIntoForm();
     const saved = await window.posAPI.loadSettings();
-    if (!saved.erpnextUrl || !saved.apiKey || !saved.hasApiSecret || !saved.posProfile) {
+    const missingAuthentication = isCapacitorRuntime() ? false : (!saved.apiKey || !saved.hasApiSecret);
+    if (!saved.erpnextUrl || missingAuthentication || !saved.posProfile) {
       setStep("settings", "failed"); setOverallBadge("Setup Required", "warn");
-      if (progress) progress.textContent = "Terminal settings required"; showSettingsMessage("Enter ERPNext URL, API Key/Secret and select a POS Profile, then Save and Complete Setup."); showScreen("settings"); return;
+      if (progress) progress.textContent = "Terminal settings required"; showSettingsMessage(isCapacitorRuntime() ? "Enroll this Android device for a POS Profile." : "Enter ERPNext URL, API Key/Secret and select a POS Profile, then Save and Complete Setup."); showScreen("settings"); return;
     }
     setStep("settings", "complete");
     // 2) Server (silent)
@@ -2666,7 +2672,10 @@ async function runStartup(reason: string = "startup"): Promise<void> {
     // 3) Authenticate
     setStep("auth", "running"); if (progress) progress.textContent = "Authenticating…";
     const login = await window.posAPI.testLogin();
-    if (!login.success) { setStep("auth", "failed"); setOverallBadge("Action Required", "err"); if (progress) progress.textContent = "Authentication failed"; showSettingsMessage("Authentication failed. The API key or secret is invalid."); showLoginResult("Authentication failed — check API Key/Secret."); showScreen("settings"); return; }
+    if (!login.success) {
+      if (isCapacitorRuntime()) { setStep("auth", "pending"); setOverallBadge("Cashier Login Required", "info"); if (progress) progress.textContent = "Cashier login required"; await showCashierLogin("Sign in securely with ERPNext."); return; }
+      setStep("auth", "failed"); setOverallBadge("Action Required", "err"); if (progress) progress.textContent = "Authentication failed"; showSettingsMessage("Authentication failed. The API key or secret is invalid."); showLoginResult("Authentication failed — check API Key/Secret."); showScreen("settings"); return;
+    }
     authenticatedUser = login.loggedUser ?? ""; setStep("auth", "complete"); setLoggedUser(authenticatedUser); showLoginResult(`Logged in as ${authenticatedUser}`);
     // 4) Profiles + selected profile
     setStep("profile", "running"); if (progress) progress.textContent = "Loading POS Profile…";
@@ -2734,11 +2743,10 @@ async function populatePrinterDropdown(savedValue: string): Promise<void> {
 
 function populateSettingsForm(settings: RendererSettings): void {
   (document.querySelector<HTMLInputElement>("#erpnext-url") as HTMLInputElement).value = settings.erpnextUrl;
-  (document.querySelector<HTMLInputElement>("#api-key") as HTMLInputElement).value = settings.apiKey;
-  (document.querySelector<HTMLInputElement>("#api-secret") as HTMLInputElement).value = "";
-  (document.querySelector<HTMLInputElement>("#api-secret") as HTMLInputElement).placeholder = settings.hasApiSecret
-    ? "Saved securely; enter to replace"
-    : "Enter to save";
+  const apiKeyInput = document.querySelector<HTMLInputElement>("#api-key");
+  const apiSecretInput = document.querySelector<HTMLInputElement>("#api-secret");
+  if (apiKeyInput) apiKeyInput.value = settings.apiKey;
+  if (apiSecretInput) { apiSecretInput.value = ""; apiSecretInput.placeholder = settings.hasApiSecret ? "Saved securely; enter to replace" : "Enter to save"; }
   (document.querySelector<HTMLInputElement>("#terminal-id") as HTMLInputElement).value = settings.terminalId;
   const profileSelect = document.querySelector<HTMLSelectElement>("#pos-profile") as HTMLSelectElement;
   profileSelect.dataset.savedValue = settings.posProfile;
@@ -2911,6 +2919,14 @@ async function showCashierLogin(message = ""): Promise<void> {
   const online = isOnline();
   const remembered = await window.posAPI.getRememberedCashiers().catch(() => []);
   const usernameInput = document.querySelector<HTMLInputElement>("#cashier-username");
+  const passwordInput = document.querySelector<HTMLInputElement>("#cashier-password");
+  const useOAuth = online && isCapacitorRuntime();
+  const usernameRow = usernameInput?.closest<HTMLElement>("label");
+  const passwordRow = passwordInput?.closest<HTMLElement>("label");
+  if (usernameRow) usernameRow.hidden = useOAuth;
+  if (passwordRow) passwordRow.hidden = useOAuth;
+  const loginButton = document.querySelector<HTMLButtonElement>("#cashier-login-submit");
+  if (loginButton) loginButton.textContent = useOAuth ? "Sign in with ERPNext" : "Login";
   const options = document.querySelector<HTMLDataListElement>("#cashier-email-options");
   if (options) options.replaceChildren(...remembered.map((email) => {
     const option = document.createElement("option");
@@ -2957,6 +2973,7 @@ async function continueAfterCashierLogin(): Promise<void> {
     showScreen("pos");
     return;
   }
+  if (isCapacitorRuntime()) { await runPosBootstrap("oauth-cashier-login"); return; }
   const ok = await validateSession("cashier-login");
   updatePosHeader(); setupCompleted = true;
   void markDataAvailabilityFromCache(); startBackgroundSync(); void renderSyncStatus(); void updateOfflineUi();
@@ -2977,14 +2994,15 @@ async function submitCashierLogin(): Promise<void> {
   const offlinePin = offlinePinInput?.value ?? "";
   const offlinePinConfirm = offlinePinConfirmInput?.value ?? "";
   const online = isOnline();
+  const useOAuth = online && isCapacitorRuntime();
   const sendPin = online && cashierPinMode !== "login";
-  if (!username) { if (msg) msg.textContent = "Enter cashier username."; return; }
-  if (online && !password) { if (msg) msg.textContent = "Enter cashier username and password."; return; }
+  if (!useOAuth && !username) { if (msg) msg.textContent = "Enter cashier username."; return; }
+  if (online && !useOAuth && !password) { if (msg) msg.textContent = "Enter cashier username and password."; return; }
   if (sendPin && !offlinePin) { if (msg) msg.textContent = "Enter and confirm the Offline Cashier PIN."; return; }
   if (sendPin && offlinePin !== offlinePinConfirm) { if (msg) msg.textContent = "Offline Cashier PIN confirmation does not match."; return; }
   if (!online && !offlinePin) { if (msg) msg.textContent = "Enter cashier username and offline PIN."; return; }
   if (button) button.disabled = true;
-  if (msg) msg.textContent = online ? "Verifying cashier..." : "Checking offline cashier PIN...";
+  if (msg) msg.textContent = useOAuth ? "Opening secure ERPNext sign in…" : online ? "Verifying cashier..." : "Checking offline cashier PIN...";
   try {
     const result = online
       ? await window.posAPI.cashierLogin({ username, password, offlinePin: sendPin ? offlinePin : "", offlinePinConfirm: sendPin ? offlinePinConfirm : "" })
@@ -3206,7 +3224,7 @@ async function openSettingsIfAuthorized(): Promise<void> {
   if (await requestSettingsAuthorization()) showScreen("settings");
 }
 
-window.addEventListener("DOMContentLoaded", () => {
+function initializeRenderer(): void {
   void showDatabaseStatus();
   void loadPosProfileCacheStatus();
   void loadSettingsIntoForm();
@@ -3336,6 +3354,40 @@ window.addEventListener("DOMContentLoaded", () => {
     } catch { const status = document.querySelector<HTMLElement>("#pos-server-status"); if (status) status.textContent = "Reconnecting"; prevServerConnected = false; void updateOfflineUi(); } }, 30_000);
   // Revalidate the POS session every 60 seconds while online.
   window.setInterval(() => { if (isOnline()) void revalidateLive("interval"); }, 60_000);
+
+  // Fetch API Key/Secret via ERPNext username+password instead of copying them out of Frappe's
+  // User settings. Only fills the fields — the existing Save and Complete Setup flow still applies.
+  document.querySelector<HTMLButtonElement>("#provision-credentials")?.addEventListener("click", async () => {
+    const button = document.querySelector<HTMLButtonElement>("#provision-credentials");
+    const messageEl = document.querySelector<HTMLElement>("#provision-message");
+    const erpnextUrl = document.querySelector<HTMLInputElement>("#erpnext-url")?.value.trim() ?? "";
+    const username = document.querySelector<HTMLInputElement>("#provision-username")?.value.trim() ?? "";
+    const password = document.querySelector<HTMLInputElement>("#provision-password")?.value ?? "";
+    if (messageEl) { messageEl.textContent = ""; messageEl.classList.remove("error"); }
+    if (!erpnextUrl || !username || !password) {
+      if (messageEl) { messageEl.textContent = "ERPNext URL, username, and password are required."; messageEl.classList.add("error"); }
+      return;
+    }
+    if (button) { button.disabled = true; button.textContent = "Fetching..."; }
+    try {
+      const result = await window.posAPI.provisionCredentials({ erpnextUrl, username, password });
+      if (!result.success) {
+        if (messageEl) { messageEl.textContent = result.error || "Unable to fetch credentials."; messageEl.classList.add("error"); }
+        return;
+      }
+      const keyInput = document.querySelector<HTMLInputElement>("#api-key");
+      const secretInput = document.querySelector<HTMLInputElement>("#api-secret");
+      if (keyInput) keyInput.value = result.apiKey;
+      if (secretInput) secretInput.value = result.apiSecret;
+      const passwordInput = document.querySelector<HTMLInputElement>("#provision-password");
+      if (passwordInput) passwordInput.value = "";
+      if (messageEl) messageEl.textContent = "Credentials fetched — review and Save and Complete Setup below.";
+    } catch {
+      if (messageEl) { messageEl.textContent = "Unable to fetch credentials."; messageEl.classList.add("error"); }
+    } finally {
+      if (button) { button.disabled = false; button.textContent = "Fetch Credentials"; }
+    }
+  });
 
   // Primary action: Save and Complete Setup -> save settings, then run the one bootstrap chain.
   document.querySelector<HTMLFormElement>("#settings-form")?.addEventListener("submit", async (event) => {
@@ -3643,4 +3695,7 @@ window.addEventListener("DOMContentLoaded", () => {
     else if (event.key === "F10") { event.preventDefault(); event.stopPropagation(); (document.querySelector<HTMLButtonElement>("#cart-clear"))?.click(); }
     else if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); if (quantityDialog?.open) quantityDialog.close(); if(newCustomerDialog?.open) newCustomerDialog.close(); if(customerDialog?.open) customerDialog.close(); clearCartSearch(); focusCart(); }
   }, true);
-});
+}
+
+if (document.readyState === "loading") window.addEventListener("DOMContentLoaded", initializeRenderer, { once: true });
+else initializeRenderer();

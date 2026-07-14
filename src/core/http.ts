@@ -1,5 +1,6 @@
 import type { PosCoreDeps } from "./types";
 import { createApiClient } from "../api/client";
+import { hasUsableCredentials } from "./auth-fetch";
 
 // ----- Pure helpers, no deps needed — used both by the bound functions below and by
 // main.ts code not yet migrated into src/core/ (see the extraction plan). -----
@@ -67,7 +68,14 @@ export async function getResponseError(response: Response): Promise<string> {
 // ----- Functions bound to PosCoreDeps (need deps.fetch and/or deps.db) -----
 
 export function createHttpCore(deps: PosCoreDeps) {
-  function terminalClient(baseUrl: string, apiKey: string, apiSecret: string) {
+  // deps.credentials is set only on Android (mobile.ts); Electron (main.ts) never sets
+  // it, so this always takes the terminal-token branch there — same client, same
+  // headers, as before this function existed.
+  function client(baseUrl: string) {
+    if (deps.credentials) {
+      return createApiClient({ baseUrl, authentication: { mode: "user-session", credentials: deps.credentials }, fetch: deps.fetch });
+    }
+    const { apiKey, apiSecret } = deps.db.loadSettings();
     return createApiClient({ baseUrl, authentication: { mode: "terminal-token", apiKey, apiSecret }, fetch: deps.fetch });
   }
 
@@ -100,14 +108,13 @@ export function createHttpCore(deps: PosCoreDeps) {
   }
 
   async function testApiAuthentication(): Promise<{ success: boolean; loggedUser: string | null }> {
-    const { erpnextUrl, apiKey, apiSecret } = deps.db.loadSettings();
-
-    if (!erpnextUrl.trim() || !apiKey.trim() || !apiSecret.trim()) {
+    const settings = deps.db.loadSettings();
+    if (!hasUsableCredentials(deps, settings) || !settings.erpnextUrl.trim()) {
       return { success: false, loggedUser: null };
     }
 
     try {
-      new URL(erpnextUrl.trim());
+      new URL(settings.erpnextUrl.trim());
     } catch {
       return { success: false, loggedUser: null };
     }
@@ -116,8 +123,7 @@ export function createHttpCore(deps: PosCoreDeps) {
     const timeout = setTimeout(() => controller.abort(), 5_000);
 
     try {
-      const client = terminalClient(erpnextUrl, apiKey, apiSecret);
-      const response = await client.callMethod("frappe.auth.get_logged_user", {
+      const response = await client(settings.erpnextUrl).callMethod("frappe.auth.get_logged_user", {
         method: "GET",
         signal: controller.signal
       });
@@ -139,12 +145,12 @@ export function createHttpCore(deps: PosCoreDeps) {
     }
   }
 
-  async function fetchErpResource(baseUrl: string, apiKey: string, apiSecret: string, doctype: string, name: string): Promise<Record<string, unknown>> {
+  async function fetchErpResource(baseUrl: string, doctype: string, name: string): Promise<Record<string, unknown>> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5_000);
 
     try {
-      const response = await terminalClient(baseUrl, apiKey, apiSecret).getResource(doctype, name, {
+      const response = await client(baseUrl).getResource(doctype, name, {
         method: "GET",
         signal: controller.signal
       });
@@ -162,11 +168,11 @@ export function createHttpCore(deps: PosCoreDeps) {
     }
   }
 
-  async function getLoggedInUser(baseUrl: string, apiKey: string, apiSecret: string): Promise<string> {
+  async function getLoggedInUser(baseUrl: string): Promise<string> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5_000);
     try {
-      const response = await terminalClient(baseUrl, apiKey, apiSecret).callMethod("frappe.auth.get_logged_user", {
+      const response = await client(baseUrl).callMethod("frappe.auth.get_logged_user", {
         signal: controller.signal
       });
       if (!response.ok) {
@@ -182,10 +188,10 @@ export function createHttpCore(deps: PosCoreDeps) {
     }
   }
 
-  async function fetchPagedList(baseUrl: string, apiKey: string, apiSecret: string, doctype: string, fields: string[], filters?: unknown): Promise<Record<string, unknown>[]> {
+  async function fetchPagedList(baseUrl: string, doctype: string, fields: string[], filters?: unknown): Promise<Record<string, unknown>[]> {
     const rows: Record<string, unknown>[] = [];
     for (let start = 0; ; start += 500) {
-      const response = await terminalClient(baseUrl, apiKey, apiSecret).listResources(doctype, {
+      const response = await client(baseUrl).listResources(doctype, {
         fields, filters, limitStart: start, limitPageLength: 500
       });
       if (!response.ok) throw new Error(await getResponseError(response));

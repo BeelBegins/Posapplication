@@ -1,6 +1,7 @@
 import type { PosCoreDeps } from "./types";
 import type { createHttpCore } from "./http";
 import { asRecord, textValue, getResponseError } from "./http";
+import { authFetch, hasUsableCredentials } from "./auth-fetch";
 import { calculateFbrInvoice, calculateFbrItem } from "../domain/fbr-calculation";
 
 type FbrCalculatedRow =
@@ -32,14 +33,12 @@ export function createCatalogSyncCore(deps: PosCoreDeps, http: ReturnType<typeof
     return Number.isNaN(t) || (Date.now() - t) > 24 * 60 * 60 * 1000;
   }
 
-  async function fetchItemBarcodePages(baseUrl: string, apiKey: string, apiSecret: string, sendProgress: (message: string) => void, modifiedAfter?: string): Promise<Record<string, unknown>[]> {
+  async function fetchItemBarcodePages(baseUrl: string, sendProgress: (message: string) => void, modifiedAfter?: string): Promise<Record<string, unknown>[]> {
     const rows: Record<string, unknown>[] = [];
     for (let start = 0; ; start += 500) {
       const query = new URLSearchParams({ limit_start: String(start), limit_page_length: "500" });
       if (modifiedAfter) query.set("modified_after", modifiedAfter);
-      const response = await deps.fetch(`${baseUrl}/api/method/aimatic.offline_pos.api.get_item_barcodes?${query.toString()}`, {
-        headers: { Authorization: `token ${apiKey}:${apiSecret}` }
-      });
+      const response = await authFetch(deps, `${baseUrl}/api/method/aimatic.offline_pos.api.get_item_barcodes?${query.toString()}`);
       if (!response.ok) throw new Error(await getResponseError(response));
       const body = await response.json() as { message?: { rows?: unknown; has_more?: unknown } };
       const page = Array.isArray(body.message?.rows)
@@ -53,15 +52,13 @@ export function createCatalogSyncCore(deps: PosCoreDeps, http: ReturnType<typeof
 
   // UOM conversions via custom method (the POS user can't read the UOM Conversion Detail child doctype
   // over /api/resource). Supports delta via modified_after, paginated by next_start/has_more.
-  async function fetchUomConversionPages(baseUrl: string, apiKey: string, apiSecret: string, modifiedAfter?: string): Promise<Record<string, unknown>[]> {
+  async function fetchUomConversionPages(baseUrl: string, modifiedAfter?: string): Promise<Record<string, unknown>[]> {
     const rows: Record<string, unknown>[] = [];
     let start = 0;
     for (;;) {
       const query = new URLSearchParams({ limit_start: String(start), limit_page_length: "500" });
       if (modifiedAfter) query.set("modified_after", modifiedAfter);
-      const response = await deps.fetch(`${baseUrl}/api/method/aimatic.offline_pos.api.get_uom_conversions?${query.toString()}`, {
-        headers: { Authorization: `token ${apiKey}:${apiSecret}` }
-      });
+      const response = await authFetch(deps, `${baseUrl}/api/method/aimatic.offline_pos.api.get_uom_conversions?${query.toString()}`);
       if (!response.ok) throw new Error(await getResponseError(response));
       const body = await response.json() as { message?: { rows?: unknown; has_more?: unknown; next_start?: unknown } };
       const page = Array.isArray(body.message?.rows) ? body.message.rows.map(asRecord).filter((row): row is Record<string, unknown> => Boolean(row)) : [];
@@ -73,13 +70,13 @@ export function createCatalogSyncCore(deps: PosCoreDeps, http: ReturnType<typeof
 
   async function syncCustomers(mode: "auto" | "full" = "auto"): Promise<{ success: boolean; state: ReturnType<typeof deps.db.getCustomerSyncState>; error: string | null }> {
     const settings = deps.db.loadSettings();
-    if (!settings.erpnextUrl || !settings.apiKey || !settings.apiSecret) return { success: false, state: deps.db.getCustomerSyncState(), error: "ERPNext URL and API credentials are required." };
+    if (!hasUsableCredentials(deps, settings) || !settings.erpnextUrl) return { success: false, state: deps.db.getCustomerSyncState(), error: "ERPNext URL and API credentials are required." };
     try {
       const base = new URL(settings.erpnextUrl).toString().replace(/\/+$/, "");
       const cursor = deps.db.getMeta("customers_last_sync") ?? "";
       const doFull = mode === "full" || !cursor || isFullDue("customers_last_full_sync");
       const filters = doFull ? [["disabled", "=", 0]] : [["disabled", "=", 0], ["modified", ">", cursor]];
-      const customers = await http.fetchPagedList(base, settings.apiKey, settings.apiSecret, "Customer", ["name", "customer_name", "customer_group", "territory", "mobile_no", "email_id", "tax_id", "disabled", "modified"], filters);
+      const customers = await http.fetchPagedList(base, "Customer", ["name", "customer_name", "customer_group", "territory", "mobile_no", "email_id", "tax_id", "disabled", "modified"], filters);
       deps.db.upsertCustomers(customers);
       const wm = maxModified(customers); if (wm) deps.db.setMeta("customers_last_sync", wm);
       if (doFull) deps.db.setMeta("customers_last_full_sync", new Date().toISOString());
@@ -90,10 +87,10 @@ export function createCatalogSyncCore(deps: PosCoreDeps, http: ReturnType<typeof
   async function loadCustomer(name: string): Promise<{ customer: Record<string, unknown> | null; cached: boolean; error: string | null }> {
     const settings = deps.db.loadSettings();
     const cached = deps.db.getCachedCustomer(name);
-    if (!settings.erpnextUrl || !settings.apiKey || !settings.apiSecret) return { customer: cached, cached: true, error: cached ? null : "Customer not cached." };
+    if (!hasUsableCredentials(deps, settings) || !settings.erpnextUrl) return { customer: cached, cached: true, error: cached ? null : "Customer not cached." };
     try {
       const base = new URL(settings.erpnextUrl).toString().replace(/\/+$/, "");
-      const customer = await http.fetchErpResource(base, settings.apiKey, settings.apiSecret, "Customer", name);
+      const customer = await http.fetchErpResource(base, "Customer", name);
       deps.db.cacheCustomer(name, customer);
       return { customer, cached: false, error: null };
     } catch (error) { return { customer: cached, cached: true, error: error instanceof Error ? error.message : "Unable to load customer." }; }
@@ -101,12 +98,12 @@ export function createCatalogSyncCore(deps: PosCoreDeps, http: ReturnType<typeof
 
   async function getCustomerCreationOptions(): Promise<{ groups: string[]; territories: string[]; error: string | null }> {
     const settings = deps.db.loadSettings();
-    if (!settings.erpnextUrl || !settings.apiKey || !settings.apiSecret) return { groups: [], territories: [], error: "Online connection required to create a customer." };
+    if (!hasUsableCredentials(deps, settings) || !settings.erpnextUrl) return { groups: [], territories: [], error: "Online connection required to create a customer." };
     try {
       const base = new URL(settings.erpnextUrl).toString().replace(/\/+$/, "");
       const [groups, territories] = await Promise.all([
-        http.fetchPagedList(base, settings.apiKey, settings.apiSecret, "Customer Group", ["name"], [["is_group", "=", 0]]),
-        http.fetchPagedList(base, settings.apiKey, settings.apiSecret, "Territory", ["name"], [["is_group", "=", 0]])
+        http.fetchPagedList(base, "Customer Group", ["name"], [["is_group", "=", 0]]),
+        http.fetchPagedList(base, "Territory", ["name"], [["is_group", "=", 0]])
       ]);
       return { groups: groups.map((x) => textValue(x, "name")).filter(Boolean), territories: territories.map((x) => textValue(x, "name")).filter(Boolean), error: null };
     } catch (error) { return { groups: [], territories: [], error: error instanceof Error ? error.message : "Unable to load customer options." }; }
@@ -114,7 +111,7 @@ export function createCatalogSyncCore(deps: PosCoreDeps, http: ReturnType<typeof
 
   async function createCustomer(input: Record<string, unknown>): Promise<{ customer: Record<string, unknown> | null; error: string | null }> {
     const settings = deps.db.loadSettings();
-    if (!settings.erpnextUrl || !settings.apiKey || !settings.apiSecret) return { customer: null, error: "Online connection required to create a customer." };
+    if (!hasUsableCredentials(deps, settings) || !settings.erpnextUrl) return { customer: null, error: "Online connection required to create a customer." };
     try {
       const base = new URL(settings.erpnextUrl).toString().replace(/\/+$/, "");
       const rawMobile = String(input.mobile_no ?? "").trim();
@@ -130,9 +127,9 @@ export function createCatalogSyncCore(deps: PosCoreDeps, http: ReturnType<typeof
       };
       if (priceList) payload.default_price_list = priceList;
       if (!payload.customer_name) return { customer: null, error: "Customer Name is required." };
-      const response = await deps.fetch(`${base}/api/resource/Customer`, {
+      const response = await authFetch(deps, `${base}/api/resource/Customer`, {
         method: "POST",
-        headers: { Authorization: `token ${settings.apiKey}:${settings.apiSecret}`, "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       });
       if (!response.ok) {
@@ -157,7 +154,7 @@ export function createCatalogSyncCore(deps: PosCoreDeps, http: ReturnType<typeof
     const priceList = textValue(profile, "selling_price_list");
     const warehouse = textValue(profile, "warehouse");
     const currency = textValue(profile, "currency");
-    if (!settings.erpnextUrl || !settings.apiKey || !settings.apiSecret || !priceList || !warehouse || !currency) {
+    if (!hasUsableCredentials(deps, settings) || !settings.erpnextUrl || !priceList || !warehouse || !currency) {
       return { success: false, totals: deps.db.getCatalogTotals(), barcodeError: null, error: "Cached POS Profile configuration is required." };
     }
     const itemsCursor = deps.db.getMeta("items_last_sync") ?? "";
@@ -167,16 +164,16 @@ export function createCatalogSyncCore(deps: PosCoreDeps, http: ReturnType<typeof
     try {
       const baseUrl = new URL(settings.erpnextUrl).toString().replace(/\/+$/, "");
       sendProgress(doFull ? "Full sync: items..." : "Delta sync: items...");
-      const items = await http.fetchPagedList(baseUrl, settings.apiKey, settings.apiSecret, "Item", ["name", "item_name", "item_group", "stock_uom", "is_stock_item", "is_sales_item", "disabled", "has_batch_no", "has_serial_no", "modified"], doFull ? undefined : [["modified", ">", itemsCursor]]);
+      const items = await http.fetchPagedList(baseUrl, "Item", ["name", "item_name", "item_group", "stock_uom", "is_stock_item", "is_sales_item", "disabled", "has_batch_no", "has_serial_no", "modified"], doFull ? undefined : [["modified", ">", itemsCursor]]);
       sendProgress(`Items: ${items.length}. Syncing prices...`);
-      const prices = await http.fetchPagedList(baseUrl, settings.apiKey, settings.apiSecret, "Item Price", ["name", "item_code", "uom", "price_list_rate", "currency", "valid_from", "valid_upto", "modified"], since([["price_list", "=", priceList], ["selling", "=", 1]]));
+      const prices = await http.fetchPagedList(baseUrl, "Item Price", ["name", "item_code", "uom", "price_list_rate", "currency", "valid_from", "valid_upto", "modified"], since([["price_list", "=", priceList], ["selling", "=", 1]]));
       sendProgress(`Prices: ${prices.length}. Syncing stock...`);
-      const stock = await http.fetchPagedList(baseUrl, settings.apiKey, settings.apiSecret, "Bin", ["item_code", "warehouse", "actual_qty", "reserved_qty", "projected_qty", "modified"], since([["warehouse", "=", warehouse]]));
+      const stock = await http.fetchPagedList(baseUrl, "Bin", ["item_code", "warehouse", "actual_qty", "reserved_qty", "projected_qty", "modified"], since([["warehouse", "=", warehouse]]));
       let conversions: Record<string, unknown>[] = [];
       let conversionError: string | null = null;
       try {
         sendProgress("Syncing UOM conversions...");
-        conversions = await fetchUomConversionPages(baseUrl, settings.apiKey, settings.apiSecret, doFull ? undefined : (itemsCursor || undefined));
+        conversions = await fetchUomConversionPages(baseUrl, doFull ? undefined : (itemsCursor || undefined));
       } catch (error) {
         conversionError = error instanceof Error ? error.message : "Unable to sync UOM conversions.";
       }
@@ -184,7 +181,7 @@ export function createCatalogSyncCore(deps: PosCoreDeps, http: ReturnType<typeof
       let barcodeError: string | null = null;
       try {
         sendProgress("Syncing barcodes...");
-        barcodes = await fetchItemBarcodePages(baseUrl, settings.apiKey, settings.apiSecret, sendProgress, doFull ? undefined : (barcodesCursor || undefined));
+        barcodes = await fetchItemBarcodePages(baseUrl, sendProgress, doFull ? undefined : (barcodesCursor || undefined));
       } catch (error) {
         barcodeError = error instanceof Error ? error.message : "Unable to sync Item Barcode.";
       }
@@ -205,7 +202,7 @@ export function createCatalogSyncCore(deps: PosCoreDeps, http: ReturnType<typeof
 
   async function syncFbrConfig(mode: "auto" | "full" = "auto"): Promise<{ success: boolean; state: ReturnType<typeof deps.db.getFbrSyncState>; error: string | null }> {
     const settings = deps.db.loadSettings();
-    if (!settings.erpnextUrl || !settings.apiKey || !settings.apiSecret) return { success: false, state: deps.db.getFbrSyncState(), error: "Online connection required for FBR configuration sync." };
+    if (!hasUsableCredentials(deps, settings) || !settings.erpnextUrl) return { success: false, state: deps.db.getFbrSyncState(), error: "Online connection required for FBR configuration sync." };
     try {
       const base = new URL(settings.erpnextUrl).toString().replace(/\/+$/, "");
       const cursor = deps.db.getMeta("fbr_config_last_sync") ?? "";
@@ -216,7 +213,7 @@ export function createCatalogSyncCore(deps: PosCoreDeps, http: ReturnType<typeof
       for (;;) {
         const q = new URLSearchParams({ limit_start: String(start), limit_page_length: "500" });
         if (!doFull && cursor) q.set("modified_after", cursor);
-        const r = await deps.fetch(`${base}/api/method/aimatic.offline_pos.api.get_pos_fbr_item_config?${q}`, { headers: { Authorization: `token ${settings.apiKey}:${settings.apiSecret}` } });
+        const r = await authFetch(deps, `${base}/api/method/aimatic.offline_pos.api.get_pos_fbr_item_config?${q}`);
         if (!r.ok) throw new Error(await getResponseError(r));
         const b = await r.json() as { message?: unknown };
         const m = asRecord(b.message);

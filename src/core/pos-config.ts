@@ -1,6 +1,7 @@
 import type { PosCoreDeps, PosProfileDetails, PosProfileOption, PosConfigurationSummary } from "./types";
 import type { createHttpCore } from "./http";
 import { asRecord, textValue, unwrapFrappePayload, getResponseError } from "./http";
+import { authFetch, hasUsableCredentials } from "./auth-fetch";
 
 function summarizePosConfiguration(configuration: Record<string, unknown>): PosConfigurationSummary | null {
   const profile = asRecord(configuration.pos_profile);
@@ -39,7 +40,7 @@ function summarizePosConfiguration(configuration: Record<string, unknown>): PosC
 export function createPosConfigCore(deps: PosCoreDeps, http: ReturnType<typeof createHttpCore>) {
   async function previewCart(input: Record<string, unknown>): Promise<{ preview: Record<string, unknown> | null; error: string | null }> {
     const settings = deps.db.loadSettings();
-    if (!settings.erpnextUrl || !settings.apiKey || !settings.apiSecret) return { preview: null, error: "Offline Estimate — Not Server Validated" };
+    if (!hasUsableCredentials(deps, settings) || !settings.erpnextUrl) return { preview: null, error: "Offline Estimate — Not Server Validated" };
     try {
       const base = new URL(settings.erpnextUrl).toString().replace(/\/+$/, "");
       const payload: Record<string, unknown> = {
@@ -51,9 +52,9 @@ export function createPosConfigCore(deps: PosCoreDeps, http: ReturnType<typeof c
       if (input.redeem_loyalty_points) payload.redeem_loyalty_points = input.redeem_loyalty_points;
       if (input.loyalty_points) payload.loyalty_points = input.loyalty_points;
       if (input.gift_voucher_code) payload.gift_voucher_code = String(input.gift_voucher_code);
-      const response = await deps.fetch(`${base}/api/method/aimatic.offline_pos.api.preview_cart`, {
+      const response = await authFetch(deps, `${base}/api/method/aimatic.offline_pos.api.preview_cart`, {
         method: "POST",
-        headers: { Authorization: `token ${settings.apiKey}:${settings.apiSecret}`, "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       });
       if (!response.ok) return { preview: null, error: await getResponseError(response) };
@@ -68,19 +69,19 @@ export function createPosConfigCore(deps: PosCoreDeps, http: ReturnType<typeof c
 
   async function syncPosConfiguration(): Promise<{ success: boolean; summary: PosConfigurationSummary | null; error: string | null }> {
     const settings = deps.db.loadSettings();
-    const { erpnextUrl, apiKey, apiSecret, posProfile } = settings;
-    if (!erpnextUrl.trim() || !apiKey.trim() || !apiSecret.trim() || !posProfile.trim()) {
-      return { success: false, summary: null, error: "ERPNext URL, API Key, API Secret, and POS Profile are required." };
+    const { erpnextUrl, posProfile } = settings;
+    if (!hasUsableCredentials(deps, settings) || !erpnextUrl.trim() || !posProfile.trim()) {
+      return { success: false, summary: null, error: "ERPNext URL, credentials, and POS Profile are required." };
     }
 
     try {
       const baseUrl = new URL(erpnextUrl.trim()).toString().replace(/\/+$/, "");
-      const profile = await http.fetchErpResource(baseUrl, apiKey, apiSecret, "POS Profile", posProfile);
+      const profile = await http.fetchErpResource(baseUrl, "POS Profile", posProfile);
       const companyName = textValue(profile, "company");
       const taxTemplateName = textValue(profile, "taxes_and_charges");
-      const company = companyName ? await http.fetchErpResource(baseUrl, apiKey, apiSecret, "Company", companyName) : null;
+      const company = companyName ? await http.fetchErpResource(baseUrl, "Company", companyName) : null;
       const taxTemplate = taxTemplateName
-        ? await http.fetchErpResource(baseUrl, apiKey, apiSecret, "Sales Taxes and Charges Template", taxTemplateName)
+        ? await http.fetchErpResource(baseUrl, "Sales Taxes and Charges Template", taxTemplateName)
         : null;
       const paymentNames = [...new Set(
         (Array.isArray(profile.payments) ? profile.payments : [])
@@ -89,7 +90,7 @@ export function createPosConfigCore(deps: PosCoreDeps, http: ReturnType<typeof c
           .filter(Boolean)
       )];
       const paymentModes = await Promise.all(
-        paymentNames.map((paymentName) => http.fetchErpResource(baseUrl, apiKey, apiSecret, "Mode of Payment", paymentName))
+        paymentNames.map((paymentName) => http.fetchErpResource(baseUrl, "Mode of Payment", paymentName))
       );
       const syncedAt = new Date().toISOString();
       const configuration: Record<string, unknown> = {
@@ -117,10 +118,11 @@ export function createPosConfigCore(deps: PosCoreDeps, http: ReturnType<typeof c
   }
 
   async function loadAvailablePosProfiles(): Promise<{ success: boolean; profiles: PosProfileOption[]; error: string | null }> {
-    const { erpnextUrl, apiKey, apiSecret } = deps.db.loadSettings();
+    const settings = deps.db.loadSettings();
+    const { erpnextUrl } = settings;
 
-    if (!erpnextUrl.trim() || !apiKey.trim() || !apiSecret.trim()) {
-      return { success: false, profiles: [], error: "ERPNext URL, API Key, and API Secret are required." };
+    if (!hasUsableCredentials(deps, settings) || !erpnextUrl.trim()) {
+      return { success: false, profiles: [], error: "ERPNext URL and credentials are required." };
     }
 
     let endpoint: string;
@@ -139,9 +141,8 @@ export function createPosConfigCore(deps: PosCoreDeps, http: ReturnType<typeof c
     const timeout = setTimeout(() => controller.abort(), 5_000);
 
     try {
-      const response = await deps.fetch(endpoint, {
+      const response = await authFetch(deps, endpoint, {
         method: "GET",
-        headers: { Authorization: `token ${apiKey}:${apiSecret}` },
         signal: controller.signal
       });
 
@@ -183,10 +184,10 @@ export function createPosConfigCore(deps: PosCoreDeps, http: ReturnType<typeof c
 
   async function loadPosProfile(): Promise<{ success: boolean; profile: PosProfileDetails | null; error: string | null; syncedAt: string | null }> {
     const settings = deps.db.loadSettings();
-    const { erpnextUrl, apiKey, apiSecret, posProfile } = settings;
+    const { erpnextUrl, posProfile } = settings;
 
-    if (!erpnextUrl.trim() || !apiKey.trim() || !apiSecret.trim() || !posProfile.trim()) {
-      return { success: false, profile: null, error: "ERPNext URL, API Key, API Secret, and POS Profile are required.", syncedAt: null };
+    if (!hasUsableCredentials(deps, settings) || !erpnextUrl.trim() || !posProfile.trim()) {
+      return { success: false, profile: null, error: "ERPNext URL, credentials, and POS Profile are required.", syncedAt: null };
     }
 
     let endpoint: string;
@@ -201,9 +202,8 @@ export function createPosConfigCore(deps: PosCoreDeps, http: ReturnType<typeof c
     const timeout = setTimeout(() => controller.abort(), 5_000);
 
     try {
-      const response = await deps.fetch(endpoint, {
+      const response = await authFetch(deps, endpoint, {
         method: "GET",
-        headers: { Authorization: `token ${apiKey}:${apiSecret}` },
         signal: controller.signal
       });
 
@@ -263,7 +263,7 @@ export function createPosConfigCore(deps: PosCoreDeps, http: ReturnType<typeof c
 
   async function getCustomerBenefits(customerName: string): Promise<{ loyaltyProgram: string | null; availablePoints: number; conversionFactor: number; error: string | null }> {
     const settings = deps.db.loadSettings();
-    if (!settings.erpnextUrl || !settings.apiKey || !settings.apiSecret || !customerName) {
+    if (!hasUsableCredentials(deps, settings) || !settings.erpnextUrl || !customerName) {
       return { loyaltyProgram: null, availablePoints: 0, conversionFactor: 1, error: null };
     }
     const controller = new AbortController();
@@ -271,8 +271,7 @@ export function createPosConfigCore(deps: PosCoreDeps, http: ReturnType<typeof c
     try {
       const baseUrl = new URL(settings.erpnextUrl.trim()).toString().replace(/\/+$/, "");
       const query = new URLSearchParams({ customer: customerName, pos_profile: settings.posProfile });
-      const response = await deps.fetch(`${baseUrl}/api/method/aimatic.offline_pos.api.get_customer_benefits?${query.toString()}`, {
-        headers: { Authorization: `token ${settings.apiKey}:${settings.apiSecret}` },
+      const response = await authFetch(deps, `${baseUrl}/api/method/aimatic.offline_pos.api.get_customer_benefits?${query.toString()}`, {
         signal: controller.signal
       });
       if (!response.ok) {
@@ -295,12 +294,12 @@ export function createPosConfigCore(deps: PosCoreDeps, http: ReturnType<typeof c
 
   async function validateCoupon(couponCode: string): Promise<{ couponName: string | null; discountAmount: number; error: string | null }> {
     const settings = deps.db.loadSettings();
-    if (!settings.erpnextUrl || !settings.apiKey || !settings.apiSecret || !couponCode) {
+    if (!hasUsableCredentials(deps, settings) || !settings.erpnextUrl || !couponCode) {
       return { couponName: null, discountAmount: 0, error: "Online connection required to validate coupon." };
     }
     try {
       const baseUrl = new URL(settings.erpnextUrl.trim()).toString().replace(/\/+$/, "");
-      const coupon = await http.fetchErpResource(baseUrl, settings.apiKey, settings.apiSecret, "Coupon Code", couponCode);
+      const coupon = await http.fetchErpResource(baseUrl, "Coupon Code", couponCode);
       const couponName = textValue(coupon, "name") || couponCode;
       const discountAmount = typeof coupon.discount_amount === "number" ? coupon.discount_amount as number : 0;
       return { couponName, discountAmount, error: null };
@@ -311,7 +310,7 @@ export function createPosConfigCore(deps: PosCoreDeps, http: ReturnType<typeof c
 
   async function listCustomerGiftVouchers(customerName: string): Promise<{ vouchers: Record<string, unknown>[]; error: string | null }> {
     const settings = deps.db.loadSettings();
-    if (!settings.erpnextUrl || !settings.apiKey || !settings.apiSecret || !customerName) {
+    if (!hasUsableCredentials(deps, settings) || !settings.erpnextUrl || !customerName) {
       return { vouchers: [], error: "Online connection required to load gift vouchers." };
     }
     try {
@@ -319,9 +318,7 @@ export function createPosConfigCore(deps: PosCoreDeps, http: ReturnType<typeof c
       const company = textValue(asRecord(deps.db.getPosBootstrap(settings.posProfile)?.pos_profile), "company");
       const query = new URLSearchParams({ customer: customerName });
       if (company) query.set("company", company);
-      const response = await deps.fetch(`${baseUrl}/api/method/aimatic.gift_voucher.api.list_customer_gift_vouchers?${query.toString()}`, {
-        headers: { Authorization: `token ${settings.apiKey}:${settings.apiSecret}` }
-      });
+      const response = await authFetch(deps, `${baseUrl}/api/method/aimatic.gift_voucher.api.list_customer_gift_vouchers?${query.toString()}`);
       if (!response.ok) return { vouchers: [], error: await getResponseError(response) };
       const body = await response.json() as Record<string, unknown>;
       const payload = unwrapFrappePayload(body);
@@ -336,14 +333,14 @@ export function createPosConfigCore(deps: PosCoreDeps, http: ReturnType<typeof c
   async function validateGiftVoucherCode(voucherCode: string, customerName: string): Promise<{ voucher: Record<string, unknown> | null; error: string | null }> {
     const settings = deps.db.loadSettings();
     const code = voucherCode.trim();
-    if (!settings.erpnextUrl || !settings.apiKey || !settings.apiSecret || !code || !customerName) {
+    if (!hasUsableCredentials(deps, settings) || !settings.erpnextUrl || !code || !customerName) {
       return { voucher: null, error: "Online connection required to validate gift voucher." };
     }
     try {
       const baseUrl = new URL(settings.erpnextUrl.trim()).toString().replace(/\/+$/, "");
-      const response = await deps.fetch(`${baseUrl}/api/method/aimatic.gift_voucher.api.validate_gift_voucher_code`, {
+      const response = await authFetch(deps, `${baseUrl}/api/method/aimatic.gift_voucher.api.validate_gift_voucher_code`, {
         method: "POST",
-        headers: { Authorization: `token ${settings.apiKey}:${settings.apiSecret}`, "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ voucher_code: code, customer: customerName })
       });
       if (!response.ok) return { voucher: null, error: await getResponseError(response) };
