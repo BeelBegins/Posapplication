@@ -1,5 +1,8 @@
 name: Build Desktop and Android Release
 
+env:
+  AI_MATIC_PRODUCT: pos
+
 on:
   push:
     branches: [main]

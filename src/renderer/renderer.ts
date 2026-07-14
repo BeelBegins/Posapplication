@@ -5,6 +5,7 @@ interface DatabaseStatus {
 }
 
 interface PosAPI {
+  getRuntimeInfo: () => Promise<{ platform: "electron" | "capacitor" | "web"; product: "pos" | "restaurant" | "sales" | "shopping"; capabilities: Record<string, boolean> }>;
   getDatabaseStatus: () => Promise<DatabaseStatus>;
   focusPosWindow: () => Promise<boolean>;
   onFocusScanner: (callback: () => void) => void;

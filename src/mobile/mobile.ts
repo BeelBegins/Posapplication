@@ -1,9 +1,13 @@
 import { createPosCore, asRecord, textValue, unwrapFrappePayload, formatResponseError } from "../core";
 import { mobileDatabase as db } from "./browser-database";
+import { createPlatformService } from "../platform/platform-service";
+import type { ProductId } from "../config/product-profile";
 
 declare const __APP_VERSION__: string;
+declare const __APP_PRODUCT__: ProductId;
 
 const core = createPosCore({ db, fetch: globalThis.fetch.bind(globalThis) });
+const runtimeInfo = createPlatformService("capacitor", __APP_PRODUCT__);
 const catalogListeners: Array<(message: string) => void> = [];
 const completeSaleListeners: Array<() => void> = [];
 const focusListeners: Array<() => void> = [];
@@ -49,6 +53,7 @@ async function authorizeAdminAction(input:Record<string,unknown>) {
 }
 
 const posAPI = {
+  getRuntimeInfo: async()=>runtimeInfo,
   getDatabaseStatus: async()=>db.getDatabaseStatus(), focusPosWindow:async()=>true, onFocusScanner:(cb:()=>void)=>focusListeners.push(cb),
   saveSettings:async(s:Parameters<typeof db.saveSettings>[0])=>db.saveSettings(s),loadSettings:async()=>db.getSettingsForRenderer(),listPrinters:async()=>[{name:"android",displayName:"Android Print Service"}],
   testServer:()=>core.testServerReachability(),testLogin:()=>core.testApiAuthentication(),cashierLogin,cashierOfflineLogin,getRememberedCashiers:async()=>remembered(),
@@ -75,3 +80,5 @@ const posAPI = {
 
 (window as unknown as {posAPI:typeof posAPI}).posAPI=posAPI;
 document.documentElement.classList.add("android-app");
+document.documentElement.dataset.platform=runtimeInfo.platform;
+document.documentElement.dataset.product=runtimeInfo.product;

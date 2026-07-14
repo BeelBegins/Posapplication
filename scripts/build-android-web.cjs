@@ -1,9 +1,11 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const esbuild = require("esbuild");
+const { loadProductProfile } = require("./product-profile.cjs");
 
 const root = path.resolve(__dirname, "..");
 const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+const profile = loadProductProfile(undefined, "capacitor");
 const out = path.join(root, "android-web");
 fs.rmSync(out, { recursive: true, force: true });
 fs.mkdirSync(out, { recursive: true });
@@ -25,5 +27,8 @@ esbuild.buildSync({
   target: ["chrome120"],
   sourcemap: false,
   minify: true,
-  define: { __APP_VERSION__: JSON.stringify(pkg.version) }
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version),
+    __APP_PRODUCT__: JSON.stringify(profile.id)
+  }
 });

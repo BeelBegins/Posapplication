@@ -1,0 +1,42 @@
+{
+  "pos": {
+    "id": "pos",
+    "name": "Ai Matic POS",
+    "enabled": true,
+    "platforms": ["electron", "capacitor"],
+    "androidAppId": "com.beelbegins.aimaticpos",
+    "storageNamespace": "aimatic-pos",
+    "authentication": "terminal-token",
+    "features": ["retail-pos", "offline-sales", "barcode-input", "printing"]
+  },
+  "restaurant": {
+    "id": "restaurant",
+    "name": "Ai Matic Restaurant",
+    "enabled": false,
+    "platforms": ["capacitor"],
+    "androidAppId": "com.beelbegins.aimaticrestaurant",
+    "storageNamespace": "aimatic-restaurant",
+    "authentication": "user-session",
+    "features": ["waiter-ordering"]
+  },
+  "sales": {
+    "id": "sales",
+    "name": "Ai Matic Sales",
+    "enabled": false,
+    "platforms": ["capacitor"],
+    "androidAppId": "com.beelbegins.aimaticsales",
+    "storageNamespace": "aimatic-sales",
+    "authentication": "user-session",
+    "features": ["sales-ordering"]
+  },
+  "shopping": {
+    "id": "shopping",
+    "name": "Ai Matic Shopping",
+    "enabled": false,
+    "platforms": ["capacitor", "web"],
+    "androidAppId": "com.beelbegins.aimaticshopping",
+    "storageNamespace": "aimatic-shopping",
+    "authentication": "customer-session",
+    "features": ["customer-shopping"]
+  }
+}
