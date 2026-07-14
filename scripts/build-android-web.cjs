@@ -24,8 +24,8 @@ if (profile.id === "pos") {
   fs.copyFileSync(path.join(root, "dist/renderer/renderer.js"), path.join(out, "renderer.js"));
   fs.copyFileSync(path.join(root, "dist/renderer/styles.css"), path.join(out, "styles.css"));
   esbuild.buildSync({ ...buildOptions, entryPoints: [path.join(root, "src/mobile/mobile.ts")], outfile: path.join(out, "mobile.js") });
-} else if (profile.id === "restaurant") {
-  const source = path.join(root, "src", "products", "restaurant");
+} else if (profile.id === "restaurant" || profile.id === "shopping") {
+  const source = path.join(root, "src", "products", profile.id);
   fs.copyFileSync(path.join(source, "index.html"), path.join(out, "index.html"));
   fs.copyFileSync(path.join(source, "styles.css"), path.join(out, "styles.css"));
   esbuild.buildSync({ ...buildOptions, entryPoints: [path.join(source, "app.ts")], outfile: path.join(out, "app.js") });
