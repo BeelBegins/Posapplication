@@ -16,6 +16,7 @@ export interface PosProfileDetails {
   company: string;
   warehouse: string;
   branch: string;
+  terminalId: string;
   customer: string;
   priceList: string;
   currency: string;

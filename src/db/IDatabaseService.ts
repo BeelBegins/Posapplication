@@ -19,6 +19,7 @@ export interface IDatabaseService {
   normalizeErpnextUrl(value: string): string;
   getMeta(key: string): string | null;
   setMeta(key: string, value: string): void;
+  getOrCreateHardwareId(): string;
 
   // ----- Settings -----
   saveSettings(settings: AppSettings): { saved: true };
@@ -48,7 +49,7 @@ export interface IDatabaseService {
   getCachedReceiptHtml(posInvoice: string): string | null;
   getQueuedSales(): QueuedSale[];
   getQueueCounts(): { queued: number; failed: number };
-  getOpenTerminalInvoice(terminalId: string, createId: () => string): string;
+  getOpenTerminalInvoice(hardwareId: string, createId: () => string): string;
 
   // ----- Refund log -----
   logRefund(returnInvoice: string, openingEntry: string, amount: number, modeOfPayment?: string): void;
@@ -61,8 +62,8 @@ export interface IDatabaseService {
   getShiftHistory(openingEntry: string): ShiftHistoryRow | null;
 
   // ----- Cart / payment / benefits drafts -----
-  loadCartState(terminalId: string, openingEntry: string): CartState;
-  saveCartState(terminalId: string, openingEntry: string, lines: unknown[]): void;
+  loadCartState(hardwareId: string, openingEntry: string): CartState;
+  saveCartState(hardwareId: string, openingEntry: string, lines: unknown[]): void;
   loadPaymentDraft(cartKey: string): unknown[];
   savePaymentDraft(cartKey: string, payments: unknown[]): void;
   loadBenefitsDraft(cartKey: string): Record<string, unknown> | null;

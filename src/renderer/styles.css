@@ -65,6 +65,13 @@
 :root[data-theme="teal-professional"] { --color-bg:#f0fdfa;--color-bg-alt:#ccfbf1;--color-surface:#fff;--color-surface-muted:#e6fffa;--color-header:#134e4a;--color-header-contrast:#f0fdfa;--color-accent-on-dark:#06b6d4;--color-danger-on-dark:#fca5a5;--color-text:#134e4a;--color-text-muted:#52756f;--color-text-faint:#7d9993;--color-border:#b5f3eb;--color-border-strong:#7dd3c7;--color-accent:#0f766e;--color-accent-hover:#115e59;--color-accent-strong:#0f766e;--color-accent-soft:#ccfbf1;--color-accent-contrast:#fff;--color-success:#16a34a;--color-success-soft:#dcfce7;--color-success-border:#bbf7d0;--color-warning:#b45309;--color-warning-soft:#fef3c7;--color-danger:#ef4444;--color-danger-soft:#fee2e2; }
 
 body { margin: 0; min-width: 320px; }
+.android-app body { overscroll-behavior: none; }
+.android-app #check-update,
+.android-app #download-update,
+.android-app #install-update,
+.android-app #show-releases,
+.android-app #save-update-token,
+.android-app #preview-customer-display { display: none; }
 
 .app-shell {
   min-height: 100vh;

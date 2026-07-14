@@ -20,7 +20,8 @@ Built with Electron, TypeScript, SQLite, ERPNext/Frappe APIs, and FBR-ready serv
 - Supports cashier login, local offline cashier PIN, settings PIN, and shift PIN.
 - Supports POS Opening Entry, Close Shift, shift summary, held sales, sales history, duplicate receipts, refunds, loyalty, coupons, and gift vouchers.
 - Prints receipts through Electron.
-- Supports GitHub-based Windows installer releases and auto-update.
+- Supports combined GitHub releases containing the Windows installer and Android APK.
+- Supports GitHub-based Windows auto-update.
 
 ## Hard Rules
 
@@ -121,15 +122,52 @@ Installer output:
 dist-installer/
 ```
 
+## Create Android APK
+
+The Android shell uses the same POS renderer and platform-neutral ERPNext business logic while keeping the Electron desktop build unchanged. JDK 21 and Android SDK 36 are required.
+
+```bash
+npm run android:apk
+```
+
+APK output:
+
+```text
+dist-apk/Aimatic-POS-App-2.4.7-debug.apk
+```
+
+The Android app runs in landscape and uses Android app storage and the Android print service. Electron-only auto-update and second-monitor controls are not shown on Android.
+
 ## Release
 
-Build installer and publish through the release script:
+Pushes to `main` run the combined release workflow. It tests the application, builds Windows and Android independently, and publishes both to the same `v<package version>` GitHub release:
+
+```text
+Aimatic-POS-App-Setup-<version>.exe
+Aimatic-POS-App-<version>.apk
+latest.yml
+```
+
+The repository must define these GitHub Actions secrets for stable Android signing:
+
+- `ANDROID_KEYSTORE_BASE64`
+- `ANDROID_KEYSTORE_PASSWORD`
+- `ANDROID_KEY_ALIAS`
+- `ANDROID_KEY_PASSWORD`
+
+Create the keystore once and keep it permanently; changing it prevents Android from installing future APKs as updates. Encode it for the GitHub secret with:
+
+```bash
+base64 -w 0 aimatic-release.jks
+```
+
+The existing local Windows-only release command remains available:
 
 ```powershell
 npm run release
 ```
 
-The release script reads GitHub token values from local `.env`.
+The local release script reads GitHub token values from `.env`. If a correctly named signed APK exists under `dist-apk/`, it is attached too; CI requires it through `--require-apk`.
 
 Do not commit `.env`, credentials, API keys, tokens, database files, logs, or backups.
 
