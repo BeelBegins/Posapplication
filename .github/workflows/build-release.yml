@@ -54,6 +54,9 @@ jobs:
           - product: sales
             artifact: android-sales-release
             filename: Aimatic-Sales-App
+          - product: shopping
+            artifact: android-shopping-release
+            filename: Aimatic-Shopping-App
     env:
       AI_MATIC_PRODUCT: ${{ matrix.product }}
     steps:
@@ -122,6 +125,10 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: android-sales-release
+          path: dist-apk
+      - uses: actions/download-artifact@v4
+        with:
+          name: android-shopping-release
           path: dist-apk
       - name: Publish combined GitHub release
         run: node scripts/publish-github-release.cjs --require-product-apks

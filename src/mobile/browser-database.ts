@@ -42,15 +42,41 @@ const emptyStore = (): MobileStore => ({
   sessions: {}, bootstraps: {}, profiles: {}
 });
 
-interface AndroidStoreBridge { load(): string; save(value: string): void; }
+interface AndroidStoreBridge { load(): string; save(value: string): void; loadCatalog?(): string; saveCatalog?(value: string): void; }
 const nativeStore = (): AndroidStoreBridge | undefined => (globalThis as unknown as { AndroidStore?: AndroidStoreBridge }).AndroidStore;
 let state = emptyStore();
 let ready = false;
+let barcodeIndex = new Map<string, Row>();
+let pricesByItem = new Map<string, Row[]>();
+let conversionIndex = new Map<string, Row>();
+
+const catalogStorageKey = "aimatic-pos-mobile-catalog";
+const catalogFields = ["fbr", "fbrState", "customers", "items", "prices", "stock", "barcodes", "conversions", "catalogTotals"] as const;
+
+function rebuildCatalogIndexes(): void {
+  barcodeIndex = new Map(state.barcodes.map((row) => [rowText(row, "barcode"), row]).filter(([barcode]) => Boolean(barcode)) as Array<[string, Row]>);
+  pricesByItem = new Map();
+  for (const row of Object.values(state.prices)) {
+    const itemCode = rowText(row, "item_code");
+    if (itemCode) pricesByItem.set(itemCode, [...(pricesByItem.get(itemCode) ?? []), row]);
+  }
+  conversionIndex = new Map(state.conversions.map((row) => [`${rowText(row, "parent")}:${rowText(row, "uom")}`, row]));
+}
+
+function catalogSnapshot(): Pick<MobileStore, typeof catalogFields[number]> {
+  return Object.fromEntries(catalogFields.map((key) => [key, state[key]])) as Pick<MobileStore, typeof catalogFields[number]>;
+}
 
 function persist(): void {
-  const value = JSON.stringify(state);
+  const value = JSON.stringify(Object.fromEntries(Object.entries(state).filter(([key]) => !(catalogFields as readonly string[]).includes(key))));
   const native = nativeStore();
   if (native) native.save(value); else localStorage.setItem("aimatic-pos-mobile", value);
+}
+
+function persistCatalog(): void {
+  const value = JSON.stringify(catalogSnapshot());
+  const native = nativeStore();
+  if (native?.saveCatalog) native.saveCatalog(value); else localStorage.setItem(catalogStorageKey, value);
 }
 
 function rowText(row: Row, key: string): string { return typeof row[key] === "string" ? String(row[key]) : ""; }
@@ -61,8 +87,14 @@ export const mobileDatabase: IDatabaseService = {
   initDatabase() {
     if (ready) return;
     try {
-      const raw = nativeStore()?.load() || localStorage.getItem("aimatic-pos-mobile") || "";
+      const native = nativeStore();
+      const raw = native?.load() || localStorage.getItem("aimatic-pos-mobile") || "";
       if (raw) state = { ...emptyStore(), ...JSON.parse(raw) as MobileStore };
+      const catalogRaw = native?.loadCatalog?.() || localStorage.getItem(catalogStorageKey) || "";
+      if (catalogRaw) state = { ...state, ...JSON.parse(catalogRaw) as Partial<MobileStore> };
+      else if (Object.keys(state.items).length || state.barcodes.length) persistCatalog();
+      rebuildCatalogIndexes();
+      if (raw && (Object.keys(state.items).length || state.barcodes.length)) persist();
     } catch { state = emptyStore(); }
     ready = true;
   },
@@ -79,12 +111,13 @@ export const mobileDatabase: IDatabaseService = {
       state.fbr={};state.fbrState={serviceFee:0,lastSynced:null};state.held=[];state.carts={};state.payments={};state.benefits={};
       state.customers={};state.customerCache={};state.customerSyncedAt=null;state.items={};state.prices={};state.stock={};state.barcodes=[];state.conversions=[];
       state.catalogTotals={items:0,prices:0,barcodes:0,stockRows:0,lastSynced:null};state.sessions={};state.bootstraps={};state.profiles={};
+      rebuildCatalogIndexes();persistCatalog();
     }
     state.settings={ ...state.settings, ...settings, apiSecret:settings.apiSecret||previous.apiSecret, erpnextUrl:normalized };persist();return { saved: true };
   },
   loadSettings() { return { ...emptySettings(), ...state.settings }; },
   getSettingsForRenderer() { const s=mobileDatabase.loadSettings();return { erpnextUrl:s.erpnextUrl,apiKey:s.apiKey,terminalId:s.terminalId,posProfile:s.posProfile,branch:s.branch,warehouse:s.warehouse,hasApiSecret:Boolean(s.apiSecret),receiptPrinter:"Android Print Service",colorTheme:s.colorTheme||"warm-market" } satisfies RendererSettings; },
-  upsertFbrItemConfig(rows, serviceFee) { for(const row of rows){const code=rowText(row,"item_code");if(code)state.fbr[code]={...state.fbr[code],...row};}state.fbrState={serviceFee,lastSynced:now()};persist(); },
+  upsertFbrItemConfig(rows, serviceFee) { for(const row of rows){const code=rowText(row,"item_code");if(code)state.fbr[code]={...state.fbr[code],...row};}state.fbrState={serviceFee,lastSynced:now()};persistCatalog(); },
   getFbrSyncState() { return { itemCount:Object.keys(state.fbr).length,serviceFee:state.fbrState.serviceFee,lastSynced:state.fbrState.lastSynced,ready:true }; },
   getFbrItemConfigs(codes) { return Object.fromEntries(codes.filter(c=>state.fbr[c]).map(c=>[c,state.fbr[c]])); },
   holdSale(input) { const id=Math.max(0,...state.held.map(x=>x.id))+1;const stamp=now();state.held.push({...input,id,createdAt:stamp,updatedAt:stamp,status:"Held"});persist();return{id,displayName:input.displayName}; },
@@ -115,16 +148,16 @@ export const mobileDatabase: IDatabaseService = {
   savePaymentDraft(key,payments) { state.payments[key]=payments;persist(); },
   loadBenefitsDraft(key) { return state.benefits[key]??null; },
   saveBenefitsDraft(key,benefits) { state.benefits[key]=benefits;persist(); },
-  upsertCustomers(customers) { for(const row of customers){const name=rowText(row,"name");if(name)state.customers[name]={...state.customers[name],...row};}state.customerSyncedAt=now();persist(); },
+  upsertCustomers(customers) { for(const row of customers){const name=rowText(row,"name");if(name)state.customers[name]={...state.customers[name],...row};}state.customerSyncedAt=now();persistCatalog(); },
   getCustomerSyncState() { return{count:Object.keys(state.customers).length,lastSynced:state.customerSyncedAt}; },
   searchCustomers(query) { const q=query.trim().toLowerCase();if(!q)return[];return Object.values(state.customers).filter(x=>!x.disabled&&["name","customer_name","mobile_no","email_id","tax_id"].some(k=>String(x[k]??"").toLowerCase().includes(q))).sort((a,b)=>rowText(a,"customer_name").localeCompare(rowText(b,"customer_name"))).slice(0,8); },
   findCustomerByNormalizedMobile(mobile) { return Object.values(state.customers).find(x=>normalizeMobile(String(x.mobile_no??""))===mobile)??null; },
   cacheCustomer(name,data) { state.customerCache[name]=data;persist(); },
   getCachedCustomer(name) { return state.customerCache[name]??null; },
-  upsertCatalog(data) { for(const x of data.items){const k=rowText(x,"name");if(k)state.items[k]={...state.items[k],...x};}for(const x of data.prices){const k=rowText(x,"name")||`${rowText(x,"item_code")}:${rowText(x,"uom")}`;if(k)state.prices[k]={...state.prices[k],...x};}for(const x of data.stock){const k=`${rowText(x,"item_code")}:${rowText(x,"warehouse")}`;state.stock[k]={...state.stock[k],...x};}if(data.replaceBarcodes)state.barcodes=[];for(const x of data.barcodes){const parent=rowText(x,"item_code")||rowText(x,"parent"),barcode=rowText(x,"barcode");state.barcodes=state.barcodes.filter(v=>!(rowText(v,"parent")===parent&&rowText(v,"barcode")===barcode));state.barcodes.push({...x,parent});}if(data.replaceConversions)state.conversions=[];for(const x of data.conversions){const parent=rowText(x,"item_code")||rowText(x,"parent"),uom=rowText(x,"uom");state.conversions=state.conversions.filter(v=>!(rowText(v,"parent")===parent&&rowText(v,"uom")===uom));state.conversions.push({...x,parent});}state.catalogTotals={items:Object.keys(state.items).length,prices:Object.keys(state.prices).length,barcodes:state.barcodes.length,stockRows:Object.keys(state.stock).length,lastSynced:data.totals.lastSynced};persist(); },
+  upsertCatalog(data) { for(const x of data.items){const k=rowText(x,"name");if(k)state.items[k]={...state.items[k],...x};}for(const x of data.prices){const k=rowText(x,"name")||`${rowText(x,"item_code")}:${rowText(x,"uom")}`;if(k)state.prices[k]={...state.prices[k],...x};}for(const x of data.stock){const k=`${rowText(x,"item_code")}:${rowText(x,"warehouse")}`;state.stock[k]={...state.stock[k],...x};}if(data.replaceBarcodes)state.barcodes=[];for(const x of data.barcodes){const parent=rowText(x,"item_code")||rowText(x,"parent"),barcode=rowText(x,"barcode");state.barcodes=state.barcodes.filter(v=>!(rowText(v,"parent")===parent&&rowText(v,"barcode")===barcode));state.barcodes.push({...x,parent});}if(data.replaceConversions)state.conversions=[];for(const x of data.conversions){const parent=rowText(x,"item_code")||rowText(x,"parent"),uom=rowText(x,"uom");state.conversions=state.conversions.filter(v=>!(rowText(v,"parent")===parent&&rowText(v,"uom")===uom));state.conversions.push({...x,parent});}state.catalogTotals={items:Object.keys(state.items).length,prices:Object.keys(state.prices).length,barcodes:state.barcodes.length,stockRows:Object.keys(state.stock).length,lastSynced:data.totals.lastSynced};rebuildCatalogIndexes();persistCatalog(); },
   getCatalogTotals() { return state.catalogTotals; },
-  searchCatalog(query,warehouse) { const q=query.trim().toLowerCase();if(!q)return[];const codes=Object.keys(state.items).filter(code=>{const x=state.items[code];return !x.disabled&&x.is_sales_item!==false&&(code.toLowerCase().includes(q)||rowText(x,"item_name").toLowerCase().includes(q)||state.barcodes.some(b=>rowText(b,"parent")===code&&rowText(b,"barcode")===query));}).slice(0,50);return codes.map(code=>catalogResult(code,query,warehouse)); },
-  lookupCatalog(query,warehouse) { const results=mobileDatabase.searchCatalog(query,warehouse);const exact=results.find(x=>x.itemCode===query||x.barcode===query)??null;return{exact,results}; },
+  searchCatalog(query,warehouse) { const q=query.trim().toLowerCase();if(!q)return[];const barcode=barcodeIndex.get(query);if(barcode){const code=rowText(barcode,"parent");return code&&state.items[code]?[catalogResult(code,query,warehouse)]:[];}const codes=Object.keys(state.items).filter(code=>{const x=state.items[code];return !x.disabled&&x.is_sales_item!==false&&(code.toLowerCase().includes(q)||rowText(x,"item_name").toLowerCase().includes(q));}).slice(0,50);return codes.map(code=>catalogResult(code,query,warehouse)); },
+  lookupCatalog(query,warehouse) { const exactCode=state.items[query]?query:rowText(barcodeIndex.get(query)??{},"parent");if(exactCode){const exact=catalogResult(exactCode,query,warehouse);return{exact,results:[]};}return{exact:null,results:mobileDatabase.searchCatalog(query,warehouse)}; },
   cachePosSession(openingEntry,posProfile,_user,session,syncedAt) { state.sessions[posProfile]={openingEntry,data:session,syncedAt};persist(); },
   getCachedPosSession(posProfile) { return state.sessions[posProfile]?.data??null; },
   cachePosBootstrap(posProfile,configuration,syncedAt) { state.bootstraps[posProfile]={data:configuration,syncedAt};persist(); },
@@ -134,8 +167,8 @@ export const mobileDatabase: IDatabaseService = {
 };
 
 function catalogResult(code: string, query: string, warehouse: string): CatalogSearchResult {
-  const item=state.items[code]??{};const barcode=state.barcodes.find(x=>rowText(x,"parent")===code&&rowText(x,"barcode")===query);const uom=rowText(barcode??{},"uom")||rowText(item,"stock_uom");const conversion=Number(state.conversions.find(x=>rowText(x,"parent")===code&&rowText(x,"uom")===uom)?.conversion_factor??1)||1;
-  const prices=Object.values(state.prices).filter(x=>rowText(x,"item_code")===code);const direct=prices.find(x=>rowText(x,"uom")===uom);const base=prices.find(x=>rowText(x,"uom")===rowText(item,"stock_uom"));const selected=direct??base;const rate=typeof selected?.price_list_rate==="number"?selected.price_list_rate:null;const stock=state.stock[`${code}:${warehouse}`];const fbr=state.fbr[code];
+  const item=state.items[code]??{};const indexedBarcode=barcodeIndex.get(query);const barcode=indexedBarcode&&rowText(indexedBarcode,"parent")===code?indexedBarcode:undefined;const uom=rowText(barcode??{},"uom")||rowText(item,"stock_uom");const conversion=Number(conversionIndex.get(`${code}:${uom}`)?.conversion_factor??1)||1;
+  const prices=pricesByItem.get(code)??[];const direct=prices.find(x=>rowText(x,"uom")===uom);const base=prices.find(x=>rowText(x,"uom")===rowText(item,"stock_uom"));const selected=direct??base;const rate=typeof selected?.price_list_rate==="number"?selected.price_list_rate:null;const stock=state.stock[`${code}:${warehouse}`];const fbr=state.fbr[code];
   return{itemCode:code,itemName:rowText(item,"item_name")||code,barcode:barcode?rowText(barcode,"barcode"):null,uom,conversionFactor:conversion,sellingPrice:rate===null?null:(direct?rate:rate*conversion),currency:selected?rowText(selected,"currency")||null:null,actualStock:typeof stock?.actual_qty==="number"?stock.actual_qty:null,warehouse:stock?warehouse:null,mrp:typeof fbr?.custom_mrp==="number"?fbr.custom_mrp:null};
 }
 

@@ -102,5 +102,6 @@ export function assertCheckoutReady(cart: ShoppingCart, quote: ShoppingQuote, in
   if (!input.quoteToken.trim() || input.quoteToken !== quote.quoteToken) throw new Error("Refresh the cart totals before checkout.");
   if (!quoteMatchesCart(cart, quote)) throw new Error("Cart availability or quantities changed. Refresh the cart totals.");
   if (new Date(quote.expiresAt).getTime() <= now.getTime()) throw new Error("Cart pricing has expired. Refresh the cart totals.");
-  if (!input.addressName.trim() || !input.deliveryMethod.trim() || !input.paymentMethod.trim()) throw new Error("Address, delivery, and payment method are required.");
+  if (!input.deliveryMethod.trim() || !input.paymentMethod.trim()) throw new Error("Delivery and payment method are required.");
+  if (input.deliveryMethod !== "Store Pickup" && !input.addressName.trim()) throw new Error("A delivery address is required.");
 }

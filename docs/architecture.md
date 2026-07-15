@@ -149,7 +149,7 @@ The bridge includes methods for:
 - cashier login
 - admin PIN
 - sync
-- catalog
+- catalog (Android persists this large synced dataset separately from operational/cart state and builds barcode, price, and UOM indexes after load/sync)
 - customers
 - cart preview
 - payments
