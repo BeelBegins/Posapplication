@@ -22,7 +22,7 @@
   "sales": {
     "id": "sales",
     "name": "Ai Matic Sales",
-    "enabled": false,
+    "enabled": true,
     "platforms": ["capacitor"],
     "androidAppId": "com.beelbegins.aimaticsales",
     "storageNamespace": "aimatic-sales",

@@ -9,9 +9,9 @@ Ai Matic is one repository with four focused products:
 - Ai Matic Sales: salesperson ordering for Capacitor; Phase 3.
 - Ai Matic Shopping: customer shopping for Capacitor/web; Phase 4.
 
-Phase 2 Restaurant contracts and status invariants are documented in [restaurant-phase2.md](restaurant-phase2.md).
+Phase 2 Restaurant is currently deferred; its existing contracts and status invariants remain documented in [restaurant-phase2.md](restaurant-phase2.md). Phase 3 Sales is documented in [mobile-sales-phase3.md](mobile-sales-phase3.md).
 
-Retail POS remains the only Electron product. Restaurant is independently buildable during Phase 2; Sales and Shopping remain build-disabled. A disabled product profile fails the build instead of silently packaging placeholder or unrelated screens.
+Retail POS remains the only Electron product. Restaurant remains independently buildable but is frozen. Sales is a focused Capacitor build. Shopping remains build-disabled. A disabled product profile fails the build instead of silently packaging placeholder or unrelated screens.
 
 ## Shared and product-specific code
 

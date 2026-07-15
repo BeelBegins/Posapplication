@@ -25,4 +25,4 @@ npm run android:apk
 
 Setting `AI_MATIC_PRODUCT` to Sales or Shopping currently fails with a phase guard. The Shopping source bundle and customer-safe API contract are prepared, but the profile remains disabled until its Phase 4 backend, authentication, payment, privacy, and end-to-end gates pass. Restaurant is buildable during Phase 2, but is not included in the release workflow until its backend and authentication integration pass.
 
-Electron remains a POS-only target. POS and Restaurant Android builds have distinct application IDs and storage namespaces.
+Electron remains a POS-only target. POS, deferred Restaurant, and Sales Android builds have distinct application IDs and storage namespaces. Shopping stays disabled until Phase 4 security gates pass.

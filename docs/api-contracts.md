@@ -19,8 +19,9 @@ Current domain facades are:
 - `customers`
 - `pos`
 - `restaurant`
+- `sales-orders`
 - `shopping`
 
 The implemented POS facades wrap existing Frappe Resource APIs and `aimatic.offline_pos.api` methods. They do not reproduce ERPNext pricing, stock, tax, permission, or submission rules.
 
-The Restaurant facade targets the Phase 2 contract documented in [restaurant-phase2.md](restaurant-phase2.md). The Shopping facade and customer-safe auth adapter are prepared against the planned `aimatic.shopping.api` namespace, but Shopping remains build-disabled until that restricted backend exists and passes its security gates. Sales Orders and Delivery APIs will be added only in their implementation phases. A client facade or placeholder endpoint is not evidence that a server contract is operational.
+The Restaurant facade targets the deferred Phase 2 contract documented in [restaurant-phase2.md](restaurant-phase2.md). The Sales facade uses the restricted, implemented `aimatic.mobile_sales.api` contract documented in [mobile-sales-phase3.md](mobile-sales-phase3.md). The Shopping facade and customer-safe auth adapter are prepared against the planned `aimatic.shopping.api` namespace, but Shopping remains build-disabled until that restricted backend exists and passes its security gates. A client facade or placeholder endpoint is not evidence that a server contract is operational.
