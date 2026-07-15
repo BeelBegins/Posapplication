@@ -287,6 +287,7 @@ export function createPosSessionCore(deps: PosCoreDeps) {
     if (!cashierUser) return { success: false, closingEntry: "", response: null, error: "Cashier user is required to close the shift." };
     const closingBalances = Array.isArray(input.closing_balances) ? input.closing_balances : [];
     const notes = textValue(input, "notes");
+    const supervisorToken = textValue(input, "supervisor_token");
     // Snapshot the local expected/opening figures before the close so we can persist shift history on success.
     const pre = await getShiftSummary({ opening_entry: openingEntry, cashier_user: cashierUser });
     try {
@@ -294,7 +295,7 @@ export function createPosSessionCore(deps: PosCoreDeps) {
       const r = await authFetch(deps, `${base}/api/method/aimatic.offline_pos.api.close_pos_session`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ opening_entry: openingEntry, cashier_user: cashierUser, closing_balances: JSON.stringify(closingBalances), notes })
+        body: JSON.stringify({ opening_entry: openingEntry, cashier_user: cashierUser, closing_balances: JSON.stringify(closingBalances), notes, supervisor_token: supervisorToken })
       });
       if (!r.ok) return { success: false, closingEntry: "", response: null, error: await getResponseError(r) };
       const b = await r.json() as { message?: unknown };

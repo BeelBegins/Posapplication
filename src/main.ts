@@ -403,15 +403,21 @@ const ADMIN_PIN_LOCK_MS = 5 * 60_000;
 const ADMIN_PIN_DELAY_MS = 900;
 const ALLOW_HTTP_SUPERVISOR_AUTH = !app.isPackaged || process.env.POS_ALLOW_HTTP_SUPERVISOR_AUTH === "1";
 const DEV_ADMIN_AUTH_BYPASS = !app.isPackaged || process.env.POS_DEV_ADMIN_AUTH_BYPASS === "1";
-// "settings" access and shift start/close no longer go through a terminal-wide
-// Admin PIN at all - Settings always requires a fresh username/password check
-// via authorizePosAdminAction below (server-side role check, same endpoint
-// used here), and shift start/close is gated on the already-logged-in
-// cashier's own canStartShift/canCloseShift capability flags from login. The
-// only PIN concept left is each cashier's own Offline PIN (for offline
-// login), whose "forgot PIN" reset still needs supervisor authorization -
-// that's the one remaining use of this action/token flow.
-type AdminAction = "reset_pin" | "change_credentials";
+// "settings" access no longer goes through a terminal-wide Admin PIN at all -
+// Settings always requires a fresh username/password check via
+// authorizePosAdminAction below (server-side role check, same endpoint used
+// here). Shift start needs no authorization (any POS User can start their
+// own shift). Shift close and void-item, when the active cashier session
+// isn't itself a POS Supervisor/System Manager, also go through
+// authorizePosAdminAction - close_shift is verified+consumed server-side
+// inside close_pos_session itself (see api.py); void_item has no server
+// document to bind to (a cart is pure pre-sale client state), so it's
+// consumed via a second explicit call, consumePosAdminAction below, before
+// the cashier's local removal is allowed to proceed. The only PIN concept
+// left is each cashier's own Offline PIN (for offline login), whose "forgot
+// PIN" reset still needs supervisor authorization too.
+type AdminAction = "reset_pin" | "change_credentials" | "close_shift" | "void_item";
+const POS_ADMIN_ACTIONS: readonly AdminAction[] = ["reset_pin", "change_credentials", "close_shift", "void_item"];
 let pendingAdminAuthorization: { tokenHash: string; action: AdminAction; terminalId: string; expiresAt: number; cashierUser?: string } | null = null;
 
 function hashSecret(value: string): string {
@@ -453,7 +459,7 @@ async function authorizePosAdminAction(input: Record<string, unknown>): Promise<
   const password = textValue(input, "password");
   const cashierUser = action === "reset_pin" ? normalizeCashierUser(textValue(input, "cashierUser")) : "";
   if (!settings.erpnextUrl || !settings.apiKey || !settings.apiSecret || !settings.terminalId) return { ok: false, token: "", error: "Terminal settings are required before supervisor authorization." };
-  if (!["reset_pin", "change_credentials"].includes(action)) return { ok: false, token: "", error: "Invalid admin action." };
+  if (!POS_ADMIN_ACTIONS.includes(action)) return { ok: false, token: "", error: "Invalid admin action." };
   if (!username || !password) return { ok: false, token: "", error: "Supervisor username and password are required." };
   if (DEV_ADMIN_AUTH_BYPASS) {
     const token = randomUUID();
@@ -490,6 +496,51 @@ async function authorizePosAdminAction(input: Record<string, unknown>): Promise<
     return { ok: true, token, error: null };
   } catch (error) {
     return { ok: false, token: "", error: supervisorAuthNetworkError(error) };
+  }
+}
+
+// Consumes a token minted by authorizePosAdminAction against the server's
+// consume_pos_admin_authorization, for actions with no server document of
+// their own to bind the authorization to (currently just void_item - close_
+// shift instead passes its token straight through to close_pos_session,
+// which consumes it in-process, atomically with the close itself; see the
+// AdminAction comment above for why the two differ). Mirrors
+// authorizePosAdminAction's own HTTPS/dev-bypass gating so a token minted
+// under DEV_ADMIN_AUTH_BYPASS (never actually registered server-side) is
+// also consumed locally rather than failing against a real server that has
+// never heard of it.
+async function consumePosAdminAction(input: Record<string, unknown>): Promise<{ ok: boolean; error: string | null }> {
+  const settings = loadSettings();
+  const action = textValue(input, "action") as AdminAction;
+  const token = textValue(input, "token");
+  if (!settings.erpnextUrl || !settings.apiKey || !settings.apiSecret || !settings.terminalId) return { ok: false, error: "Terminal settings are required before supervisor authorization." };
+  if (!POS_ADMIN_ACTIONS.includes(action)) return { ok: false, error: "Invalid admin action." };
+  if (!token) return { ok: false, error: "Supervisor authorization token is required." };
+  if (DEV_ADMIN_AUTH_BYPASS) return { ok: true, error: null };
+  let base: URL;
+  const normalizedUrl = normalizeErpnextUrl(settings.erpnextUrl);
+  try { base = new URL(normalizedUrl); } catch { return { ok: false, error: "ERPNext URL is invalid." }; }
+  if (base.protocol !== "https:" && !ALLOW_HTTP_SUPERVISOR_AUTH) {
+    return { ok: false, error: "Supervisor authorization requires HTTPS ERPNext URL." };
+  }
+  const endpoint = `${base.toString().replace(/\/+$/, "")}/api/method/aimatic.offline_pos.api.consume_pos_admin_authorization`;
+  try {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: { Authorization: `token ${settings.apiKey}:${settings.apiSecret}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ token, action, terminal_id: settings.terminalId })
+    });
+    const raw = await response.text();
+    let parsed: { message?: unknown } = {};
+    try { parsed = JSON.parse(raw) as { message?: unknown }; } catch { /* non-JSON */ }
+    const payload = asRecord(parsed.message) ?? {};
+    if (!response.ok || !payload.success) {
+      const serverError = textValue(payload, "error") || textValue(payload, "message") || textValue(asRecord(parsed) ?? {}, "exception") || textValue(asRecord(parsed) ?? {}, "_server_messages");
+      return { ok: false, error: serverError ? `Supervisor authorization failed: ${serverError}` : "Supervisor authorization failed." };
+    }
+    return { ok: true, error: null };
+  } catch (error) {
+    return { ok: false, error: supervisorAuthNetworkError(error) };
   }
 }
 
@@ -795,6 +846,7 @@ app.whenReady().then(() => {
   ipcMain.handle("releases:list", () => core.listReleases());
   ipcMain.handle("releases:install", (_event, input) => installRelease(asRecord(input) ?? {}));
   ipcMain.handle("admin:authorize-action", (_event, input) => authorizePosAdminAction(asRecord(input) ?? {}));
+  ipcMain.handle("admin:consume-action", (_event, input) => consumePosAdminAction(asRecord(input) ?? {}));
   ipcMain.handle("cashier:reset-pin-with-authorization", (_event, input) => resetCashierOfflinePinWithAuthorization(asRecord(input) ?? {}));
   createMainWindow();
   createCustomerDisplayWindow();

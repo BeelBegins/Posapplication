@@ -597,6 +597,19 @@
           </div>
         </form>
       </dialog>
+      <dialog id="supervisor-action-dialog" class="customer-dialog admin-dialog">
+        <form id="supervisor-action-form">
+          <h3 id="supervisor-action-title">Supervisor Authorization Required</h3>
+          <p id="supervisor-action-note" class="card-meta"></p>
+          <label>ERPNext Username / Email<input id="supervisor-action-user" type="text" autocomplete="username" /></label>
+          <label>ERPNext Password<input id="supervisor-action-password" type="password" autocomplete="current-password" /></label>
+          <p id="supervisor-action-message" class="settings-message"></p>
+          <div class="form-actions">
+            <button id="supervisor-action-submit" type="submit">Authorize</button>
+            <button id="supervisor-action-cancel" type="button" class="secondary-button">Cancel</button>
+          </div>
+        </form>
+      </dialog>
       <dialog id="admin-supervisor-dialog" class="customer-dialog admin-dialog">
         <form id="admin-supervisor-form">
           <h3 id="admin-supervisor-title">Supervisor Verification</h3>
