@@ -28,6 +28,8 @@ npm run android:sync
 npm run android:apk
 ```
 
-Sales and Shopping are enabled focused builds with separate OAuth clients and application IDs. Shopping currently exposes only the customer-safe COD / Store Pickup flow backed by its restricted server API. Restaurant is buildable as a deferred shell but is not included in the release workflow until its backend and authentication integration pass.
+Restaurant, Sales, and Shopping are enabled focused builds with separate application IDs. Shopping exposes the customer-safe COD / Store Pickup flow backed by its restricted server API. Restaurant is a complete, isolated waiter UX prototype using local mock data until its permission-enforcing ERPNext integration is implemented.
 
-Electron remains a POS-only target. POS, deferred Restaurant, Sales, and Shopping Android builds have distinct application IDs and storage namespaces. The release workflow publishes POS, Sales, and Shopping APKs plus the Shopping web bundle; it does not publish the deferred Restaurant build. Deploy the web bundle only at the exact HTTPS origin/callback configured in ERPNext Shopping Settings.
+Electron remains a POS-only target. POS, Restaurant, Sales, and Shopping Android builds have distinct application IDs and storage namespaces. The release workflow publishes all four APKs plus the Shopping web bundle. Deploy the web bundle only at the exact HTTPS origin/callback configured in ERPNext Shopping Settings.
+
+The native ML Kit barcode plugin is included only in POS and Sales, where scanning is live. Restaurant's scanner affordance remains a prototype action until the real catalogue repository is connected, so its APK stays lightweight; Shopping has no scanner workflow.

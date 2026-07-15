@@ -7,10 +7,10 @@ if (!profile || !profile.enabled || !profile.platforms.includes("capacitor")) {
   throw new Error(`Product profile '${productId}' is not enabled for Capacitor`);
 }
 
-// The ML Kit barcode scanner adds native models for every ABI. Shopping has no
-// scan workflow, so keep it out of that APK/App Bundle while other profiles stay unchanged.
+// The ML Kit barcode scanner adds native models for every ABI. Only POS and Sales
+// have live scan workflows; keep it out of Restaurant's prototype and Shopping.
 const includePlugins = ["@capacitor/app"];
-if (productId !== "shopping") {
+if (productId === "pos" || productId === "sales") {
   includePlugins.push("@capacitor/barcode-scanner");
 }
 includePlugins.push("@capacitor/browser");

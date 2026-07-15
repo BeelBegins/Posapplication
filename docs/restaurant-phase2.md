@@ -1,5 +1,9 @@
 # Ai Matic Restaurant — Phase 2 Contract
 
+## Prototype status
+
+The Restaurant Capacitor profile contains a complete touch-first waiter UX prototype backed only by `src/products/restaurant/mock-data.ts` and namespaced local storage. It is intentionally usable without Restaurant doctypes so the full table, menu, modifier, order, kitchen progress, bill, activity, offline, and failure-state flow can be reviewed before server integration. It imports neither the Restaurant API facade nor Electron code and performs no ERPNext writes. Replace the mock repository with the contract below when the required doctypes and permission-enforcing endpoints are implemented.
+
 ## Product boundary
 
 Restaurant is a separate Capacitor product. It does not render Retail POS screens and does not import Electron IPC, desktop printing, updater, customer display, or filesystem code.

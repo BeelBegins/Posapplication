@@ -125,7 +125,7 @@ function expectedAssets() {
     return { name, filePath };
   });
 
-  const apkProducts = requireProductApks ? ["POS", "Sales", "Shopping"] : ["POS"];
+  const apkProducts = requireProductApks ? ["POS", "Restaurant", "Sales", "Shopping"] : ["POS"];
   for (const product of apkProducts) {
     const apkName = `Aimatic-${product}-App-${pkg.version}.apk`;
     const apkPath = path.join("dist-apk", apkName);

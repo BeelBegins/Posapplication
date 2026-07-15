@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { applyKitchenTicket, canEditLine, closeOrder, createKitchenTicket, orderTotal, requestBill, type RestaurantOrder } from "../src/products/restaurant/domain";
+import { addMenuItem, applyKitchenTicket, canEditLine, changeUnsentQuantity, closeOrder, createKitchenTicket, nextKitchenStatus, orderTotal, requestBill, statusForOrder, type MenuItem, type RestaurantOrder } from "../src/products/restaurant/domain";
 
 function order(): RestaurantOrder {
   return {
@@ -33,4 +33,23 @@ test("bill and close transitions require kitchen dispatch and submitted invoice"
   assert.equal(billed.status, "Bill Requested");
   assert.throws(() => closeOrder(billed, ""), /submitted POS Invoice/);
   assert.equal(closeOrder(billed, "ACC-POS-INV-0001").status, "Closed");
+});
+
+test("waiter can add, merge, type, and remove unsent quantities", () => {
+  const item: MenuItem = { code: "TEA", name: "Iced Tea", description: "", category: "Drinks", price: 300, available: true, prepMinutes: 5, station: "Bar" };
+  const empty = { ...order(), lines: [] };
+  const once = addMenuItem(empty, item, [], "Less ice", 2);
+  const merged = addMenuItem(once, item, [], "Less ice", 1);
+  assert.equal(merged.lines.length, 1);
+  assert.equal(merged.lines[0].quantity, 3);
+  assert.equal(changeUnsentQuantity(merged, merged.lines[0].id, 7).lines[0].quantity, 7);
+  assert.equal(changeUnsentQuantity(merged, merged.lines[0].id, 0).lines.length, 0);
+});
+
+test("sent items advance through kitchen states and drive table attention", () => {
+  const sent = applyKitchenTicket(order(), createKitchenTicket(order(), "device-1:3"));
+  assert.equal(nextKitchenStatus("Queued"), "Preparing");
+  const ready = { ...sent, lines: sent.lines.map((line) => ({ ...line, kitchenStatus: "Ready" as const })) };
+  assert.equal(statusForOrder(ready), "Needs attention");
+  assert.throws(() => changeUnsentQuantity(sent, sent.lines[0].id, 3), /cannot be edited/i);
 });
