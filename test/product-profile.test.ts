@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { getProductProfile, listProductProfiles, requireBuildableProfile } from "../src/config/product-profile";
 
-test("POS, deferred Restaurant, Sales, and Shopping profiles are independently buildable", () => {
+test("POS, Restaurant, Sales, and Shopping profiles are independently buildable", () => {
   const enabled = listProductProfiles().filter((profile) => profile.enabled).map((profile) => profile.id);
   assert.deepEqual(enabled, ["pos", "restaurant", "sales", "shopping"]);
   assert.equal(requireBuildableProfile("pos", "electron").name, "Ai Matic POS");

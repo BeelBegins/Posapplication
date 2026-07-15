@@ -81,10 +81,11 @@ test("Shopping navigation and customer-safe checkout flow stay focused", () => {
   assert.doesNotMatch(app, /Restaurant navigation|Sales navigation|POS navigation/);
 });
 
-test("Capacitor native plugins are isolated by product to reduce Shopping size", () => {
+test("Capacitor barcode models ship only in products with live scan workflows", () => {
   const config = source("capacitor.config.js");
-  assert.match(config, /productId !== "shopping"/);
+  assert.match(config, /productId === "pos" \|\| productId === "sales"/);
   assert.match(config, /includePlugins\.push\("@capacitor\/barcode-scanner"\)/);
+  assert.doesNotMatch(config, /productId === "restaurant"[^\n]*barcode-scanner/);
   assert.doesNotMatch(config, /productId === "shopping"[^\n]*barcode-scanner/);
 });
 

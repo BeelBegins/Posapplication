@@ -59,6 +59,9 @@ jobs:
           - product: pos
             artifact: android-pos-release
             filename: Aimatic-POS-App
+          - product: restaurant
+            artifact: android-restaurant-release
+            filename: Aimatic-Restaurant-App
           - product: sales
             artifact: android-sales-release
             filename: Aimatic-Sales-App
@@ -151,6 +154,10 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: android-pos-release
+          path: dist-apk
+      - uses: actions/download-artifact@v4
+        with:
+          name: android-restaurant-release
           path: dist-apk
       - uses: actions/download-artifact@v4
         with:
