@@ -12,6 +12,11 @@ npm run android:pos:apk
 npm run build:restaurant:android:web
 npm run android:restaurant:sync
 npm run android:restaurant:apk
+npm run build:sales:android:web
+npm run android:sales:apk
+npm run build:shopping:android:web
+npm run android:shopping:apk
+npm run build:shopping:web
 ```
 
 The original commands remain supported and continue to build Retail POS:
@@ -25,4 +30,4 @@ npm run android:apk
 
 Sales and Shopping are enabled focused builds with separate OAuth clients and application IDs. Shopping currently exposes only the customer-safe COD / Store Pickup flow backed by its restricted server API. Restaurant is buildable as a deferred shell but is not included in the release workflow until its backend and authentication integration pass.
 
-Electron remains a POS-only target. POS, deferred Restaurant, Sales, and Shopping Android builds have distinct application IDs and storage namespaces. The release workflow publishes POS, Sales, and Shopping APKs; it does not publish the deferred Restaurant build.
+Electron remains a POS-only target. POS, deferred Restaurant, Sales, and Shopping Android builds have distinct application IDs and storage namespaces. The release workflow publishes POS, Sales, and Shopping APKs plus the Shopping web bundle; it does not publish the deferred Restaurant build. Deploy the web bundle only at the exact HTTPS origin/callback configured in ERPNext Shopping Settings.

@@ -10,6 +10,7 @@ const token = (process.env.GH_TOKEN || process.env.GITHUB_TOKEN || "").trim();
 const dryRun = process.argv.includes("--dry-run") || process.argv.includes("--help");
 const requireApk = process.argv.includes("--require-apk");
 const requireProductApks = process.argv.includes("--require-product-apks");
+const requireWeb = process.argv.includes("--require-web");
 
 if (!dryRun && !token) {
   console.error("GH_TOKEN or GITHUB_TOKEN is required to publish the GitHub release.");
@@ -134,6 +135,10 @@ function expectedAssets() {
       throw new Error(`${apkPath} is missing. Build the signed Android release before publishing.`);
     }
   }
+  const webName = `Aimatic-Shopping-Web-${pkg.version}.zip`;
+  const webPath = path.join("dist-web", webName);
+  if (fs.existsSync(webPath)) assets.push({ name: webName, filePath: webPath });
+  else if (requireWeb) throw new Error(`${webPath} is missing. Build the Shopping web bundle before publishing.`);
   return assets;
 }
 
@@ -160,6 +165,7 @@ function contentType(name) {
   if (name.endsWith(".apk")) {
     return "application/vnd.android.package-archive";
   }
+  if (name.endsWith(".zip")) return "application/zip";
   return "application/octet-stream";
 }
 

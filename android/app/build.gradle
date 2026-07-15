@@ -17,7 +17,11 @@ android {
     compileSdk = rootProject.ext.compileSdkVersion
     defaultConfig {
         applicationId productProfile.androidAppId
-        manifestPlaceholders = [appLabel: productProfile.name, oauthRedirectScheme: productProfile.androidAppId]
+        manifestPlaceholders = [
+            appLabel: productProfile.name,
+            oauthRedirectScheme: productProfile.androidAppId,
+            appOrientation: productId == 'pos' ? 'sensorLandscape' : 'unspecified'
+        ]
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode versionParts[0] * 10000 + versionParts[1] * 100 + versionParts[2]

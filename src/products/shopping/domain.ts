@@ -48,6 +48,11 @@ export interface ShoppingCheckoutInput {
   paymentMethod: string;
 }
 
+export interface ShoppingCheckoutAttempt {
+  cartUpdatedAt: string;
+  requestId: string;
+}
+
 const quantityPrecision = (value: number) => Math.round(value * 1000) / 1000;
 const money = (value: number) => Math.round(value * 100) / 100;
 
@@ -86,6 +91,15 @@ export function setCartQuantity(cart: ShoppingCart, lineId: string, quantity: nu
 
 export function cartDisplaySubtotal(cart: ShoppingCart): number {
   return money(cart.lines.reduce((total, line) => total + line.displayedRate * line.quantity, 0));
+}
+
+export function ensureCheckoutAttempt(
+  cart: ShoppingCart,
+  saved: ShoppingCheckoutAttempt | null,
+  createId: () => string
+): ShoppingCheckoutAttempt {
+  if (saved?.cartUpdatedAt === cart.updatedAt && saved.requestId.trim()) return saved;
+  return { cartUpdatedAt: cart.updatedAt, requestId: createId() };
 }
 
 export function quoteMatchesCart(cart: ShoppingCart, quote: ShoppingQuote): boolean {

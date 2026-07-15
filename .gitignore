@@ -4,6 +4,7 @@ dist/
 dist-installer/
 dist-apk/
 android-web/
+dist-web/
 release/
 installer/
 installer-out/
