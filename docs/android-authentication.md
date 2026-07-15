@@ -7,8 +7,8 @@ Ai Matic POS Android does not accept, embed, or persist an ERPNext API key/API s
 1. A POS Supervisor or System Manager calls `aimatic.offline_pos.api.generate_device_enrollment_code` for one POS Profile and renders the returned JSON as a QR code.
 2. The Android enrollment screen scans that QR directly with the back camera. Manual paste remains available as a fallback.
 3. The APK generates a per-install hardware UUID and redeems the one-time, ten-minute token over HTTPS.
-4. ERPNext binds the hardware UUID to the selected POS Profile and returns only public device configuration, including the public OAuth client ID.
-5. The device configuration is stored through Android Keystore-backed encrypted storage. No API secret is involved.
+4. ERPNext binds the hardware UUID to the selected POS Profile and returns public device configuration, the public OAuth client ID, and a random per-install device proof. Only a SHA-256 hash of that proof is stored on the server.
+5. The device configuration and proof are stored through Android Keystore-backed encrypted storage. The proof is not an ERPNext API key, API secret, or user session and cannot authorize requests by itself.
 
 Reinstalling or clearing application data generates a new hardware UUID and requires enrollment again.
 
@@ -23,7 +23,10 @@ Android uses OAuth2 Authorization Code with PKCE (`S256`) through the system bro
 - Concurrent refreshes share one request.
 - Refresh rotation replaces the stored refresh token atomically.
 - A rejected/replayed refresh clears the local session; it never falls back to terminal credentials.
-- The server derives the cashier from the Bearer-authenticated Frappe session and verifies that the hardware UUID is enabled and enrolled for the requested POS Profile.
+- Token exchanges, refreshes, and every Android POS Bearer request carry the hardware UUID and device proof in dedicated headers.
+- The server verifies the proof against its stored hash, rejects disabled devices, and binds the request to the enrolled POS Profile before endpoint code runs.
+- Profile-scoped POS endpoints additionally reject attempts to use another POS Profile, and the server derives the cashier from the Bearer-authenticated Frappe session.
+- Missing or invalid proof revokes the affected access or refresh token and clears the local session on the client. Disabling a device therefore blocks its next online call even if a previously issued OAuth token has not expired.
 
 Offline cashier PINs remain local and support offline sales after a successful online OAuth login. They are not ERPNext passwords or OAuth tokens.
 

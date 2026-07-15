@@ -7,6 +7,8 @@ export interface OAuthPublicClientConfig {
   clientId: string;
   redirectUri: string;
   scope: string;
+  hardwareId?: string;
+  deviceToken?: string;
 }
 
 export interface OAuthAuthorizationBrowser {
@@ -38,6 +40,15 @@ export class OAuthPkceCredentialProvider implements CredentialProvider {
     await this.storage.set(tokenKey, JSON.stringify(tokens));
   }
 
+  async getRequestHeaders(): Promise<Record<string, string>> {
+    const config = await this.config();
+    if (!config.hardwareId || !config.deviceToken) return {};
+    return {
+      "X-Aimatic-Device-ID": config.hardwareId,
+      "X-Aimatic-Device-Token": config.deviceToken
+    };
+  }
+
   async getAccessToken(): Promise<string | null> {
     const tokens = await this.tokens();
     if (!tokens) return null;
@@ -56,7 +67,7 @@ export class OAuthPkceCredentialProvider implements CredentialProvider {
       const code = parseAuthorizationCallback(callbackUrl, config.redirectUri, request.pending.state);
       const response = await this.fetchImpl(new URL("/api/method/frappe.integrations.oauth2.get_token", config.baseUrl), {
         method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        headers: { "Content-Type": "application/x-www-form-urlencoded", ...await this.getRequestHeaders() },
         body: new URLSearchParams({ grant_type: "authorization_code", code, redirect_uri: config.redirectUri, client_id: config.clientId, code_verifier: request.pending.verifier })
       });
       const body = await response.json().catch(() => ({})) as Record<string, unknown>;
@@ -82,7 +93,7 @@ export class OAuthPkceCredentialProvider implements CredentialProvider {
     try {
       const response = await this.fetchImpl(new URL("/api/method/frappe.integrations.oauth2.get_token", config.baseUrl), {
         method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        headers: { "Content-Type": "application/x-www-form-urlencoded", ...await this.getRequestHeaders() },
         body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: existing.refreshToken, client_id: config.clientId })
       });
       const body = await response.json().catch(() => ({})) as Record<string, unknown>;

@@ -6,6 +6,8 @@
  */
 export interface CredentialProvider {
   getAccessToken(): Promise<string | null>;
+  /** Product/platform headers such as Android's enrolled-device proof. */
+  getRequestHeaders?(): Promise<Record<string, string>>;
   /** Returns the new access token, or null if refresh failed (caller must re-authenticate — never falls back to any other credential). */
   refreshAccessToken(): Promise<string | null>;
 }
@@ -45,7 +47,10 @@ export function createApiClient(options: ApiClientOptions) {
     }
     // user-session / customer-session
     const token = await auth.credentials.getAccessToken();
-    return token ? { Authorization: `Bearer ${token}` } : {};
+    return {
+      ...(auth.credentials.getRequestHeaders ? await auth.credentials.getRequestHeaders() : {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {})
+    };
   }
 
   async function request(path: string, init: RequestInit = {}): Promise<Response> {
