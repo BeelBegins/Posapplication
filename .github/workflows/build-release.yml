@@ -45,6 +45,17 @@ jobs:
   android:
     needs: test
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - product: pos
+            artifact: android-pos-release
+            filename: Aimatic-POS-App
+          - product: sales
+            artifact: android-sales-release
+            filename: Aimatic-Sales-App
+    env:
+      AI_MATIC_PRODUCT: ${{ matrix.product }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -85,10 +96,10 @@ jobs:
         run: |
           VERSION=$(node -p "require('./package.json').version")
           mkdir -p dist-apk
-          cp android/app/build/outputs/apk/release/app-release.apk "dist-apk/Aimatic-POS-App-$VERSION.apk"
+          cp android/app/build/outputs/apk/release/app-release.apk "dist-apk/${{ matrix.filename }}-$VERSION.apk"
       - uses: actions/upload-artifact@v4
         with:
-          name: android-release
+          name: ${{ matrix.artifact }}
           path: dist-apk/
           if-no-files-found: error
 
@@ -106,9 +117,13 @@ jobs:
           path: dist-installer
       - uses: actions/download-artifact@v4
         with:
-          name: android-release
+          name: android-pos-release
+          path: dist-apk
+      - uses: actions/download-artifact@v4
+        with:
+          name: android-sales-release
           path: dist-apk
       - name: Publish combined GitHub release
-        run: node scripts/publish-github-release.cjs --require-apk
+        run: node scripts/publish-github-release.cjs --require-product-apks
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

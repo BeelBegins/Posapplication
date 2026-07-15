@@ -9,6 +9,7 @@ const tag = `v${pkg.version}`;
 const token = (process.env.GH_TOKEN || process.env.GITHUB_TOKEN || "").trim();
 const dryRun = process.argv.includes("--dry-run") || process.argv.includes("--help");
 const requireApk = process.argv.includes("--require-apk");
+const requireProductApks = process.argv.includes("--require-product-apks");
 
 if (!dryRun && !token) {
   console.error("GH_TOKEN or GITHUB_TOKEN is required to publish the GitHub release.");
@@ -123,12 +124,15 @@ function expectedAssets() {
     return { name, filePath };
   });
 
-  const apkName = `Aimatic-POS-App-${pkg.version}.apk`;
-  const apkPath = path.join("dist-apk", apkName);
-  if (fs.existsSync(apkPath)) {
-    assets.push({ name: apkName, filePath: apkPath });
-  } else if (requireApk) {
-    throw new Error(`${apkPath} is missing. Build the signed Android release before publishing.`);
+  const apkProducts = requireProductApks ? ["POS", "Sales"] : ["POS"];
+  for (const product of apkProducts) {
+    const apkName = `Aimatic-${product}-App-${pkg.version}.apk`;
+    const apkPath = path.join("dist-apk", apkName);
+    if (fs.existsSync(apkPath)) {
+      assets.push({ name: apkName, filePath: apkPath });
+    } else if (requireApk || requireProductApks) {
+      throw new Error(`${apkPath} is missing. Build the signed Android release before publishing.`);
+    }
   }
   return assets;
 }
