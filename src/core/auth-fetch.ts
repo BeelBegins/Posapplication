@@ -11,6 +11,11 @@ import type { PosCoreDeps } from "./types";
 export async function authFetch(deps: PosCoreDeps, url: string, init: RequestInit = {}): Promise<Response> {
   if (deps.credentials) {
     const headers = new Headers(init.headers);
+    if (deps.credentials.getRequestHeaders) {
+      for (const [key, value] of Object.entries(await deps.credentials.getRequestHeaders())) {
+        headers.set(key, value);
+      }
+    }
     const token = await deps.credentials.getAccessToken();
     if (token) headers.set("Authorization", `Bearer ${token}`);
 

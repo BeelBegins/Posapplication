@@ -7,7 +7,7 @@ Built with Electron, TypeScript, SQLite, ERPNext/Frappe APIs, and FBR-ready serv
 ## Current Version
 
 ```text
-2.6.1
+2.6.2
 ```
 
 ## What This App Does

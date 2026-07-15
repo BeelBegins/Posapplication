@@ -11,6 +11,7 @@ export interface DeviceEnrollment {
   branch: string;
   warehouse: string;
   oauthClientId: string;
+  deviceToken: string;
 }
 
 const enrollmentKey = "pos.device.enrollment.v1";
@@ -43,7 +44,14 @@ export class DeviceEnrollmentService {
   async load(): Promise<DeviceEnrollment | null> {
     const raw = await this.storage.get(enrollmentKey);
     if (!raw) return null;
-    try { return JSON.parse(raw) as DeviceEnrollment; }
+    try {
+      const enrollment = JSON.parse(raw) as DeviceEnrollment;
+      if (!enrollment.hardwareId || !enrollment.posProfile || !enrollment.oauthClientId || !enrollment.deviceToken) {
+        await this.storage.remove(enrollmentKey);
+        return null;
+      }
+      return enrollment;
+    }
     catch { await this.storage.remove(enrollmentKey); return null; }
   }
 
@@ -65,9 +73,10 @@ export class DeviceEnrollmentService {
       terminalId: textValue(payload, "terminal_id"),
       branch: textValue(payload, "branch"),
       warehouse: textValue(payload, "warehouse"),
-      oauthClientId: textValue(payload, "oauth_client_id")
+      oauthClientId: textValue(payload, "oauth_client_id"),
+      deviceToken: textValue(payload, "device_token")
     };
-    if (!enrollment.posProfile || !enrollment.terminalId || !enrollment.oauthClientId) throw new Error("Enrollment response is missing POS or OAuth configuration.");
+    if (!enrollment.posProfile || !enrollment.terminalId || !enrollment.oauthClientId || !enrollment.deviceToken) throw new Error("Enrollment response is missing POS, OAuth, or device authentication configuration.");
     await this.storage.set(enrollmentKey, JSON.stringify(enrollment));
     this.db.saveSettings({ ...this.db.loadSettings(), erpnextUrl: enrollment.baseUrl, apiKey: "", apiSecret: "", terminalId: enrollment.terminalId, posProfile: enrollment.posProfile, branch: enrollment.branch, warehouse: enrollment.warehouse });
     return enrollment;
@@ -76,6 +85,6 @@ export class DeviceEnrollmentService {
   async oauthConfig(): Promise<OAuthPublicClientConfig> {
     const enrollment = await this.load();
     if (!enrollment) throw new Error("This device is not enrolled.");
-    return { baseUrl: enrollment.baseUrl, clientId: enrollment.oauthClientId, redirectUri: "com.beelbegins.aimaticpos://oauth/callback", scope: "pos-device" };
+    return { baseUrl: enrollment.baseUrl, clientId: enrollment.oauthClientId, redirectUri: "com.beelbegins.aimaticpos://oauth/callback", scope: "pos-device", hardwareId: enrollment.hardwareId, deviceToken: enrollment.deviceToken };
   }
 }

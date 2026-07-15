@@ -31,15 +31,23 @@ test("session API client uses cookies and never creates a token header", async (
 
 test("user-session retries one 401 with a refreshed bearer token and never uses terminal credentials", async () => {
   const authorizations: string[] = [];
+  const deviceIds: string[] = [];
   let refreshes = 0;
-  const credentials = { getAccessToken: async () => "expired", refreshAccessToken: async () => { refreshes += 1; return "rotated"; } };
+  const credentials = {
+    getAccessToken: async () => "expired",
+    getRequestHeaders: async () => ({ "X-Aimatic-Device-ID": "device-1", "X-Aimatic-Device-Token": "proof" }),
+    refreshAccessToken: async () => { refreshes += 1; return "rotated"; }
+  };
   const mockFetch = (async (_input: string | URL | Request, init?: RequestInit) => {
-    authorizations.push(new Headers(init?.headers).get("Authorization") ?? "");
+    const headers = new Headers(init?.headers);
+    authorizations.push(headers.get("Authorization") ?? "");
+    deviceIds.push(headers.get("X-Aimatic-Device-ID") ?? "");
     return new Response("{}", { status: authorizations.length === 1 ? 401 : 200 });
   }) as typeof fetch;
   const client = createApiClient({ baseUrl: "https://erp.example.com", authentication: { mode: "user-session", credentials }, fetch: mockFetch });
   assert.equal((await client.callMethod("frappe.auth.get_logged_user")).status, 200);
   assert.deepEqual(authorizations, ["Bearer expired", "Bearer rotated"]);
+  assert.deepEqual(deviceIds, ["device-1", "device-1"]);
   assert.equal(refreshes, 1);
   assert.equal(authorizations.some((value) => value.startsWith("token ")), false);
 });

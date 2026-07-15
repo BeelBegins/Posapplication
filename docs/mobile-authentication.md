@@ -14,13 +14,13 @@ The Android POS flow is:
 
 1. Connect only to an HTTPS ERPNext site.
 2. Scan and redeem a supervisor-generated, one-time device-enrollment QR code for a POS Profile. Camera access is requested only for this explicit scan; manual paste is retained as a fallback.
-3. Store the public device configuration through Android Keystore-backed encrypted storage.
+3. Receive a random device proof and store it with the public device configuration through Android Keystore-backed encrypted storage; the server stores only its hash.
 4. Authenticate the cashier in the system browser using OAuth2 Authorization Code with PKCE (`S256`).
 5. Store access/refresh tokens through the same native secure-storage bridge.
 6. Refresh once on a 401 and retry the request once; a rejected refresh clears the mobile session.
-7. Let ERPNext derive the cashier from the authenticated Bearer session and enforce device, role, POS Profile, branch, and document permissions.
+7. Send the device ID/proof on every token exchange, refresh, and Android POS API request so ERPNext can enforce device status and POS Profile before deriving the cashier from the authenticated Bearer session.
 
-The public OAuth client contains no client secret. The server rotates refresh tokens and treats reuse of a rotated token as replay, revoking the affected user/client token family.
+The device proof is not an API key/API secret and cannot authenticate a cashier. The public OAuth client contains no client secret. The server rotates refresh tokens and treats reuse of a rotated token as replay, revoking the affected user/client token family. Invalid device proof revokes the affected OAuth token; disabling a device blocks its next online request.
 
 ## Platform boundary
 
