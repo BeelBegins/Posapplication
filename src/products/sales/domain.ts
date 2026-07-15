@@ -1,6 +1,6 @@
 import type { SalesOrderLineInput } from "../../api/sales-orders";
 
-export type SalesDraftStatus = "draft" | "queued" | "submitted" | "failed";
+export type SalesDraftStatus = "draft" | "queued" | "syncing" | "submitted" | "failed";
 export interface SalesDraft {
   requestId: string;
   branch: string;
@@ -37,4 +37,14 @@ export function assertSalesDraftReady(draft: SalesDraft): void {
 
 export function markDraft(draft: SalesDraft, status: SalesDraftStatus, values: Partial<Pick<SalesDraft, "error" | "salesOrder">> = {}, now = new Date().toISOString()): SalesDraft {
   return { ...draft, ...values, status, updatedAt: now };
+}
+
+export function isMeaningfulSalesDraft(draft: SalesDraft): boolean {
+  return Boolean(draft.customer || draft.items.length || draft.status !== "draft");
+}
+
+export function recoverInterruptedDraft(draft: SalesDraft): SalesDraft {
+  return draft.status === "syncing"
+    ? { ...draft, status: "queued", error: "Synchronization was interrupted before confirmation." }
+    : draft;
 }

@@ -127,6 +127,7 @@ input, select, textarea { min-height: 48px; padding: 10px 12px; border: 1px soli
 .availability.out { color: var(--danger); }
 .card-quantity, .quantity { display: flex; align-items: center; justify-content: space-between; gap: 5px; }
 .quantity button { min-width: 44px; min-height: 44px; padding: 5px; background: #edf2ec; }
+.quantity input { width: 60px; min-height: 44px; border: 1px solid #ced8d2; border-radius: 10px; padding: 5px; text-align: center; font: inherit; font-weight: 750; }
 .back-button { min-height: 42px; padding: 5px 0; color: var(--blue); }
 .product-detail { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, .85fr); gap: 28px; padding: 22px; border: 1px solid var(--line); border-radius: 26px; background: #fff; box-shadow: var(--shadow); }
 .detail-image { min-height: 410px; overflow: hidden; border-radius: 20px; background: #edf2ec; }

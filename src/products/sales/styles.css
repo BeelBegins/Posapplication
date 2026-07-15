@@ -301,11 +301,14 @@ textarea { resize: vertical; }
   border-left: 5px solid #82939d;
 }
 .draft-card.queued { border-left-color: var(--warning); }
+.draft-card.syncing { border-left-color: var(--blue); opacity: .88; }
 .draft-card.failed { border-left-color: var(--danger); }
+.draft-card.syncing .draft-icon { animation: sales-spin 1s linear infinite; }
 .draft-card > div { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .draft-card > div small, .draft-card > div strong { display: block; }
 .draft-card > p { grid-column: 1 / -1; margin: 0; color: var(--danger); }
 .draft-card > div:last-child { grid-column: 1 / -1; justify-content: flex-end; }
+@keyframes sales-spin { to { transform: rotate(360deg); } }
 .draft-icon { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 12px; background: #e8eef1; font-weight: 900; }
 .history-list article { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; gap: 14px; align-items: center; }
 .history-list article strong, .history-list article small { display: block; }

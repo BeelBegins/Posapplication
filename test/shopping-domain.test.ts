@@ -48,3 +48,10 @@ test("checkout retry keeps its request ID until the cart changes", () => {
   assert.notEqual(changed.requestId, first.requestId);
   assert.equal(generated, 2);
 });
+
+test("rapid cart changes always invalidate a previous quote attempt",()=>{
+  const cart=addCartLine(emptyCart(now),line,now);
+  const changed=setCartQuantity(cart,cart.lines[0].id,2,cart.updatedAt);
+  assert.notEqual(changed.updatedAt,cart.updatedAt);
+  assert.ok(new Date(changed.updatedAt)>new Date(cart.updatedAt));
+});
