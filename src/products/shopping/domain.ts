@@ -55,6 +55,11 @@ export interface ShoppingCheckoutAttempt {
 
 const quantityPrecision = (value: number) => Math.round(value * 1000) / 1000;
 const money = (value: number) => Math.round(value * 100) / 100;
+const changedAt = (previous: string, requested: string) => {
+  const previousTime = new Date(previous).getTime();
+  const requestedTime = new Date(requested).getTime();
+  return new Date(Math.max(Number.isFinite(requestedTime) ? requestedTime : 0, Number.isFinite(previousTime) ? previousTime + 1 : 0)).toISOString();
+};
 
 export function emptyCart(now = new Date().toISOString()): ShoppingCart {
   return { branch: null, lines: [], updatedAt: now };
@@ -77,7 +82,7 @@ export function addCartLine(cart: ShoppingCart, input: Omit<ShoppingCartLine, "i
   const next = existing
     ? cart.lines.map((line) => line.id === id ? { ...line, quantity: quantityPrecision(line.quantity + quantity), displayedRate: money(input.displayedRate) } : line)
     : [...cart.lines, { ...input, id, quantity, displayedRate: money(input.displayedRate), modifiers: input.modifiers.map((modifier) => ({ ...modifier })) }];
-  return { ...cart, lines: next, updatedAt: now };
+  return { ...cart, lines: next, updatedAt: changedAt(cart.updatedAt, now) };
 }
 
 export function setCartQuantity(cart: ShoppingCart, lineId: string, quantity: number, now = new Date().toISOString()): ShoppingCart {
@@ -86,7 +91,7 @@ export function setCartQuantity(cart: ShoppingCart, lineId: string, quantity: nu
   const lines = normalized <= 0
     ? cart.lines.filter((line) => line.id !== lineId)
     : cart.lines.map((line) => line.id === lineId ? { ...line, quantity: normalized } : line);
-  return { ...cart, lines, updatedAt: now };
+  return { ...cart, lines, updatedAt: changedAt(cart.updatedAt, now) };
 }
 
 export function cartDisplaySubtotal(cart: ShoppingCart): number {
