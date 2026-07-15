@@ -1,6 +1,6 @@
 # Ai Matic Build Profiles
 
-`src/config/product-profiles.json` is the build-profile source of truth. Every profile declares its product ID, name, allowed platforms, Android application ID, storage namespace, authentication mode, and features.
+`src/config/product-profiles.json` is the build-profile source of truth. Every profile declares its product ID, name, allowed platforms, Android application ID and launch orientation, storage namespace, authentication mode, and features. Android products launch sensor-aware portrait; Electron has no orientation constraint.
 
 ## Enabled builds
 

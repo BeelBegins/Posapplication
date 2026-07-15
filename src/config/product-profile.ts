@@ -3,6 +3,7 @@ import profilesJson from "./product-profiles.json";
 export type ProductId = "pos" | "restaurant" | "sales" | "shopping";
 export type AppPlatform = "electron" | "capacitor" | "web";
 export type AuthenticationMode = "terminal-token" | "user-session" | "customer-session";
+export type AndroidOrientation = "sensorPortrait" | "sensorLandscape" | "unspecified";
 
 export interface ProductProfile {
   id: ProductId;
@@ -10,6 +11,7 @@ export interface ProductProfile {
   enabled: boolean;
   platforms: AppPlatform[];
   androidAppId: string;
+  androidOrientation: AndroidOrientation;
   storageNamespace: string;
   authentication: AuthenticationMode;
   features: string[];

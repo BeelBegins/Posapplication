@@ -7,7 +7,7 @@ Built with Electron, TypeScript, SQLite, ERPNext/Frappe APIs, and FBR-ready serv
 ## Current Version
 
 ```text
-2.6.5
+2.6.6
 ```
 
 ## What This App Does
@@ -143,7 +143,7 @@ APK output:
 dist-apk/Aimatic-POS-App-<version>-debug.apk
 ```
 
-The Android app runs in landscape, uses application storage for its existing offline data, Android Keystore-backed encrypted storage for enrollment/session material, and the Android print service. The synced catalogue is persisted separately from small operational/cart state and indexed in memory so barcode scans do not rewrite or linearly rescan the entire catalogue. Existing data migrates automatically. Electron-only auto-update and second-monitor controls are not loaded on Android.
+The Android products launch in sensor-aware portrait mode. POS uses an Android-only touch layout with compact status, readable cart cards, and pinned payment actions; Electron retains its existing desktop layout. Android uses application storage for its existing offline data, Android Keystore-backed encrypted storage for enrollment/session material, and the Android print service. The synced catalogue is persisted separately from small operational/cart state and indexed in memory so barcode scans do not rewrite or linearly rescan the entire catalogue. Existing data migrates automatically. Electron-only auto-update and second-monitor controls are not loaded on Android.
 
 ## Release
 

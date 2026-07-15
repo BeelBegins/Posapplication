@@ -3574,6 +3574,7 @@ function initializeRenderer(): void {
   });
   document.querySelector("#cart-qty")?.addEventListener("click", () => void editSelectedQuantity());
   document.querySelector("#cart-remove")?.addEventListener("click", () => void removeSelectedCartRow());
+  document.querySelector("#mobile-select-customer")?.addEventListener("click", () => openCustomerSearch());
   document.querySelector("#cart-clear")?.addEventListener("click", async () => { if (!cartLines.length || !appConfirm("Clear the full cart?")) return; cartLines=[]; selectedCartIndex=-1; await afterCartMutation("Cart cleared"); });
   document.querySelector<HTMLFormElement>("#quantity-form")?.addEventListener("submit", (event) => { event.preventDefault(); const submitter = event.submitter as HTMLButtonElement | null; if (submitter?.value === "cancel") { document.querySelector<HTMLDialogElement>("#quantity-dialog")?.close(); focusCart(); } else void saveDialogQuantity(); });
   document.querySelector<HTMLDialogElement>("#quantity-dialog")?.addEventListener("cancel", () => focusCart());

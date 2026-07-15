@@ -5,6 +5,7 @@
     "enabled": true,
     "platforms": ["electron", "capacitor"],
     "androidAppId": "com.beelbegins.aimaticpos",
+    "androidOrientation": "sensorPortrait",
     "storageNamespace": "aimatic-pos",
     "authentication": "terminal-token",
     "features": ["retail-pos", "offline-sales", "barcode-input", "printing"]
@@ -15,6 +16,7 @@
     "enabled": true,
     "platforms": ["capacitor"],
     "androidAppId": "com.beelbegins.aimaticrestaurant",
+    "androidOrientation": "sensorPortrait",
     "storageNamespace": "aimatic-restaurant",
     "authentication": "user-session",
     "features": ["waiter-ordering"]
@@ -25,6 +27,7 @@
     "enabled": true,
     "platforms": ["capacitor"],
     "androidAppId": "com.beelbegins.aimaticsales",
+    "androidOrientation": "sensorPortrait",
     "storageNamespace": "aimatic-sales",
     "authentication": "user-session",
     "features": ["sales-ordering"]
@@ -35,6 +38,7 @@
     "enabled": true,
     "platforms": ["capacitor", "web"],
     "androidAppId": "com.beelbegins.aimaticshopping",
+    "androidOrientation": "sensorPortrait",
     "storageNamespace": "aimatic-shopping",
     "authentication": "customer-session",
     "features": ["customer-shopping"]
