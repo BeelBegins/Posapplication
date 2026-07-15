@@ -8,6 +8,7 @@ import { capacitorOAuthBrowser } from "./capacitor-oauth-browser";
 import { OAuthPkceCredentialProvider } from "./credential-provider";
 import { DeviceEnrollmentService } from "./device-enrollment";
 import { scanEnrollmentQr } from "./enrollment-qr-scanner";
+import { scanItemBarcode } from "./item-barcode-scanner";
 
 declare const __APP_VERSION__: string;
 declare const __APP_PRODUCT__: ProductId;
@@ -115,6 +116,35 @@ function removeTerminalCredentialUi(): void {
   if (submit) submit.textContent = "Sign in with ERPNext";
 }
 
+function bindAndroidPosUx(): void {
+  const posScreen=document.querySelector<HTMLElement>("#pos-screen");
+  const products=document.querySelector<HTMLButtonElement>("#mobile-show-products");
+  const cart=document.querySelector<HTMLButtonElement>("#mobile-show-cart");
+  const show=(view:"products"|"cart")=>{
+    if(!posScreen)return;
+    posScreen.dataset.mobileView=view;
+    products?.toggleAttribute("aria-current",view==="products");
+    cart?.toggleAttribute("aria-current",view==="cart");
+    if(view==="products")window.setTimeout(()=>document.querySelector<HTMLInputElement>("#cart-search")?.focus(),0);
+  };
+  products?.addEventListener("click",()=>show("products"));
+  cart?.addEventListener("click",()=>show("cart"));
+  document.querySelector<HTMLButtonElement>("#mobile-cart-dock")?.addEventListener("click",()=>show("cart"));
+  document.querySelector<HTMLButtonElement>("#mobile-scan-item")?.addEventListener("click",async(event)=>{
+    const button=event.currentTarget as HTMLButtonElement;
+    button.disabled=true;button.textContent="Scanning…";
+    try{
+      const value=await scanItemBarcode();
+      const input=document.querySelector<HTMLInputElement>("#cart-search");
+      if(input){show("products");input.value=value;input.dispatchEvent(new KeyboardEvent("keydown",{key:"Enter",bubbles:true}));}
+    }catch(error){
+      const message=document.querySelector<HTMLElement>("#cart-message");
+      if(message)message.textContent=error instanceof Error?error.message:"Barcode scan failed.";
+    }finally{button.disabled=false;button.textContent="▣ Scan";}
+  });
+  show("products");
+}
+
 function enrollmentScreen(error = ""): void {
   document.querySelector<HTMLElement>(".app-shell")?.setAttribute("hidden", "");
   let screen = document.querySelector<HTMLElement>("#device-enrollment-screen");
@@ -161,6 +191,7 @@ async function startAndroidRenderer(): Promise<void> {
   removeTerminalCredentialUi();
   const renderer = document.createElement("script");
   renderer.src = "renderer.js";
+  renderer.addEventListener("load",bindAndroidPosUx,{once:true});
   document.body.append(renderer);
 }
 

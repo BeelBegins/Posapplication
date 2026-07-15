@@ -412,17 +412,27 @@
         </header>
         <div id="pos-session-warning" class="session-warning" hidden></div>
         <div id="pos-offline-banner" class="offline-banner" hidden><span id="pos-offline-text"></span><button id="pos-sync-queue" type="button" class="secondary-button">Sync Now</button></div>
+        <nav class="mobile-pos-tabs" aria-label="POS view">
+          <button id="mobile-show-products" type="button" aria-current="page"><span aria-hidden="true">⌕</span> Products</button>
+          <button id="mobile-show-cart" type="button"><span aria-hidden="true">▤</span> Cart <b id="mobile-tab-count">0</b></button>
+        </nav>
         <section class="pos-layout" aria-labelledby="cart-title">
           <div class="pos-cart-pane">
             <h2 id="cart-title" class="visually-hidden">POS Cart</h2>
-            <input id="cart-search" class="pos-search" type="search" autocomplete="off" placeholder="Scan barcode or search item" />
+            <div class="pos-search-bar">
+              <span class="pos-search-icon" aria-hidden="true">⌕</span>
+              <input id="cart-search" class="pos-search" type="search" autocomplete="off" placeholder="Scan barcode or type / to search items" aria-label="Scan barcode or search products" />
+              <button id="mobile-scan-item" type="button" class="secondary-button" aria-label="Scan item barcode with camera">▣ Scan</button>
+            </div>
             <div id="cart-search-results" class="catalog-results search-popup"></div>
         <p id="cart-message" class="settings-message" role="status"></p>
-            <div class="cart-table-head"><span>Item Code</span><span>Item Name</span><span>UOM</span><span>Quantity</span><span>Rate</span><span>Discount</span><span>Line Total</span><span>Stock</span><span>Void</span></div>
+            <div class="cart-table-head"><span>Item Code</span><span>Item Name</span><span>UOM</span><span>Qty</span><span>Unit Price</span><span>Discount</span><span>Line Total</span><span>Stock</span><span>Remove</span></div>
             <div id="cart-rows" class="cart-rows"></div>
             <div class="mobile-cart-actions" aria-label="Cart actions">
               <button id="mobile-select-customer" type="button" class="secondary-button">Customer</button>
+              <button id="cart-decrease" type="button" class="secondary-button" aria-label="Decrease selected item quantity">−</button>
               <button id="cart-qty" type="button" class="secondary-button">Edit quantity</button>
+              <button id="cart-increase" type="button" class="secondary-button" aria-label="Increase selected item quantity">+</button>
               <button id="cart-remove" type="button" class="secondary-button summary-clear-button">Remove item</button>
             </div>
           </div>
@@ -465,6 +475,7 @@
               <p id="complete-sale-reason" class="blocked-reason"></p>
             </div>
           </aside>
+          <button id="mobile-cart-dock" type="button" class="mobile-cart-dock"><span><b id="mobile-cart-count">0 items</b><small>Saved cart</small></span><strong id="mobile-cart-total">0.00</strong><span>View cart →</span></button>
         </section>
         <footer class="shortcut-bar">F2 Search · F3 Customer · F4 Change Qty · F6 Pay · F7 Benefits · F8 Void Item · F10 Clear Cart · F11 Fullscreen · ↑/↓ Select Row · +/- Change Qty · Esc Return to Scanner</footer>
         <dialog id="customer-dialog" class="customer-dialog"><input id="customer-search" type="search" placeholder="Search customer" /><button id="new-customer" type="button" class="secondary-button">New Customer (Ctrl+N)</button><div id="customer-results" class="catalog-results"></div><p id="customer-detail"></p></dialog>

@@ -7,7 +7,7 @@ Built with Electron, TypeScript, SQLite, ERPNext/Frappe APIs, and FBR-ready serv
 ## Current Version
 
 ```text
-2.6.6
+2.6.7
 ```
 
 ## What This App Does
@@ -20,7 +20,7 @@ Built with Electron, TypeScript, SQLite, ERPNext/Frappe APIs, and FBR-ready serv
 - Supports cashier login, local offline cashier PIN, settings PIN, and shift PIN.
 - Supports POS Opening Entry, Close Shift, shift summary, held sales, sales history, duplicate receipts, refunds, loyalty, coupons, and gift vouchers.
 - Prints receipts through Electron.
-- Supports combined GitHub releases containing the Windows installer and Android APK.
+- Supports combined GitHub releases containing the Windows installer, focused POS/Sales/Shopping Android APKs, and Shopping web bundle.
 - Supports GitHub-based Windows auto-update.
 
 ## Hard Rules
@@ -58,6 +58,9 @@ src/preload.ts               Narrow secure bridge exposed to renderer
 src/renderer/renderer.ts     POS UI workflows
 src/renderer/index.html      POS screens and dialogs
 src/renderer/styles.css      Renderer styling
+src/products/shared/ui.ts    Safe shared status, empty/loading, money, and bottom-navigation UI helpers
+src/products/sales/          Focused mobile Sales ordering UX and domain
+src/products/shopping/       Focused customer Shopping catalogue, cart, checkout, and tracking UX
 src/db/database.ts           SQLite schema, cache, settings, history, queue
 src/domain/fbr-calculation.ts Local FBR estimate engine only
 docs/architecture.md         Full architecture notes
