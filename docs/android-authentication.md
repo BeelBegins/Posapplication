@@ -5,7 +5,7 @@ Ai Matic POS Android does not accept, embed, or persist an ERPNext API key/API s
 ## First installation
 
 1. A POS Supervisor or System Manager calls `aimatic.offline_pos.api.generate_device_enrollment_code` for one POS Profile and renders the returned JSON as a QR code.
-2. The Android enrollment screen receives that QR value.
+2. The Android enrollment screen scans that QR directly with the back camera. Manual paste remains available as a fallback.
 3. The APK generates a per-install hardware UUID and redeems the one-time, ten-minute token over HTTPS.
 4. ERPNext binds the hardware UUID to the selected POS Profile and returns only public device configuration, including the public OAuth client ID.
 5. The device configuration is stored through Android Keystore-backed encrypted storage. No API secret is involved.
@@ -35,6 +35,7 @@ The secure-storage plugin, system-browser plugin, and deep-link listener are loa
 
 - Run `npm test`.
 - Run `npm run android:pos:apk` and inspect the APK manifest for the exact callback intent filter.
+- On first launch, confirm camera permission is requested only when **Scan enrollment QR** is pressed and that cancelling returns safely to the enrollment screen.
 - Confirm the APK HTML has no API Key/API Secret inputs.
 - Run the Electron build to guard the terminal-token path.
 - On a test device: enroll, log in, rotate through a refresh, submit an online sale, queue an offline sale, disable the device, and verify its next server call is rejected.

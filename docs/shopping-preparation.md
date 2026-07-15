@@ -2,6 +2,8 @@
 
 The Shopping product remains disabled in `product-profiles.json` until Phase 4 backend, authentication, payment, privacy, and end-to-end checks are complete. Its UI and domain foundation are intentionally isolated under `src/products/shopping`; Electron and Retail POS do not import it.
 
+Customer devices do not use POS Device enrollment or supervisor QR codes. Shopping uses customer registration/login and a restricted `customer-session`; the POS enrollment scanner is packaged only through the Android POS entry point.
+
 ## Prepared customer flow
 
 Home → categories/search → product catalogue → cart → customer sign-in → address → delivery method → payment method → server quote → place order → order history/status.

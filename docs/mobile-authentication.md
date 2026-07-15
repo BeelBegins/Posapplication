@@ -13,7 +13,7 @@ Restaurant and Sales profiles require authenticated staff sessions. Shopping req
 The Android POS flow is:
 
 1. Connect only to an HTTPS ERPNext site.
-2. Redeem a supervisor-generated, one-time device-enrollment QR code for a POS Profile.
+2. Scan and redeem a supervisor-generated, one-time device-enrollment QR code for a POS Profile. Camera access is requested only for this explicit scan; manual paste is retained as a fallback.
 3. Store the public device configuration through Android Keystore-backed encrypted storage.
 4. Authenticate the cashier in the system browser using OAuth2 Authorization Code with PKCE (`S256`).
 5. Store access/refresh tokens through the same native secure-storage bridge.
