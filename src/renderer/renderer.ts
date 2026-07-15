@@ -87,6 +87,7 @@ interface PosAPI {
   listReleases: () => Promise<{ releases: ReleaseEntry[]; error: string | null }>;
   installRelease: (input: Record<string, unknown>) => Promise<{ ok: boolean; error: string | null }>;
   authorizeAdminAction: (input: Record<string, unknown>) => Promise<{ ok: boolean; token: string; error: string | null }>;
+  consumeAdminAction: (input: Record<string, unknown>) => Promise<{ ok: boolean; error: string | null }>;
   resetCashierOfflinePin: (input: Record<string, unknown>) => Promise<{ ok: boolean; error: string | null }>;
   pushCustomerDisplay: (payload: Record<string, unknown>) => void;
   previewCustomerDisplay: () => Promise<"opened-fullscreen" | "opened-windowed" | "focused" | "no-second-display">;
@@ -95,7 +96,7 @@ interface PosAPI {
 interface ReleaseEntry { tag: string; version: string; name: string; notes: string; publishedAt: string; prerelease: boolean; exeName: string; exeUrl: string; exeApiUrl: string; }
 
 interface ShiftPaymentRow { mode_of_payment: string; opening_amount: number; collected_amount: number; expected_amount: number; sale_amount?: number; refund_amount?: number; net_movement?: number; }
-interface CashierLoginResult { success: boolean; user: string; fullName: string; roles: string[]; allowedPosProfiles: string[]; defaultPosProfile: string; canStartShift: boolean; canRefund: boolean; canCloseShift: boolean; canOfflineSale: boolean; offlineLoginExpiresAt: string; requirePinSetup: boolean; offlineCached?: boolean; offlineLogin?: boolean; error: string | null; }
+interface CashierLoginResult { success: boolean; user: string; fullName: string; roles: string[]; allowedPosProfiles: string[]; defaultPosProfile: string; canStartShift: boolean; canRefund: boolean; canCloseShift: boolean; canVoidItems: boolean; canOfflineSale: boolean; offlineLoginExpiresAt: string; requirePinSetup: boolean; offlineCached?: boolean; offlineLogin?: boolean; error: string | null; }
 interface CashierSession extends CashierLoginResult { loginTime: string; }
 interface ShiftSummary { openingEntry: string; posProfile: string; user: string; company: string; periodStart: string; postingDate: string; status: string; payments: ShiftPaymentRow[]; invoiceCount: number; netSales: number; refunds: number; totalOpening: number; totalExpected: number; isEstimate: boolean; }
 interface ShiftHistoryRow { openingEntry: string; closingEntry: string | null; posProfile: string; cashier: string; company: string; openedAt: string | null; closedAt: string | null; openingCash: number; expectedCash: number; actualCash: number; difference: number; netSales: number; status: string; summary: Record<string, unknown> | null; createdAt: string; }
@@ -623,6 +624,20 @@ function updateOpeningTotal(): void {
 }
 async function showStartShift(): Promise<void> {
   const online = isOnline();
+  // Refresh POS Configuration (Terminal ID, branch, warehouse, payment modes, tax rows) before
+  // showing this screen — reached both when starting a shift and right after closing one
+  // (submitCloseShift routes back here). A terminal-side field like Terminal ID can be set on
+  // the server between shifts and this local cache otherwise only auto-refreshes every 12h
+  // (SYNC_FRESH.config) or via a manual "Refresh Configuration" click in Settings — neither of
+  // which reliably happens between shifts, so do it unconditionally here instead.
+  if (online) {
+    const message = document.querySelector<HTMLElement>("#start-shift-message");
+    if (message) message.textContent = "Refreshing configuration…";
+    await syncConfigNow();
+    const settings = await window.posAPI.loadSettings().catch(() => null);
+    if (settings) populateSettingsForm(settings);
+    if (message) message.textContent = "";
+  }
   const dot = document.querySelector<HTMLElement>("#start-shift-online");
   if (dot) { dot.textContent = online ? "Online" : "Offline"; dot.className = `online-dot ${online ? "online" : "offline"}`; }
   setText("#shift-cashier", cashierDisplay());
@@ -711,6 +726,13 @@ async function refreshFromStartShift(): Promise<void> {
 
 // --- Close Shift -------------------------------------------------------------
 let closeShiftSummary: ShiftSummary | null = null;
+// Set by showCloseShift when the active cashier needed a supervisor step-up
+// to even open this screen; passed through to close_pos_session, which
+// consumes it server-side, atomically with the close itself. Null when the
+// active session is already privileged (no token needed - see api.py).
+// Cleared after every close attempt and whenever leaving the screen so a
+// stale token from an earlier shift can never be reused for a later one.
+let closeShiftSupervisorToken: string | null = null;
 function shiftNumber(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string" && value.trim() && !Number.isNaN(Number(value))) return Number(value);
@@ -805,9 +827,14 @@ async function printShiftSummary(): Promise<void> {
 async function showCloseShift(): Promise<void> {
   const message = document.querySelector<HTMLElement>("#close-shift-message");
   if (!cashierSession) { cartMessage("Cashier login required."); await showCashierLogin("Cashier login required."); return; }
-  if (!cashierSession.canCloseShift) { cartMessage("This cashier is not allowed to close shift."); showScreen("pos"); return; }
   if (cashierSession?.offlineLogin) { cartMessage("Close Shift requires online cashier login."); showScreen("pos"); return; }
   if (!isOnline()) { if (message) message.textContent = "Online connection required to close shift"; showSessionInvalid("Server is offline"); return; }
+  closeShiftSupervisorToken = null;
+  if (!cashierSession.canCloseShift) {
+    const auth = await requestSupervisorActionAuthorization("close_shift");
+    if (!auth.ok) { showScreen("pos"); return; }
+    closeShiftSupervisorToken = auth.token;
+  }
   // Validate there is an active shift before opening the form.
   if (!(await validateSession("close-shift"))) { showScreen("pos"); showSessionInvalid(sessionState.reason); return; }
   if (txnInProgress()) { showScreen("pos"); if (message) message.textContent = ""; cartMessage("Finish or hold the current sale/payment before closing the shift."); return; }
@@ -854,7 +881,10 @@ async function submitCloseShift(): Promise<void> {
   const button = document.querySelector<HTMLButtonElement>("#close-shift-submit");
   if (closeShiftInFlight) return;
   if (!cashierSession) { if (message) message.textContent = "Cashier login required."; return; }
-  if (!cashierSession.canCloseShift) { if (message) message.textContent = "This cashier is not allowed to close shift."; return; }
+  // No canCloseShift re-check here - showCloseShift is the only path to this
+  // screen (it's the only place that shows "close-shift") and already
+  // required either the role or a fresh supervisor authorization to get
+  // here, stashing the resulting token in closeShiftSupervisorToken below.
   if (!isOnline()) { if (message) message.textContent = "Online connection required to close shift"; return; }
   if (!closeShiftSummary) { if (message) message.textContent = "Shift summary not loaded"; return; }
   // Re-validate the session immediately before submitting.
@@ -872,7 +902,8 @@ async function submitCloseShift(): Promise<void> {
       opening_entry: closeShiftSummary.openingEntry,
       cashier_user: cashierSession?.user ?? "",
       closing_balances: rows.map((r) => ({ mode_of_payment: r.mode, opening_amount: r.opening, expected_amount: r.expected, closing_amount: money2(r.actual), difference: money2(r.actual - r.expected) })),
-      notes: document.querySelector<HTMLTextAreaElement>("#close-notes")?.value ?? ""
+      notes: document.querySelector<HTMLTextAreaElement>("#close-notes")?.value ?? "",
+      supervisor_token: closeShiftSupervisorToken ?? ""
     });
     if (!result.success) { if (message) message.textContent = result.error ?? "Unable to close shift"; return; }
     if (message) message.textContent = "Shift closed. Printing summary...";
@@ -888,6 +919,7 @@ async function submitCloseShift(): Promise<void> {
     const startMsg = document.querySelector<HTMLElement>("#start-shift-message");
     if (startMsg) startMsg.textContent = `Previous shift closed${result.closingEntry ? ` (${result.closingEntry})` : ""}. Start a new shift to continue.`;
   } finally {
+    closeShiftSupervisorToken = null;
     closeShiftInFlight = false;
     if (button) button.disabled = false;
   }
@@ -2328,11 +2360,50 @@ async function afterCartMutation(message: string): Promise<void> {
 
 async function addToCart(item: CatalogSearchResult): Promise<void> { const index = cartLines.findIndex((line) => line.itemCode === item.itemCode && line.uom === item.uom); let message = "Item added"; if (index >= 0) { cartLines[index].quantity += 1; selectedCartIndex = index; message = "Quantity changed"; } else { cartLines.push({ ...item, quantity: 1 }); selectedCartIndex = cartLines.length - 1; } await afterCartMutation(message); }
 
-async function changeCartQuantity(delta: number): Promise<void> { if (selectedCartIndex < 0) return; cartLines[selectedCartIndex].quantity += delta; const voided = cartLines[selectedCartIndex].quantity <= 0; if (voided) cartLines.splice(selectedCartIndex, 1); await afterCartMutation(voided ? "Item voided" : "Quantity changed"); }
+// Single choke point for every path that fully removes a cart row (F8/Delete,
+// the cart-remove button, quantity dropping to/being set to 0) - gates on a
+// POS Supervisor authorizing the void when the active cashier session isn't
+// itself privileged enough to skip the prompt (cashierSession.canVoidItems).
+// Online-only by construction (requestSupervisorActionAuthorization refuses
+// offline) - there is no offline fallback for this, by design. Authorizes
+// then immediately consumes the token via a second server call before
+// proceeding: a cart has no server document of its own to bind the
+// authorization to (it's pure pre-sale client state), so actually redeeming
+// the token here - not just trusting a locally successful dialog - is what
+// proves a real supervisor password was checked *now*, not merely at some
+// earlier moment for a different purpose.
+async function voidCartRow(index: number): Promise<void> {
+  if (index < 0 || index >= cartLines.length) return;
+  if (!cashierSession?.canVoidItems) {
+    const auth = await requestSupervisorActionAuthorization("void_item");
+    if (!auth.ok) return;
+    const consumed = await window.posAPI.consumeAdminAction({ token: auth.token, action: "void_item" });
+    if (!consumed.ok) { cartMessage(consumed.error ?? "Supervisor authorization could not be verified."); return; }
+  }
+  cartLines.splice(index, 1);
+  await afterCartMutation("Item voided");
+}
 
-async function removeSelectedCartRow(): Promise<void> { if (selectedCartIndex < 0) return; cartLines.splice(selectedCartIndex, 1); await afterCartMutation("Item voided"); }
+async function changeCartQuantity(delta: number): Promise<void> {
+  if (selectedCartIndex < 0) return;
+  const nextQuantity = cartLines[selectedCartIndex].quantity + delta;
+  if (nextQuantity <= 0) { await voidCartRow(selectedCartIndex); return; }
+  cartLines[selectedCartIndex].quantity = nextQuantity;
+  await afterCartMutation("Quantity changed");
+}
+
+async function removeSelectedCartRow(): Promise<void> { if (selectedCartIndex < 0) return; await voidCartRow(selectedCartIndex); }
 function editSelectedQuantity(): void { if (selectedCartIndex < 0) return; const dialog = document.querySelector<HTMLDialogElement>("#quantity-dialog"); const input = document.querySelector<HTMLInputElement>("#quantity-input"); if (!dialog || !input) return; input.value = String(cartLines[selectedCartIndex].quantity); dialog.showModal(); window.setTimeout(() => { input.focus(); input.select(); }, 0); }
-async function saveDialogQuantity(): Promise<void> { const dialog = document.querySelector<HTMLDialogElement>("#quantity-dialog"); const input = document.querySelector<HTMLInputElement>("#quantity-input"); const quantity = Number(input?.value); if (!Number.isFinite(quantity) || quantity < 0 || selectedCartIndex < 0) { dialog?.close(); focusCart(); return; } const voided = quantity === 0; if (voided) cartLines.splice(selectedCartIndex, 1); else cartLines[selectedCartIndex].quantity = quantity; await afterCartMutation(voided ? "Item voided" : "Quantity changed"); dialog?.close(); }
+async function saveDialogQuantity(): Promise<void> {
+  const dialog = document.querySelector<HTMLDialogElement>("#quantity-dialog");
+  const input = document.querySelector<HTMLInputElement>("#quantity-input");
+  const quantity = Number(input?.value);
+  if (!Number.isFinite(quantity) || quantity < 0 || selectedCartIndex < 0) { dialog?.close(); focusCart(); return; }
+  if (quantity === 0) { await voidCartRow(selectedCartIndex); dialog?.close(); return; }
+  cartLines[selectedCartIndex].quantity = quantity;
+  await afterCartMutation("Quantity changed");
+  dialog?.close();
+}
 
 function showCartSearchResults(results: CatalogSearchResult[], preserveSelection = false): void { cartSearchResults = results.slice(0, 7); if (!preserveSelection) selectedSearchIndex = 0; selectedSearchIndex = Math.min(selectedSearchIndex, Math.max(0, cartSearchResults.length - 1)); const container = document.querySelector<HTMLElement>("#cart-search-results"); if (!container) return; container.replaceChildren(...cartSearchResults.map((item, index) => { const button = document.createElement("button"); button.type="button"; button.className=`secondary-button search-result${index === selectedSearchIndex ? " selected" : ""}`; const price = item.sellingPrice === null ? "—" : `${item.sellingPrice.toFixed(2)} ${item.currency ?? ""}`; const stock = item.actualStock === null ? "—" : String(item.actualStock); button.innerHTML=`<span class="search-code">${item.itemCode}</span><span class="search-name">${item.itemName}</span><span class="search-meta">${item.uom} x${item.conversionFactor ?? 1} · ${price} · Stock ${stock}</span>`; button.onclick=()=>void addToCart(item); return button; })); container.querySelector<HTMLElement>(".selected")?.scrollIntoView({ block: "nearest" }); }
 async function runSlashSearch(): Promise<void> { const query = (cartInput()?.value ?? "").slice(1).trim(); if (!query) { showCartSearchResults([]); return; } const lookup = await window.posAPI.lookupCatalog(query); showCartSearchResults(lookup.exact ? [lookup.exact] : lookup.results); cartMessage(cartSearchResults.length ? "Search results" : "No active sales item found"); }
@@ -3227,6 +3298,47 @@ async function openSettingsIfAuthorized(): Promise<void> {
   if (await requestSettingsAuthorization()) showScreen("settings");
 }
 
+// Generic "a POS Supervisor must authorize this" gate for close_shift and
+// void_item - same dialog-driven pattern as requestSettingsAuthorization
+// above, generalized to a parameterized action and returning the raw token
+// (Settings has nothing further to do with it; these two do). Deliberately
+// still prompts fresh credentials every time rather than trusting anything
+// cached client-side, for the same reason requestSettingsAuthorization does.
+const SUPERVISOR_ACTION_COPY: Record<"close_shift" | "void_item", { title: string; note: string }> = {
+  close_shift: { title: "Supervisor Authorization — Close Shift", note: "This cashier is not permitted to close the shift. A POS Supervisor must enter their ERPNext credentials to authorize it." },
+  void_item: { title: "Supervisor Authorization — Void Item", note: "This cashier is not permitted to void items. A POS Supervisor must enter their ERPNext credentials to authorize removing this item." },
+};
+async function requestSupervisorActionAuthorization(action: "close_shift" | "void_item"): Promise<{ ok: boolean; token: string }> {
+  const dialog = document.querySelector<HTMLDialogElement>("#supervisor-action-dialog");
+  const form = document.querySelector<HTMLFormElement>("#supervisor-action-form");
+  if (!dialog || !form) return { ok: false, token: "" };
+  if (!navigator.onLine) { appAlert("Online connection required for supervisor authorization."); return { ok: false, token: "" }; }
+  const copy = SUPERVISOR_ACTION_COPY[action];
+  setText("#supervisor-action-title", copy.title);
+  setText("#supervisor-action-note", copy.note);
+  ["#supervisor-action-user","#supervisor-action-password"].forEach((id)=>{const input=document.querySelector<HTMLInputElement>(id);if(input)input.value="";});
+  adminMessage("#supervisor-action-message", "");
+  return new Promise((resolve) => {
+    const cleanup = () => { form.onsubmit = null; resolve({ ok: false, token: "" }); };
+    document.querySelector<HTMLButtonElement>("#supervisor-action-cancel")!.onclick = () => { dialog.close(); cleanup(); };
+    form.onsubmit = async (event) => {
+      event.preventDefault();
+      const username = document.querySelector<HTMLInputElement>("#supervisor-action-user")?.value.trim() ?? "";
+      const passwordInput = document.querySelector<HTMLInputElement>("#supervisor-action-password");
+      const password = passwordInput?.value ?? "";
+      adminMessage("#supervisor-action-message", "Verifying...");
+      const auth = await window.posAPI.authorizeAdminAction({ username, password, action });
+      if (passwordInput) passwordInput.value = "";
+      if (!auth.ok) { adminMessage("#supervisor-action-message", auth.error ?? "Supervisor authorization failed."); return; }
+      dialog.close();
+      form.onsubmit = null;
+      resolve({ ok: true, token: auth.token });
+    };
+    dialog.showModal();
+    window.setTimeout(()=>document.querySelector<HTMLInputElement>("#supervisor-action-user")?.focus(),0);
+  });
+}
+
 function initializeRenderer(): void {
   void showDatabaseStatus();
   void loadPosProfileCacheStatus();
@@ -3319,20 +3431,18 @@ function initializeRenderer(): void {
   document.querySelector<HTMLButtonElement>("#start-shift-refresh")?.addEventListener("click", () => void refreshFromStartShift());
   document.querySelector<HTMLButtonElement>("#start-shift-cancel")?.addEventListener("click", () => void goToPos());
   document.querySelector<HTMLButtonElement>("#start-shift-settings")?.addEventListener("click", () => void openSettingsIfAuthorized());
-  // Close Shift + Shift History actions.
-  document.querySelector<HTMLButtonElement>("#pos-close-shift")?.addEventListener("click", () => {
-    if (!cashierSession?.canCloseShift) { appAlert("Your account is not permitted to close this shift."); return; }
-    void showCloseShift();
-  });
+  // Close Shift + Shift History actions. canCloseShift is no longer checked
+  // here - showCloseShift/submitCloseShift handle it themselves (supervisor
+  // step-up when the active session isn't privileged), so a POS User must
+  // actually be able to reach the screen and attempt the prompt rather than
+  // being turned away at the button before ever seeing it.
+  document.querySelector<HTMLButtonElement>("#pos-close-shift")?.addEventListener("click", () => void showCloseShift());
   document.querySelector<HTMLButtonElement>("#cashier-logout")?.addEventListener("click", () => { if (txnInProgress()) { cartMessage("Finish the current payment/refund before switching cashier."); return; } logoutCashier(); });
   document.querySelector<HTMLButtonElement>("#pos-sync-queue")?.addEventListener("click", () => void syncQueueNow(true));
   void updateOfflineUi();
   document.querySelector<HTMLButtonElement>("#close-shift-back")?.addEventListener("click", () => showScreen("pos"));
   document.querySelector<HTMLButtonElement>("#close-shift-cancel")?.addEventListener("click", () => showScreen("pos"));
-  document.querySelector<HTMLButtonElement>("#close-shift-submit")?.addEventListener("click", () => {
-    if (!cashierSession?.canCloseShift) { appAlert("Your account is not permitted to close this shift."); return; }
-    void submitCloseShift();
-  });
+  document.querySelector<HTMLButtonElement>("#close-shift-submit")?.addEventListener("click", () => void submitCloseShift());
   document.querySelector<HTMLButtonElement>("#close-shift-print")?.addEventListener("click", () => void printShiftSummary());
   document.querySelector<HTMLButtonElement>("#close-shift-hold")?.addEventListener("click", () => void holdCurrentSale());
   document.querySelector<HTMLButtonElement>("#open-shift-history")?.addEventListener("click", () => void openShiftHistory());
