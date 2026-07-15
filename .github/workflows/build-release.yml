@@ -97,20 +97,21 @@ jobs:
           test -n "$ANDROID_KEY_ALIAS" || (echo "ANDROID_KEY_ALIAS secret is required" && exit 1)
           test -n "$ANDROID_KEY_PASSWORD" || (echo "ANDROID_KEY_PASSWORD secret is required" && exit 1)
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/aimatic-release.jks"
-      - name: Build signed Android APK
+      - name: Build signed Android APK and Play Store bundle
         working-directory: android
         env:
           ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/aimatic-release.jks
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: ./gradlew assembleRelease
+        run: ./gradlew assembleRelease bundleRelease
       - name: Name Android release artifact
         shell: bash
         run: |
           VERSION=$(node -p "require('./package.json').version")
           mkdir -p dist-apk
           cp android/app/build/outputs/apk/release/app-release.apk "dist-apk/${{ matrix.filename }}-$VERSION.apk"
+          cp android/app/build/outputs/bundle/release/app-release.aab "dist-apk/${{ matrix.filename }}-$VERSION.aab"
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}

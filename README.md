@@ -148,6 +148,23 @@ dist-apk/Aimatic-POS-App-<version>-debug.apk
 
 The Android products launch in sensor-aware portrait mode. POS uses an Android-only touch layout with compact status, readable cart cards, and pinned payment actions; Electron retains its existing desktop layout. Android uses application storage for its existing offline data, Android Keystore-backed encrypted storage for enrollment/session material, and the Android print service. The synced catalogue is persisted separately from small operational/cart state and indexed in memory so barcode scans do not rewrite or linearly rescan the entire catalogue. Existing data migrates automatically. Electron-only auto-update and second-monitor controls are not loaded on Android.
 
+## Create a Google Play App Bundle
+
+Google Play requires a signed Android App Bundle for a new app. Configure the same permanent Android signing key used by CI, then build the required product:
+
+```bash
+export ANDROID_KEYSTORE_PATH=/secure/path/aimatic-release.jks
+export ANDROID_KEYSTORE_PASSWORD='your-store-password'
+export ANDROID_KEY_ALIAS='your-key-alias'
+export ANDROID_KEY_PASSWORD='your-key-password'
+npm run android:pos:aab
+npm run android:sales:aab
+npm run android:shopping:aab
+```
+
+Signed bundles are written to `dist-aab/`. Keep the keystore and passwords outside the repository and retain them permanently as the Google Play upload key. Restaurant has an Android build profile but must not be submitted to production while its demo-backed behavior remains enabled.
+
+
 ## Release
 
 Pushes to `main` run the combined release workflow. It tests the application, builds Windows plus POS, Sales, and Shopping Android independently, builds the Shopping web bundle, and publishes them to the same `v<package version>` GitHub release:
