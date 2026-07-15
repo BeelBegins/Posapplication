@@ -9,7 +9,7 @@ const css = readFileSync("src/products/restaurant/styles.css", "utf8");
 const workflow = readFileSync(".github/workflows/build-release.yml", "utf8");
 const publisher = readFileSync("scripts/publish-github-release.cjs", "utf8");
 
-test("Restaurant mock repository is realistic and isolated", () => {
+test("Restaurant mock repository remains realistic and isolated from production services", () => {
   assert.equal(floors.length, 2);
   assert.ok(tables.length >= 15);
   assert.ok(orders.length >= 4);
@@ -17,7 +17,11 @@ test("Restaurant mock repository is realistic and isolated", () => {
   assert.ok(tables.some((table) => table.status === "Needs attention"));
   assert.ok(tables.some((table) => table.status === "Bill requested"));
   assert.ok(menu.some((item) => !item.available));
-  assert.doesNotMatch(app, /createRestaurantApi|api\/restaurant|electron|ipcRenderer/);
+  assert.match(app, /createRestaurantApi/);
+  assert.match(app, /OAuthPkceCredentialProvider/);
+  assert.match(app, /mode === "live"/);
+  assert.match(app, /Explore demo/);
+  assert.doesNotMatch(app, /electron|ipcRenderer|api\/sales-orders|api\/shopping/);
 });
 
 test("Restaurant build exposes only focused waiter navigation", () => {
@@ -35,8 +39,8 @@ test("Restaurant UX includes operational, offline, and responsive states", () =>
   assert.match(app, /data-action=\"request-bill\"/);
   assert.match(app, /data-qty-input/);
   assert.match(css, /env\(safe-area-inset-bottom\)/);
-  assert.match(css, /@media\(min-width:600px\)/);
-  assert.match(css, /@media\(min-width:900px\)/);
-  assert.match(css, /prefers-color-scheme:dark/);
-  assert.match(css, /min-height:48px/);
+  assert.match(css, /@media \(min-width: 600px\)/);
+  assert.match(css, /@media \(min-width: 900px\)/);
+  assert.match(css, /prefers-color-scheme: dark/);
+  assert.match(css, /min-height: 48px/);
 });

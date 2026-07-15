@@ -12,6 +12,7 @@ export interface RestaurantOrder {
   name: string; branch: string; floor: string; table: string; waiter: string; guestCount: number;
   status: RestaurantOrderStatus; lines: RestaurantOrderLine[]; posInvoice: string | null; modified: string;
   openedAt?: string;
+  netTotal?: number; taxes?: number; grandTotal?: number;
 }
 export interface KitchenTicket {
   name: string; order: string; requestId: string; status: KitchenTicketStatus;
