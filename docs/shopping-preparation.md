@@ -6,7 +6,11 @@ Customer devices do not use POS Device enrollment or supervisor QR codes. Shoppi
 
 ## Customer flow
 
-Home → categories/search → product detail → cart → customer sign-in → optional saved address → Store Pickup → Cash on Delivery → signed server quote → place order → order history/status.
+Home → categories/search → product detail → cart → customer sign-in → address → delivery or Store Pickup → Cash on Delivery → review with a signed server quote → place order → order history/status.
+
+The customer-facing navigation is Home → Categories → Cart → Orders → Account. Home prioritizes search, location, compact categories, popular products, new arrivals, and the saved cart. Catalogue cards show public image, price/MRP, availability, and in-card quantity controls. Product detail adds savings, brand/category, description, fulfillment availability, Buy Now, and related items without exposing internal ERPNext fields.
+
+The cart keeps quantity, unit price, savings, line total, availability, price-change warnings, and remove actions visible beside a sticky summary. Checkout is presented as five clear steps: Address, Delivery or Pickup, Payment, Review, and Place Order. The existing stable checkout request ID remains the duplicate-submission guard. Order history uses customer-friendly labels and a milestone timeline rather than raw internal documents.
 
 The application calls only the implemented `aimatic.shopping.api` namespace. It does not call generic ERPNext resource endpoints and does not accept an API key or API secret.
 
@@ -38,6 +42,6 @@ The client persists one checkout request ID for the current cart until ERPNext c
 4. Run privacy, cross-customer authorization, rate-limit, duplicate-order, price-change, and stock-race checks.
 5. Build Shopping, Sales, POS Android, and Electron separately. Restaurant remains deferred.
 
-Address editing, home delivery, online gateways, and push notifications are intentionally outside the COD/store-pickup first release.
+Dedicated in-app address editing, save-for-later persistence, reorder submission, online gateways, and push notifications remain backend limitations. The UX explains these unavailable actions instead of pretending they succeeded. Delivery instructions are displayed in checkout but require an explicit server contract before they can be persisted.
 
 For browser deployment, configure one exact HTTPS `web_redirect_uri`, then run `npm run build:shopping:web` and deploy `dist-web/shopping` with SPA fallback for the callback path. The service worker caches only the application shell; API requests are never cached.

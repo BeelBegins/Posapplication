@@ -2239,7 +2239,7 @@ async function openPayment():Promise<void>{
   renderPaymentMethods();const amountInput=document.querySelector<HTMLInputElement>("#payment-amount");if(amountInput)amountInput.value="";const payMsg=document.querySelector<HTMLElement>("#payment-message");if(payMsg)payMsg.textContent="";renderPayments();document.querySelector<HTMLDialogElement>("#payment-dialog")?.showModal();window.setTimeout(()=>amountInput?.focus(),0);}
 function renderCart(): void {
   const container = document.querySelector<HTMLElement>("#cart-rows"); if (!container) return; container.replaceChildren();
-  cartLines.forEach((line, index) => { const row = document.createElement("div"); row.setAttribute("role", "button"); row.tabIndex = -1; row.className = `cart-row${index === selectedCartIndex ? " selected" : ""}`; const cells = [line.itemCode,line.itemName,line.uom,String(line.quantity),String(line.sellingPrice ?? 0),"0.00",((line.sellingPrice ?? 0) * line.quantity).toFixed(2),`${line.actualStock ?? "—"}${line.actualStock !== null && line.quantity > line.actualStock ? " ⚠" : ""}`,"Void"]; cells.forEach((text) => { const cell=document.createElement("span");cell.textContent=text;row.append(cell); }); row.onpointerdown = (event) => event.preventDefault(); row.onclick = () => { selectedCartIndex = index; renderCart(); focusCart(true); }; container.append(row); });
+  cartLines.forEach((line, index) => { const row = document.createElement("div"); row.setAttribute("role", "button"); row.setAttribute("aria-label", `${line.itemName}, quantity ${line.quantity}, line total ${((line.sellingPrice ?? 0) * line.quantity).toFixed(2)}`); row.tabIndex = -1; const lowStock=line.actualStock !== null&&line.actualStock!==undefined&&line.quantity>line.actualStock; row.className = `cart-row${index === selectedCartIndex ? " selected" : ""}${lowStock?" stock-warning":""}`; const cells = [line.itemCode,line.itemName,line.uom,String(line.quantity),String(line.sellingPrice ?? 0),"0.00",((line.sellingPrice ?? 0) * line.quantity).toFixed(2),`${line.actualStock ?? "—"}${lowStock ? " ⚠" : ""}`,"Remove"]; cells.forEach((text,cellIndex) => { const cell=document.createElement("span");cell.textContent=text;if(cellIndex===7&&lowStock)cell.title="Requested quantity exceeds displayed stock";row.append(cell); }); row.onpointerdown = (event) => event.preventDefault(); row.onclick = () => { selectedCartIndex = index; renderCart(); focusCart(true); }; container.append(row); });
   // Keep the most recently scanned/selected line in view automatically -
   // cashiers on a compact 19" screen shouldn't have to scroll the cart list
   // by hand to see what was just rung up.
@@ -2249,6 +2249,9 @@ function renderCart(): void {
   const paid = paymentRows.reduce((sum, row) => sum + row.amount, 0);
   (document.querySelector("#cart-item-count") as HTMLElement).textContent = String(cartLines.length);
   (document.querySelector("#cart-quantity") as HTMLElement).textContent = String(quantity);
+  setCartText("#mobile-tab-count", String(cartLines.length));
+  setCartText("#mobile-cart-count", `${quantity} item${quantity===1?"":"s"}`);
+  setCartText("#mobile-cart-total", totals.grandTotal.toFixed(2));
   setCartText("#cart-sales-tax", totals.salesTax.toFixed(2));
   setCartText("#cart-service-fee", totals.serviceFee.toFixed(2));
   setCartText("#cart-grand-total", totals.grandTotal.toFixed(2)); // invoice grand total, before loyalty/voucher settlement
@@ -3573,6 +3576,8 @@ function initializeRenderer(): void {
     if (!isEditableElement(event.target as Element | null)) focusCart(true);
   });
   document.querySelector("#cart-qty")?.addEventListener("click", () => void editSelectedQuantity());
+  document.querySelector("#cart-decrease")?.addEventListener("click", () => void changeCartQuantity(-1));
+  document.querySelector("#cart-increase")?.addEventListener("click", () => void changeCartQuantity(1));
   document.querySelector("#cart-remove")?.addEventListener("click", () => void removeSelectedCartRow());
   document.querySelector("#mobile-select-customer")?.addEventListener("click", () => openCustomerSearch());
   document.querySelector("#cart-clear")?.addEventListener("click", async () => { if (!cartLines.length || !appConfirm("Clear the full cart?")) return; cartLines=[]; selectedCartIndex=-1; await afterCartMutation("Cart cleared"); });

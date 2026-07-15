@@ -6,7 +6,11 @@ Ai Matic Sales is a focused Capacitor application for employees with Sales User,
 
 ERPNext OAuth2 PKCE login → allowed branch → customer search → outstanding balance, credit limit, and customer price list → item search or camera barcode scan → branch warehouse availability → offline draft/cart → ERPNext order preview → draft Sales Order creation → order history/status.
 
+The focused mobile navigation is Customers → Order → Drafts → Orders → Profile. Customer and item search are debounced, recent selections remain on-device, category chips and camera scanning reduce typing, and the review screen keeps stock, credit, tax, total, draft, and submission state visible. The responsive shell uses portrait-safe areas, 48px primary controls, a persistent cart dock, and one-column phone layouts without importing Electron behavior.
+
 The client stores drafts and queued submissions under the Sales application sandbox. Every draft receives one stable `request_id`; retries reuse it. The server's `Mobile Sales Order Request` record maps that ID to at most one Sales Order, preventing repeat taps or queue replays from creating duplicates.
+
+Local states are deliberately explicit: draft, queued, failed, and submitted. Queued/failed cards show their stable request ID and a safe retry action; server history separately exposes Draft, Submitted, Partially Delivered, Completed, and Cancelled filters. A locally displayed estimate is not presented as an ERPNext-confirmed total until preview succeeds.
 
 ## Server authority
 
