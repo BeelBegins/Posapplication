@@ -192,10 +192,12 @@ small { color: var(--muted); }
 .customer-balance b { color: var(--navy); }
 .order-context {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
   margin: 14px 0;
 }
+.context-value { min-height: 48px; display: grid; align-content: center; gap: 3px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
+.context-value small { font-size: .68rem; }
 label { display: grid; gap: 6px; color: var(--muted); font-size: .75rem; font-weight: 750; }
 input, select, textarea {
   width: 100%;
@@ -238,9 +240,10 @@ textarea { resize: vertical; }
 .stock { color: #32704f; font-size: .68rem; }
 .danger-text { color: var(--danger); }
 .warning-text { color: var(--warning); }
-.quick-add { min-width: 58px; padding: 7px; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 2px; border-left: 1px solid var(--line); }
+.quick-add { min-width: 66px; padding: 7px; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 2px; border-left: 1px solid var(--line); }
 .quick-add button { min-width: 44px; min-height: 44px; padding: 6px; background: var(--teal-soft); color: #17695f; }
 .quick-add b { padding: 2px; }
+.quick-qty-input { width: 58px; min-height: 40px; padding: 4px; text-align: center; font-weight: 850; }
 .cart-dock {
   position: fixed;
   left: 50%;

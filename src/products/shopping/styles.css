@@ -81,6 +81,10 @@ header {
 .page-heading p, .order-detail-head p { color: var(--muted); margin-bottom: 0; }
 .home-search, .location-strip { display: none; }
 .hero { min-height: 330px; border-radius: 28px; background: var(--ink); color: #fff; overflow: hidden; display: grid; grid-template-columns: 1.1fr .9fr; align-items: center; }
+.customer-access { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 0 0 16px; padding: 15px 18px; border: 1px solid #cfdba0; border-radius: var(--radius); background: #f6fadf; }
+.customer-access h2, .customer-access p { margin-bottom: 2px; }
+.customer-access small { color: var(--muted); }
+.customer-access > div:last-child { display: flex; gap: 8px; }
 .hero.compact { min-height: 300px; }
 .hero img { width: 100%; height: 100%; object-fit: cover; grid-column: 2; grid-row: 1; }
 .hero div { padding: 42px; grid-column: 1; grid-row: 1; }
@@ -179,6 +183,12 @@ input, select, textarea { min-height: 48px; padding: 10px 12px; border: 1px soli
 .form-heading > span { flex: 0 0 auto; background: var(--lime); font-weight: 900; }
 .form-heading h2, .form-heading p { margin: 0; }
 .form-heading p, .inline-info { color: var(--muted); font-size: .73rem; }
+.auth-choice { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 18px 0; }
+.auth-choice section { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; padding: 15px; border: 1px solid var(--line); border-radius: 16px; background: #f8faf6; }
+.auth-choice section > span { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 12px; background: var(--cream); font-weight: 900; }
+.auth-choice h2, .auth-choice p { margin-bottom: 3px; }
+.auth-choice p { color: var(--muted); font-size: .76rem; }
+.auth-choice button { grid-column: 1 / -1; }
 .checkout-summary { position: sticky; top: 90px; }
 .quote-prompt { min-height: 160px; display: grid; place-items: center; align-content: center; text-align: center; color: var(--muted); }
 .quote-prompt span { font-size: 1.8rem; }
@@ -208,6 +218,9 @@ input, select, textarea { min-height: 48px; padding: 10px 12px; border: 1px soli
 .account-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin-top: 14px; }
 .account-grid section { padding: 18px; border: 1px solid var(--line); border-radius: var(--radius); background: #fff; box-shadow: var(--shadow); }
 .account-grid section > button:not(.secondary) { width: 100%; display: flex; justify-content: space-between; border-bottom: 1px solid var(--line); border-radius: 0; text-align: left; }
+.store-connection { grid-column: 1 / -1; }
+.store-connection p { display: grid; gap: 4px; }
+.store-connection p b { overflow-wrap: anywhere; }
 .reorder-strip { margin-top: 28px; padding: 22px; display: flex; justify-content: space-between; align-items: center; gap: 12px; border-radius: var(--radius); background: var(--cream); }
 .reorder-strip h2 { margin: 0; }
 .ui-empty { min-height: 230px; display: grid; place-items: center; align-content: center; padding: 25px; text-align: center; color: var(--muted); }
@@ -237,6 +250,8 @@ input, select, textarea { min-height: 48px; padding: 10px 12px; border: 1px soli
   .location-strip small { color: var(--muted); }
   .location-strip button { min-height: 38px; padding: 5px 8px; color: #55700e; }
   .hero, .hero.compact { min-height: 235px; display: block; position: relative; border-radius: 19px; }
+  .customer-access { align-items: stretch; flex-direction: column; padding: 13px; }
+  .customer-access > div:last-child { display: grid; grid-template-columns: 1fr 1fr; }
   .hero img { position: absolute; inset: 0; opacity: .35; }
   .hero div { position: relative; padding: 25px 18px; }
   .hero h1 { font-size: 2rem; }
@@ -256,6 +271,7 @@ input, select, textarea { min-height: 48px; padding: 10px 12px; border: 1px soli
   .detail-image { min-height: 300px; }
   .detail-copy dl { grid-template-columns: 1fr 1fr; }
   .cart-layout, .checkout-layout, .tracking-card, .account-grid { grid-template-columns: 1fr; }
+  .auth-choice { grid-template-columns: 1fr; }
   .cart-line { grid-template-columns: 65px minmax(0, 1fr); }
   .cart-line img, .thumb { width: 65px; height: 65px; }
   .cart-actions { grid-column: 2; min-width: 0; display: grid; grid-template-columns: auto 1fr; justify-items: start; }

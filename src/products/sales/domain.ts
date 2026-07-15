@@ -4,6 +4,7 @@ export type SalesDraftStatus = "draft" | "queued" | "submitted" | "failed";
 export interface SalesDraft {
   requestId: string;
   branch: string;
+  warehouse: string;
   customer: string;
   items: SalesOrderLineInput[];
   deliveryDate: string;
@@ -15,9 +16,9 @@ export interface SalesDraft {
   updatedAt: string;
 }
 
-export function newSalesDraft(branch = "", now = new Date()): SalesDraft {
+export function newSalesDraft(branch = "", now = new Date(), warehouse = ""): SalesDraft {
   const delivery = new Date(now); delivery.setDate(delivery.getDate() + 1);
-  return { requestId: crypto.randomUUID(), branch, customer: "", items: [], deliveryDate: delivery.toISOString().slice(0, 10), poNo: "", remarks: "", status: "draft", updatedAt: now.toISOString() };
+  return { requestId: crypto.randomUUID(), branch, warehouse, customer: "", items: [], deliveryDate: delivery.toISOString().slice(0, 10), poNo: "", remarks: "", status: "draft", updatedAt: now.toISOString() };
 }
 
 export function setDraftItem(draft: SalesDraft, item: SalesOrderLineInput, now = new Date().toISOString()): SalesDraft {
@@ -29,7 +30,7 @@ export function setDraftItem(draft: SalesDraft, item: SalesOrderLineInput, now =
 }
 
 export function assertSalesDraftReady(draft: SalesDraft): void {
-  if (!draft.requestId || !draft.branch || !draft.customer) throw new Error("Branch and customer are required.");
+  if (!draft.requestId || !draft.customer || !draft.warehouse) throw new Error("Customer and warehouse are required.");
   if (!draft.items.length || draft.items.some(item => !item.item_code || item.qty <= 0)) throw new Error("Add at least one item with a valid quantity.");
   if (!draft.deliveryDate) throw new Error("Delivery date is required.");
 }
