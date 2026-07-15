@@ -15,7 +15,7 @@ const capabilities: Record<AppPlatform, PlatformCapabilities> = {
     customerDisplay: false,
     keyboardShortcuts: false,
     androidPrinting: true,
-    cameraScanner: false,
+    cameraScanner: true,
     pushNotifications: false
   },
   web: {

@@ -7,6 +7,7 @@ import { androidSecureStorage } from "./secure-storage";
 import { capacitorOAuthBrowser } from "./capacitor-oauth-browser";
 import { OAuthPkceCredentialProvider } from "./credential-provider";
 import { DeviceEnrollmentService } from "./device-enrollment";
+import { scanEnrollmentQr } from "./enrollment-qr-scanner";
 
 declare const __APP_VERSION__: string;
 declare const __APP_PRODUCT__: ProductId;
@@ -118,8 +119,31 @@ function enrollmentScreen(error = ""): void {
     screen.className = "device-enrollment-screen";
     document.body.append(screen);
   }
-  screen.innerHTML = `<div class="device-enrollment-card"><p class="eyebrow">Secure Android setup</p><h1>Enroll this POS device</h1><p>A supervisor generates a one-time Device Enrollment QR in ERPNext. Scan it with a QR app and paste its value here.</p>${error?`<p class="settings-message">${error.replace(/[&<>"']/g,(c)=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]!))}</p>`:""}<form id="device-enrollment-form"><label>Enrollment QR value<textarea id="device-enrollment-value" rows="5" autocomplete="off" required></textarea></label><button class="primary-action" type="submit">Enroll device</button></form><small>No API key or API secret is stored in this APK.</small></div>`;
-  document.querySelector<HTMLFormElement>("#device-enrollment-form")!.onsubmit=async(event)=>{event.preventDefault();const button=document.querySelector<HTMLButtonElement>("#device-enrollment-form button")!;button.disabled=true;button.textContent="Enrolling…";try{await enrollmentService.redeem(document.querySelector<HTMLTextAreaElement>("#device-enrollment-value")!.value);location.reload();}catch(cause){enrollmentScreen(cause instanceof Error?cause.message:"Enrollment failed");}};
+  screen.innerHTML = `<div class="device-enrollment-card"><p class="eyebrow">Secure Android setup</p><h1>Enroll this POS device</h1><p>A supervisor generates a one-time Device Enrollment QR in ERPNext. Scan it directly with this device's camera. Manual paste remains available if the camera cannot be used.</p>${error?`<p class="settings-message">${error.replace(/[&<>"']/g,(c)=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]!))}</p>`:""}<form id="device-enrollment-form"><button id="scan-enrollment-qr" class="primary-action" type="button">Scan enrollment QR</button><label>Manual enrollment QR value<textarea id="device-enrollment-value" rows="5" autocomplete="off" required></textarea></label><button id="redeem-enrollment-value" class="secondary-button" type="submit">Enroll using pasted value</button></form><small>No API key or API secret is stored in this APK.</small></div>`;
+  const redeem = async (value: string, button: HTMLButtonElement): Promise<void> => {
+    button.disabled = true;
+    button.textContent = "Enrolling…";
+    try { await enrollmentService.redeem(value); location.reload(); }
+    catch (cause) { enrollmentScreen(cause instanceof Error ? cause.message : "Enrollment failed"); }
+  };
+  document.querySelector<HTMLButtonElement>("#scan-enrollment-qr")!.onclick = async (event) => {
+    const button = event.currentTarget as HTMLButtonElement;
+    button.disabled = true;
+    button.textContent = "Opening camera…";
+    try {
+      const value = await scanEnrollmentQr();
+      const textarea = document.querySelector<HTMLTextAreaElement>("#device-enrollment-value")!;
+      textarea.value = value;
+      await redeem(value, button);
+    } catch (cause) {
+      enrollmentScreen(cause instanceof Error ? cause.message : "Unable to scan enrollment QR.");
+    }
+  };
+  document.querySelector<HTMLFormElement>("#device-enrollment-form")!.onsubmit = async (event) => {
+    event.preventDefault();
+    const value = document.querySelector<HTMLTextAreaElement>("#device-enrollment-value")!.value;
+    await redeem(value, document.querySelector<HTMLButtonElement>("#redeem-enrollment-value")!);
+  };
 }
 
 async function startAndroidRenderer(): Promise<void> {
