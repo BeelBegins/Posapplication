@@ -55,6 +55,9 @@ test("Sales navigation, offline statuses, and safe retry are visible", () => {
   for (const state of ["queued", "failed", "submitted"]) assert.match(app, new RegExp(`"${state}"`));
   assert.match(app, /Retry safely/);
   assert.match(app, /original request ID and failure state remain/);
+  assert.match(app, /data-card-qty/);
+  assert.match(app, /ERPNext default/);
+  assert.match(app, /Change ERPNext server/);
   assert.match(styles, /grid-template-columns:\s*repeat\(5,\s*1fr\)/);
   assert.match(styles, /safe-area-inset-bottom/);
   assert.doesNotMatch(app, /Restaurant navigation|Shopping navigation|POS navigation/);
@@ -66,11 +69,21 @@ test("Shopping navigation and customer-safe checkout flow stay focused", () => {
   for (const label of ["Home", "Categories", "Cart", "Orders", "Account"]) assert.match(app, new RegExp(`label:"${label}"`));
   for (const step of ["Address", "Delivery or pickup", "Payment", "Review", "Place order"]) assert.match(app, new RegExp(step, "i"));
   assert.match(app, /stable request ID prevents duplicate submission/i);
+  assert.match(app, /Customer login/);
+  assert.match(app, /Create new account/);
+  assert.match(app, /Change store or server/);
   assert.match(styles, /\.cart-layout,\s*\.checkout-layout/);
   assert.match(styles, /\.sticky-summary\s*\{\s*position:\s*sticky/);
   assert.match(styles, /grid-template-columns:\s*repeat\(5,\s*1fr\)/);
   assert.match(styles, /safe-area-inset-bottom/);
   assert.doesNotMatch(app, /Restaurant navigation|Sales navigation|POS navigation/);
+});
+
+test("Capacitor native plugins are isolated by product to reduce Shopping size", () => {
+  const config = source("capacitor.config.js");
+  assert.match(config, /productId !== "shopping"/);
+  assert.match(config, /includePlugins\.push\("@capacitor\/barcode-scanner"\)/);
+  assert.doesNotMatch(config, /productId === "shopping"[^\n]*barcode-scanner/);
 });
 
 test("mobile responsive rules retain large targets and reduced-motion support", () => {

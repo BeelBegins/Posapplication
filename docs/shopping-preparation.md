@@ -10,6 +10,8 @@ Home → categories/search → product detail → cart → customer sign-in → 
 
 The customer-facing navigation is Home → Categories → Cart → Orders → Account. Home prioritizes search, location, compact categories, popular products, new arrivals, and the saved cart. Catalogue cards show public image, price/MRP, availability, and in-card quantity controls. Product detail adds savings, brand/category, description, fulfillment availability, Buy Now, and related items without exposing internal ERPNext fields.
 
+Signed-out customers see explicit **Customer login** and **Create account** actions on Home and Account. Account also shows the connected store URL and a guarded **Change store or server** action. Changing sites signs out and clears that site's local cart so customer/cart data cannot leak between ERPNext installations.
+
 The cart keeps quantity, unit price, savings, line total, availability, price-change warnings, and remove actions visible beside a sticky summary. Checkout is presented as five clear steps: Address, Delivery or Pickup, Payment, Review, and Place Order. The existing stable checkout request ID remains the duplicate-submission guard. Order history uses customer-friendly labels and a milestone timeline rather than raw internal documents.
 
 The application calls only the implemented `aimatic.shopping.api` namespace. It does not call generic ERPNext resource endpoints and does not accept an API key or API secret.
@@ -40,7 +42,7 @@ The client persists one checkout request ID for the current cart until ERPNext c
 2. Create explicit `Shopping Product` rows; no Item is public merely because it exists in ERPNext.
 3. Either link an existing Website User manually under the correct Customer's Portal Users table, or enable self-registration with a leaf Customer Group and Territory. Self-registration creates new Customers only.
 4. Run privacy, cross-customer authorization, rate-limit, duplicate-order, price-change, and stock-race checks.
-5. Build Shopping, Sales, POS Android, and Electron separately. Restaurant remains deferred.
+5. Build Shopping, Sales, POS Android, and Electron separately. `capacitor.config.js` excludes the barcode scanner and its native ML models from Shopping because Shopping has no scanner workflow. Restaurant remains deferred.
 
 Dedicated in-app address editing, save-for-later persistence, reorder submission, online gateways, and push notifications remain backend limitations. The UX explains these unavailable actions instead of pretending they succeeded. Delivery instructions are displayed in checkout but require an explicit server contract before they can be persisted.
 
