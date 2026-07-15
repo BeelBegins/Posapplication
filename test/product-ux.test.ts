@@ -57,6 +57,8 @@ test("Sales navigation, offline statuses, and safe retry are visible", () => {
   assert.match(app, /original request ID and failure state remain/);
   assert.match(app, /data-card-qty/);
   assert.match(app, /ERPNext default/);
+  assert.match(app, /id="customer-warehouse"/);
+  assert.match(app, /Select a warehouse before choosing a customer/);
   assert.match(app, /Change ERPNext server/);
   assert.match(styles, /grid-template-columns:\s*repeat\(5,\s*1fr\)/);
   assert.match(styles, /safe-area-inset-bottom/);
