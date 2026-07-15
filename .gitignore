@@ -3,6 +3,7 @@ dist/
 # electron-builder output (the installer + unpacked app)
 dist-installer/
 dist-apk/
+dist-aab/
 android-web/
 dist-web/
 release/
