@@ -1,16 +1,23 @@
 import { createApiClient } from "../../api/client";
 import { createShoppingApi } from "../../api/shopping";
 import { addCartLine, cartDisplaySubtotal, emptyCart, setCartQuantity, type ShoppingCart, type ShoppingQuote } from "./domain";
+import { capacitorOAuthBrowser } from "../../mobile/capacitor-oauth-browser";
+import { OAuthPkceCredentialProvider, type OAuthPublicClientConfig } from "../../mobile/credential-provider";
+import { androidSecureStorage } from "../../mobile/secure-storage";
+import { Browser } from "@capacitor/browser";
 
 declare const __APP_VERSION__: string;
 
 type Row = Record<string, unknown>;
-type Screen = "home" | "catalog" | "cart" | "login" | "checkout" | "orders";
+type Screen = "home" | "catalog" | "product" | "cart" | "login" | "checkout" | "orders";
 
 const root = document.querySelector<HTMLElement>("#app")!;
 const storageKey = "aimatic-shopping-cart-v1";
 let baseUrl = localStorage.getItem("aimatic-shopping-url") || "";
 let api: ReturnType<typeof createShoppingApi> | null = null;
+let credentials: OAuthPkceCredentialProvider | null = null;
+let oauthConfig: OAuthPublicClientConfig | null = null;
+let signupUrl = "";
 let screen: Screen = "home";
 let storefront: Row = {};
 let products: Row[] = [];
@@ -20,6 +27,7 @@ let notice = "";
 let account: Row | null = null;
 let orderHistory: Row[] = [];
 let quote: ShoppingQuote | null = null;
+let selectedProduct: Row | null = null;
 let cart = loadCart();
 
 const esc = (value: unknown) => String(value ?? "").replace(/[&<>'"]/g, (char) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", "'":"&#39;", '"':"&quot;" }[char]!));
@@ -48,9 +56,15 @@ async function body(response: Response): Promise<Row> {
   return value.message && typeof value.message === "object" ? value.message as Row : value;
 }
 
-function connect(url: string) {
+async function connect(url: string) {
   baseUrl = url.replace(/\/+$/, "");
-  api = createShoppingApi(createApiClient({ baseUrl, authentication: { mode: "session" }, fetch: globalThis.fetch.bind(globalThis) }));
+  const response = await globalThis.fetch(`${baseUrl}/api/method/aimatic.shopping.api.get_public_config`, { method: "POST" });
+  const config = await body(response);
+  oauthConfig = { baseUrl, clientId: field(config, "oauth_client_id"), redirectUri: field(config, "redirect_uri"), scope: field(config, "scope") };
+  signupUrl = field(config, "signup_url");
+  if (!oauthConfig.clientId || !oauthConfig.redirectUri) throw new Error("Customer OAuth is not configured.");
+  credentials = new OAuthPkceCredentialProvider(async () => oauthConfig!, androidSecureStorage, capacitorOAuthBrowser, globalThis.fetch.bind(globalThis));
+  api = createShoppingApi(createApiClient({ baseUrl, authentication: { mode: "customer-session", credentials }, fetch: globalThis.fetch.bind(globalThis) }));
 }
 
 function setup(error = "") {
@@ -58,7 +72,7 @@ function setup(error = "") {
   document.querySelector<HTMLFormElement>("#setup")!.onsubmit = async (event) => {
     event.preventDefault();
     const url = document.querySelector<HTMLInputElement>("#url")!.value;
-    try { connect(url); await loadStore(); localStorage.setItem("aimatic-shopping-url", baseUrl); }
+    try { await connect(url); await loadStore(); localStorage.setItem("aimatic-shopping-url", baseUrl); }
     catch (error) { setup(error instanceof Error ? error.message : "Store unavailable"); }
   };
 }
@@ -102,8 +116,13 @@ function productCards(list: Row[]) {
   return `<div class="product-grid">${list.map((product) => {
     const code = field(product, "item_code", "name");
     const src = image(product);
-    return `<article class="product-card">${src ? `<img src="${esc(src)}" alt="">` : `<div class="image-fallback">${esc(field(product,"item_name","name").slice(0,2))}</div>`}<div><small>${esc(field(product,"brand","item_group"))}</small><h3>${esc(field(product,"item_name","name"))}</h3><p>${money(field(product,"rate","price"))}</p><button class="primary add" data-item="${esc(code)}">Add to cart</button></div></article>`;
+    return `<article class="product-card" data-product="${esc(code)}">${src ? `<img src="${esc(src)}" alt="">` : `<div class="image-fallback">${esc(field(product,"item_name","name").slice(0,2))}</div>`}<div><small>${esc(field(product,"brand","category"))}</small><h3>${esc(field(product,"item_name","name"))}</h3><p>${money(field(product,"rate","price"))}</p><button class="primary add" data-item="${esc(code)}" ${product.available===false?"disabled":""}>${product.available===false?"Unavailable":"Add to cart"}</button></div></article>`;
   }).join("") || `<p class="empty">No products found.</p>`}</div>`;
+}
+
+function productView() {
+  const product=selectedProduct||{};const src=image(product);
+  return `<section class="page narrow"><button data-screen="catalog">← Back to products</button><article class="product-detail">${src?`<img src="${esc(src)}" alt="">`:`<div class="image-fallback">${esc(field(product,"item_name").slice(0,2))}</div>`}<div><small>${esc(field(product,"brand","category"))}</small><h1>${esc(field(product,"item_name","name"))}</h1><p>${esc(field(product,"description"))}</p><h2>${money(product.rate)}</h2><p>${product.available===false?"Currently unavailable":"Available for store pickup"}</p><button class="primary add" data-item="${esc(field(product,"item_code","name"))}" ${product.available===false?"disabled":""}>Add to cart</button></div></article></section>`;
 }
 
 function homeView() {
@@ -122,14 +141,14 @@ function cartView() {
 }
 
 function loginView() {
-  return `<section class="page narrow"><div class="form-card"><h1>Customer sign in</h1><p>Sign in to use saved addresses, checkout, and track orders.</p>${notice ? `<p class="notice">${esc(notice)}</p>` : ""}<form id="login"><label>Email<input id="email" type="email" autocomplete="username" required></label><label>Password<input id="password" type="password" autocomplete="current-password" required></label><button class="primary wide">Sign in</button></form><small>This customer login does not expose the ERPNext desk.</small></div></section>`;
+  return `<section class="page narrow"><div class="form-card"><h1>Customer sign in</h1><p>Sign in securely in the system browser to checkout and track orders.</p>${notice ? `<p class="notice">${esc(notice)}</p>` : ""}<button id="login" class="primary wide">Sign in</button>${signupUrl?`<button id="signup" class="wide">Create customer account</button>`:""}<small>No ERPNext API key, reports, or administrative access is included.</small></div></section>`;
 }
 
 function checkoutView() {
   const addresses = rows(account?.addresses);
   const delivery = rows(storefront.delivery_methods);
   const payments = rows(storefront.payment_methods);
-  return `<section class="page narrow"><h1>Checkout</h1>${notice ? `<p class="notice">${esc(notice)}</p>` : ""}<form id="place" class="form-card"><label>Delivery address<select id="address" required>${addresses.map((item)=>`<option value="${esc(field(item,"name"))}">${esc(field(item,"label","address_title","name"))}</option>`).join("")}</select></label><label>Delivery method<select id="delivery" required>${delivery.map((item)=>`<option value="${esc(field(item,"name"))}">${esc(field(item,"label","name"))}</option>`).join("")}</select></label><label>Payment method<select id="payment" required>${payments.map((item)=>`<option value="${esc(field(item,"name"))}">${esc(field(item,"label","name"))}</option>`).join("")}</select></label><button id="refresh-quote" type="button">Refresh totals</button>${quote ? `<div class="totals"><p><span>Subtotal</span><b>${money(quote.subtotal,quote.currency)}</b></p><p><span>Discount</span><b>− ${money(quote.discount,quote.currency)}</b></p><p><span>Tax</span><b>${money(quote.taxes,quote.currency)}</b></p><p><span>Delivery</span><b>${money(quote.deliveryCharge,quote.currency)}</b></p><p class="grand"><span>Total</span><b>${money(quote.grandTotal,quote.currency)}</b></p></div><button class="primary wide">Place order</button>` : `<p>Refresh totals to confirm current prices and availability.</p>`}</form></section>`;
+  return `<section class="page narrow"><h1>Checkout</h1>${notice ? `<p class="notice">${esc(notice)}</p>` : ""}<form id="place" class="form-card">${addresses.length?`<label>Saved address (optional for pickup)<select id="address"><option value="">No address needed</option>${addresses.map((item)=>`<option value="${esc(field(item,"name"))}">${esc(field(item,"label","address_title","name"))}</option>`).join("")}</select></label>`:`<input id="address" type="hidden" value="">`}<label>Fulfillment<select id="delivery" required>${delivery.map((item)=>`<option value="${esc(field(item,"name"))}">${esc(field(item,"label","name"))}</option>`).join("")}</select></label><label>Payment<select id="payment" required>${payments.map((item)=>`<option value="${esc(field(item,"name"))}">${esc(field(item,"label","name"))}</option>`).join("")}</select></label><p>Pay when collecting your order from the store.</p><button id="refresh-quote" type="button">Refresh totals</button>${quote ? `<div class="totals"><p><span>Subtotal</span><b>${money(quote.subtotal,quote.currency)}</b></p><p><span>Discount</span><b>− ${money(quote.discount,quote.currency)}</b></p><p><span>Tax</span><b>${money(quote.taxes,quote.currency)}</b></p><p><span>Pickup</span><b>${money(quote.deliveryCharge,quote.currency)}</b></p><p class="grand"><span>Total</span><b>${money(quote.grandTotal,quote.currency)}</b></p></div><button class="primary wide">Place COD pickup order</button>` : `<p>Refresh totals to confirm current prices and availability.</p>`}</form></section>`;
 }
 
 function ordersView() {
@@ -138,7 +157,7 @@ function ordersView() {
 
 function render(next: Screen = screen) {
   screen = next;
-  const content = screen === "home" ? homeView() : screen === "catalog" ? catalogView() : screen === "cart" ? cartView() : screen === "login" ? loginView() : screen === "checkout" ? checkoutView() : ordersView();
+  const content = screen === "home" ? homeView() : screen === "catalog" ? catalogView() : screen === "product" ? productView() : screen === "cart" ? cartView() : screen === "login" ? loginView() : screen === "checkout" ? checkoutView() : ordersView();
   root.innerHTML = `${header()}${content}${nav()}`;
   bind();
 }
@@ -152,18 +171,20 @@ function bind() {
     saveCart(addCartLine(cart,{itemCode:field(product,"item_code","name"),itemName:field(product,"item_name","name"),imageUrl:image(product)||null,uom:field(product,"uom","stock_uom")||"Nos",displayedRate:Number(field(product,"rate","price"))||0,modifiers:[]}));
     notice = "Added to cart."; render(screen);
   });
+  document.querySelectorAll<HTMLElement>("[data-product]").forEach(card=>card.onclick=async(event)=>{if((event.target as HTMLElement).closest(".add"))return;try{selectedProduct=await body(await api!.getProduct(card.dataset.product!,cart.branch||undefined));render("product");}catch(error){notice=error instanceof Error?error.message:"Unable to load product";render("catalog")}});
   document.querySelector<HTMLFormElement>("#search")?.addEventListener("submit", async (event)=>{event.preventDefault();search=document.querySelector<HTMLInputElement>("#query")!.value;await loadProducts();render("catalog");});
   document.querySelectorAll<HTMLButtonElement>("[data-quantity]").forEach((button)=>button.onclick=()=>{const line=cart.lines.find((item)=>item.id===button.dataset.quantity)!;saveCart(setCartQuantity(cart,line.id,line.quantity+Number(button.dataset.delta)));render("cart");});
   document.querySelector<HTMLButtonElement>("#checkout")?.addEventListener("click",()=>{notice="";render(account?"checkout":"login");});
-  document.querySelector<HTMLFormElement>("#login")?.addEventListener("submit",async(event)=>{event.preventDefault();try{account=await body(await api!.login(document.querySelector<HTMLInputElement>("#email")!.value,document.querySelector<HTMLInputElement>("#password")!.value));notice="";render("checkout");}catch(error){notice=error instanceof Error?error.message:"Sign in failed";render("login");}});
+  document.querySelector<HTMLButtonElement>("#login")?.addEventListener("click",async()=>{try{await credentials!.login();account=await body(await api!.getAccount());notice="";render("checkout");}catch(error){notice=error instanceof Error?error.message:"Sign in failed";render("login");}});
+  document.querySelector<HTMLButtonElement>("#signup")?.addEventListener("click",()=>void Browser.open({url:signupUrl}));
   document.querySelector<HTMLButtonElement>("#refresh-quote")?.addEventListener("click",()=>void refreshQuote());
   document.querySelector<HTMLFormElement>("#place")?.addEventListener("submit",(event)=>void placeOrder(event));
-  document.querySelector<HTMLButtonElement>("#logout")?.addEventListener("click",async()=>{await api!.logout().catch(()=>null);account=null;notice="Signed out.";render("home");});
+  document.querySelector<HTMLButtonElement>("#logout")?.addEventListener("click",async()=>{await credentials!.clear();account=null;notice="Signed out.";render("home");});
 }
 
 async function refreshQuote() {
   try {
-    const address=document.querySelector<HTMLSelectElement>("#address")!.value;
+    const address=document.querySelector<HTMLInputElement|HTMLSelectElement>("#address")!.value;
     const delivery=document.querySelector<HTMLSelectElement>("#delivery")!.value;
     quote=await body(await api!.quoteCart(cart,delivery,address)) as unknown as ShoppingQuote;
     notice=""; render("checkout");
@@ -174,11 +195,11 @@ async function placeOrder(event: SubmitEvent) {
   event.preventDefault();
   if(!quote)return refreshQuote();
   try {
-    const result=await body(await api!.placeOrder({requestId:crypto.randomUUID(),quoteToken:quote.quoteToken,addressName:document.querySelector<HTMLSelectElement>("#address")!.value,deliveryMethod:document.querySelector<HTMLSelectElement>("#delivery")!.value,paymentMethod:document.querySelector<HTMLSelectElement>("#payment")!.value}));
+    const result=await body(await api!.placeOrder({requestId:crypto.randomUUID(),quoteToken:quote.quoteToken,addressName:document.querySelector<HTMLInputElement|HTMLSelectElement>("#address")!.value,deliveryMethod:document.querySelector<HTMLSelectElement>("#delivery")!.value,paymentMethod:document.querySelector<HTMLSelectElement>("#payment")!.value}));
     saveCart(emptyCart()); quote=null; notice=`Order ${field(result,"sales_order","order","name")} placed successfully.`;
     account=await body(await api!.getAccount()); await openScreen("orders");
   } catch(error) { notice=error instanceof Error?error.message:"Order could not be placed";render("checkout"); }
 }
 
-if (baseUrl) { connect(baseUrl); void loadStore().catch((error)=>setup(error instanceof Error?error.message:"Store unavailable")); }
+if (baseUrl) { void connect(baseUrl).then(loadStore).catch((error)=>setup(error instanceof Error?error.message:"Store unavailable")); }
 else setup();

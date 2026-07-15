@@ -22,6 +22,7 @@ export function createShoppingApi(client: ApiClient) {
   );
 
   return {
+    getPublicConfig: (init?: RequestInit) => post("get_public_config", {}, init),
     getStorefront: (branch?: string, init?: RequestInit) => post("get_storefront", { branch }, init),
     searchProducts: (query: ShoppingCatalogQuery, init?: RequestInit) => post("search_products", {
       branch: query.branch,
@@ -32,8 +33,6 @@ export function createShoppingApi(client: ApiClient) {
       limit: query.limit ?? 30
     }, init),
     getProduct: (itemCode: string, branch?: string, init?: RequestInit) => post("get_product", { item_code: itemCode, branch }, init),
-    login: (email: string, password: string, init?: RequestInit) => post("customer_login", { email, password }, init),
-    logout: (init?: RequestInit) => post("customer_logout", {}, init),
     getAccount: (init?: RequestInit) => post("get_customer_account", {}, init),
     getAddresses: (init?: RequestInit) => post("get_addresses", {}, init),
     quoteCart: (cart: ShoppingCart, deliveryMethod?: string, addressName?: string, init?: RequestInit) => post("quote_cart", {

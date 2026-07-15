@@ -24,16 +24,27 @@ public class MainActivity extends BridgeActivity {
 
     static final class AppStore {
         private final File target;
+        private final File catalogTarget;
 
         AppStore(Context context) {
             target = new File(context.getFilesDir(), "aimatic-pos-mobile.json");
+            catalogTarget = new File(context.getFilesDir(), "aimatic-pos-mobile-catalog.json");
         }
 
         @JavascriptInterface
         public synchronized String load() {
-            if (!target.exists()) return "";
-            try (FileInputStream input = new FileInputStream(target)) {
-                byte[] bytes = new byte[(int) target.length()];
+            return loadFile(target);
+        }
+
+        @JavascriptInterface
+        public synchronized String loadCatalog() {
+            return loadFile(catalogTarget);
+        }
+
+        private String loadFile(File source) {
+            if (!source.exists()) return "";
+            try (FileInputStream input = new FileInputStream(source)) {
+                byte[] bytes = new byte[(int) source.length()];
                 int offset = 0;
                 while (offset < bytes.length) {
                     int count = input.read(bytes, offset, bytes.length - offset);
@@ -48,12 +59,21 @@ public class MainActivity extends BridgeActivity {
 
         @JavascriptInterface
         public synchronized void save(String value) {
-            File temporary = new File(target.getParentFile(), target.getName() + ".tmp");
+            saveFile(target, value);
+        }
+
+        @JavascriptInterface
+        public synchronized void saveCatalog(String value) {
+            saveFile(catalogTarget, value);
+        }
+
+        private void saveFile(File destination, String value) {
+            File temporary = new File(destination.getParentFile(), destination.getName() + ".tmp");
             try (FileOutputStream output = new FileOutputStream(temporary)) {
                 output.write(value.getBytes(StandardCharsets.UTF_8));
                 output.getFD().sync();
-                if (target.exists() && !target.delete()) return;
-                temporary.renameTo(target);
+                if (destination.exists() && !destination.delete()) return;
+                temporary.renameTo(destination);
             } catch (Exception ignored) {
                 temporary.delete();
             }

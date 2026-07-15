@@ -30,3 +30,9 @@ test("checkout requires an unexpired server quote matching the cart", () => {
   assert.doesNotThrow(() => assertCheckoutReady(cart, quote, { requestId: "device:1", quoteToken: "signed-quote", addressName: "HOME", deliveryMethod: "Delivery", paymentMethod: "Cash on Delivery" }, new Date(now)));
   assert.throws(() => assertCheckoutReady(cart, quote, { requestId: "device:2", quoteToken: "signed-quote", addressName: "HOME", deliveryMethod: "Delivery", paymentMethod: "Cash on Delivery" }, new Date("2026-07-15T10:16:00.000Z")), /expired/i);
 });
+
+test("store pickup checkout does not require a delivery address", () => {
+  const cart=addCartLine(emptyCart(),{itemCode:"ITEM-1",itemName:"Item",imageUrl:null,uom:"Nos",displayedRate:10,modifiers:[]});
+  const quote={quoteToken:"q",currency:"PKR",subtotal:10,discount:0,taxes:0,deliveryCharge:0,grandTotal:10,expiresAt:"2099-01-01T00:00:00Z",lines:[{lineId:"ITEM-1",itemCode:"ITEM-1",quantity:1,rate:10,amount:10,available:true}]};
+  assert.doesNotThrow(()=>assertCheckoutReady(cart,quote,{requestId:"r",quoteToken:"q",addressName:"",deliveryMethod:"Store Pickup",paymentMethod:"Cash on Delivery"},new Date("2026-01-01")));
+});

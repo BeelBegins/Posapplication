@@ -7,7 +7,7 @@ Built with Electron, TypeScript, SQLite, ERPNext/Frappe APIs, and FBR-ready serv
 ## Current Version
 
 ```text
-2.6.3
+2.6.4
 ```
 
 ## What This App Does
@@ -46,7 +46,7 @@ Built with Electron, TypeScript, SQLite, ERPNext/Frappe APIs, and FBR-ready serv
 
 ## Product Profiles
 
-The repository defines focused Ai Matic POS, Restaurant, Sales, and Shopping profiles. POS and the Phase 2 Restaurant shell are buildable; Sales and Shopping remain guarded until their phases are complete. Electron remains POS-only, and each Android product has a distinct application ID and storage namespace.
+The repository defines focused Ai Matic POS, Restaurant, Sales, and Shopping profiles. POS, Sales, and Shopping are independently buildable and released; Restaurant remains deferred and is not published. Electron remains POS-only, and each Android product has a distinct application ID and storage namespace.
 
 See [Product Architecture](docs/product-architecture.md), [Build Profiles](docs/build-profiles.md), [API Contracts](docs/api-contracts.md), and [Android device and cashier authentication](docs/android-authentication.md).
 
@@ -143,11 +143,11 @@ APK output:
 dist-apk/Aimatic-POS-App-<version>-debug.apk
 ```
 
-The Android app runs in landscape, uses application storage for its existing offline data, Android Keystore-backed encrypted storage for enrollment/session material, and the Android print service. Electron-only auto-update and second-monitor controls are not loaded on Android.
+The Android app runs in landscape, uses application storage for its existing offline data, Android Keystore-backed encrypted storage for enrollment/session material, and the Android print service. The synced catalogue is persisted separately from small operational/cart state and indexed in memory so barcode scans do not rewrite or linearly rescan the entire catalogue. Existing data migrates automatically. Electron-only auto-update and second-monitor controls are not loaded on Android.
 
 ## Release
 
-Pushes to `main` run the combined release workflow. It tests the application, builds Windows, POS Android, and Sales Android independently, and publishes them to the same `v<package version>` GitHub release:
+Pushes to `main` run the combined release workflow. It tests the application, builds Windows plus POS, Sales, and Shopping Android independently, and publishes them to the same `v<package version>` GitHub release:
 
 ```text
 Aimatic-POS-App-Setup-<version>.exe

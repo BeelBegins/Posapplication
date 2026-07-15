@@ -32,7 +32,7 @@
   "shopping": {
     "id": "shopping",
     "name": "Ai Matic Shopping",
-    "enabled": false,
+    "enabled": true,
     "platforms": ["capacitor", "web"],
     "androidAppId": "com.beelbegins.aimaticshopping",
     "storageNamespace": "aimatic-shopping",
