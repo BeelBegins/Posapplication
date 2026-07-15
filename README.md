@@ -7,7 +7,7 @@ Built with Electron, TypeScript, SQLite, ERPNext/Frappe APIs, and FBR-ready serv
 ## Current Version
 
 ```text
-2.6.4
+2.6.5
 ```
 
 ## What This App Does
@@ -147,11 +147,14 @@ The Android app runs in landscape, uses application storage for its existing off
 
 ## Release
 
-Pushes to `main` run the combined release workflow. It tests the application, builds Windows plus POS, Sales, and Shopping Android independently, and publishes them to the same `v<package version>` GitHub release:
+Pushes to `main` run the combined release workflow. It tests the application, builds Windows plus POS, Sales, and Shopping Android independently, builds the Shopping web bundle, and publishes them to the same `v<package version>` GitHub release:
 
 ```text
 Aimatic-POS-App-Setup-<version>.exe
 Aimatic-POS-App-<version>.apk
+Aimatic-Sales-App-<version>.apk
+Aimatic-Shopping-App-<version>.apk
+Aimatic-Shopping-Web-<version>.zip
 latest.yml
 ```
 

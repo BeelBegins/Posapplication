@@ -106,8 +106,30 @@ jobs:
           path: dist-apk/
           if-no-files-found: error
 
+  web:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run build:shopping:web
+      - name: Package Shopping web build
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          cd dist-web/shopping
+          zip -r "../Aimatic-Shopping-Web-$VERSION.zip" .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shopping-web-release
+          path: dist-web/Aimatic-Shopping-Web-*.zip
+          if-no-files-found: error
+
   publish:
-    needs: [windows, android]
+    needs: [windows, android, web]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -130,7 +152,11 @@ jobs:
         with:
           name: android-shopping-release
           path: dist-apk
+      - uses: actions/download-artifact@v4
+        with:
+          name: shopping-web-release
+          path: dist-web
       - name: Publish combined GitHub release
-        run: node scripts/publish-github-release.cjs --require-product-apks
+        run: node scripts/publish-github-release.cjs --require-product-apks --require-web
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

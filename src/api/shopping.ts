@@ -22,7 +22,7 @@ export function createShoppingApi(client: ApiClient) {
   );
 
   return {
-    getPublicConfig: (init?: RequestInit) => post("get_public_config", {}, init),
+    getPublicConfig: (platform = "capacitor", origin?: string, init?: RequestInit) => post("get_public_config", { platform, origin }, init),
     getStorefront: (branch?: string, init?: RequestInit) => post("get_storefront", { branch }, init),
     searchProducts: (query: ShoppingCatalogQuery, init?: RequestInit) => post("search_products", {
       branch: query.branch,
@@ -34,6 +34,7 @@ export function createShoppingApi(client: ApiClient) {
     }, init),
     getProduct: (itemCode: string, branch?: string, init?: RequestInit) => post("get_product", { item_code: itemCode, branch }, init),
     getAccount: (init?: RequestInit) => post("get_customer_account", {}, init),
+    registerCustomer: (customerName: string, mobileNo?: string, init?: RequestInit) => post("register_customer", { customer_name: customerName, mobile_no: mobileNo }, init),
     getAddresses: (init?: RequestInit) => post("get_addresses", {}, init),
     quoteCart: (cart: ShoppingCart, deliveryMethod?: string, addressName?: string, init?: RequestInit) => post("quote_cart", {
       branch: cart.branch,

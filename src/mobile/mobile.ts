@@ -98,6 +98,11 @@ function removeTerminalCredentialUi(): void {
   for (const selector of ["#api-key", "#api-secret", "#quick-connect-api-key", "#quick-connect-api-secret"]) {
     document.querySelector<HTMLElement>(selector)?.closest("label")?.remove();
   }
+  // Keep the hidden input because shared renderer setup/header code reads it,
+  // but never ask Android users for a desktop Terminal ID. Device enrollment
+  // owns the device identity and POS Profile assignment.
+  const terminalLabel = document.querySelector<HTMLInputElement>("#terminal-id")?.closest("label");
+  if (terminalLabel) terminalLabel.hidden = true;
   const quickDescription = document.querySelector<HTMLElement>("#quick-connect-form .card-meta");
   if (quickDescription) quickDescription.textContent = "Android devices connect through one-time enrollment and per-cashier ERPNext sign-in.";
   const quickButton = document.querySelector<HTMLButtonElement>("#cashier-login-quick-connect");

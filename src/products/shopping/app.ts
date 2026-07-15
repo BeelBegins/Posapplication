@@ -1,23 +1,30 @@
 import { createApiClient } from "../../api/client";
 import { createShoppingApi } from "../../api/shopping";
-import { addCartLine, cartDisplaySubtotal, emptyCart, setCartQuantity, type ShoppingCart, type ShoppingQuote } from "./domain";
+import { addCartLine, assertCheckoutReady, cartDisplaySubtotal, emptyCart, ensureCheckoutAttempt, setCartQuantity, type ShoppingCart, type ShoppingCheckoutAttempt, type ShoppingQuote } from "./domain";
 import { capacitorOAuthBrowser } from "../../mobile/capacitor-oauth-browser";
 import { OAuthPkceCredentialProvider, type OAuthPublicClientConfig } from "../../mobile/credential-provider";
 import { androidSecureStorage } from "../../mobile/secure-storage";
 import { Browser } from "@capacitor/browser";
+import { Capacitor } from "@capacitor/core";
+import { sessionSecureStorage } from "../../web/session-storage";
+import { completePopupOAuthCallback, webOAuthBrowser } from "../../web/oauth-browser";
 
 declare const __APP_VERSION__: string;
 
 type Row = Record<string, unknown>;
-type Screen = "home" | "catalog" | "product" | "cart" | "login" | "checkout" | "orders";
+type Screen = "home" | "catalog" | "product" | "cart" | "login" | "register" | "checkout" | "orders";
 
 const root = document.querySelector<HTMLElement>("#app")!;
 const storageKey = "aimatic-shopping-cart-v1";
-let baseUrl = localStorage.getItem("aimatic-shopping-url") || "";
+const checkoutKey = "aimatic-shopping-checkout-v1";
+const isNative = Capacitor.isNativePlatform();
+const isOAuthCallback = !isNative && completePopupOAuthCallback();
+let baseUrl = localStorage.getItem("aimatic-shopping-url") || (isNative ? "" : location.origin);
 let api: ReturnType<typeof createShoppingApi> | null = null;
 let credentials: OAuthPkceCredentialProvider | null = null;
 let oauthConfig: OAuthPublicClientConfig | null = null;
 let signupUrl = "";
+let allowSelfRegistration = false;
 let screen: Screen = "home";
 let storefront: Row = {};
 let products: Row[] = [];
@@ -29,6 +36,7 @@ let orderHistory: Row[] = [];
 let quote: ShoppingQuote | null = null;
 let selectedProduct: Row | null = null;
 let cart = loadCart();
+let placing = false;
 
 const esc = (value: unknown) => String(value ?? "").replace(/[&<>'"]/g, (char) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", "'":"&#39;", '"':"&quot;" }[char]!));
 const field = (row: Row, ...keys: string[]) => { for (const key of keys) if (row[key] !== undefined && row[key] !== null) return String(row[key]); return ""; };
@@ -45,6 +53,7 @@ function loadCart(): ShoppingCart {
 }
 
 function saveCart(next: ShoppingCart) {
+  if (next.updatedAt !== cart.updatedAt) localStorage.removeItem(checkoutKey);
   cart = next;
   quote = null;
   localStorage.setItem(storageKey, JSON.stringify(cart));
@@ -58,12 +67,17 @@ async function body(response: Response): Promise<Row> {
 
 async function connect(url: string) {
   baseUrl = url.replace(/\/+$/, "");
-  const response = await globalThis.fetch(`${baseUrl}/api/method/aimatic.shopping.api.get_public_config`, { method: "POST" });
+  const platform = isNative ? "capacitor" : "web";
+  const response = await globalThis.fetch(`${baseUrl}/api/method/aimatic.shopping.api.get_public_config`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ platform, origin: isNative ? undefined : location.origin })
+  });
   const config = await body(response);
   oauthConfig = { baseUrl, clientId: field(config, "oauth_client_id"), redirectUri: field(config, "redirect_uri"), scope: field(config, "scope") };
   signupUrl = field(config, "signup_url");
+  allowSelfRegistration = config.allow_self_registration === true || config.allow_self_registration === 1;
   if (!oauthConfig.clientId || !oauthConfig.redirectUri) throw new Error("Customer OAuth is not configured.");
-  credentials = new OAuthPkceCredentialProvider(async () => oauthConfig!, androidSecureStorage, capacitorOAuthBrowser, globalThis.fetch.bind(globalThis));
+  credentials = new OAuthPkceCredentialProvider(async () => oauthConfig!, isNative ? androidSecureStorage : sessionSecureStorage, isNative ? capacitorOAuthBrowser : webOAuthBrowser, globalThis.fetch.bind(globalThis));
   api = createShoppingApi(createApiClient({ baseUrl, authentication: { mode: "customer-session", credentials }, fetch: globalThis.fetch.bind(globalThis) }));
 }
 
@@ -116,7 +130,7 @@ function productCards(list: Row[]) {
   return `<div class="product-grid">${list.map((product) => {
     const code = field(product, "item_code", "name");
     const src = image(product);
-    return `<article class="product-card" data-product="${esc(code)}">${src ? `<img src="${esc(src)}" alt="">` : `<div class="image-fallback">${esc(field(product,"item_name","name").slice(0,2))}</div>`}<div><small>${esc(field(product,"brand","category"))}</small><h3>${esc(field(product,"item_name","name"))}</h3><p>${money(field(product,"rate","price"))}</p><button class="primary add" data-item="${esc(code)}" ${product.available===false?"disabled":""}>${product.available===false?"Unavailable":"Add to cart"}</button></div></article>`;
+    return `<article class="product-card" data-product="${esc(code)}">${src ? `<img src="${esc(src)}" alt="${esc(field(product,"item_name","name"))}" loading="lazy">` : `<div class="image-fallback">${esc(field(product,"item_name","name").slice(0,2))}</div>`}<div><small>${esc(field(product,"brand","category"))}</small><h3>${esc(field(product,"item_name","name"))}</h3><p>${money(field(product,"rate","price"))}</p><button class="primary add" data-item="${esc(code)}" ${product.available===false?"disabled":""}>${product.available===false?"Unavailable":"Add to cart"}</button></div></article>`;
   }).join("") || `<p class="empty">No products found.</p>`}</div>`;
 }
 
@@ -144,20 +158,24 @@ function loginView() {
   return `<section class="page narrow"><div class="form-card"><h1>Customer sign in</h1><p>Sign in securely in the system browser to checkout and track orders.</p>${notice ? `<p class="notice">${esc(notice)}</p>` : ""}<button id="login" class="primary wide">Sign in</button>${signupUrl?`<button id="signup" class="wide">Create customer account</button>`:""}<small>No ERPNext API key, reports, or administrative access is included.</small></div></section>`;
 }
 
+function registerView() {
+  return `<section class="page narrow"><div class="form-card"><h1>Finish your customer account</h1><p>Your secure login succeeded. Add your details to create a new shopping Customer.</p>${notice ? `<p class="notice">${esc(notice)}</p>` : ""}<form id="register-customer"><label>Full name<input id="customer-name" autocomplete="name" minlength="2" maxlength="140" required></label><label>Mobile number (optional)<input id="customer-mobile" type="tel" autocomplete="tel" maxlength="30"></label><button class="primary wide">Create customer account</button></form><small>Existing ERPNext customers are never linked automatically.</small></div></section>`;
+}
+
 function checkoutView() {
   const addresses = rows(account?.addresses);
   const delivery = rows(storefront.delivery_methods);
   const payments = rows(storefront.payment_methods);
-  return `<section class="page narrow"><h1>Checkout</h1>${notice ? `<p class="notice">${esc(notice)}</p>` : ""}<form id="place" class="form-card">${addresses.length?`<label>Saved address (optional for pickup)<select id="address"><option value="">No address needed</option>${addresses.map((item)=>`<option value="${esc(field(item,"name"))}">${esc(field(item,"label","address_title","name"))}</option>`).join("")}</select></label>`:`<input id="address" type="hidden" value="">`}<label>Fulfillment<select id="delivery" required>${delivery.map((item)=>`<option value="${esc(field(item,"name"))}">${esc(field(item,"label","name"))}</option>`).join("")}</select></label><label>Payment<select id="payment" required>${payments.map((item)=>`<option value="${esc(field(item,"name"))}">${esc(field(item,"label","name"))}</option>`).join("")}</select></label><p>Pay when collecting your order from the store.</p><button id="refresh-quote" type="button">Refresh totals</button>${quote ? `<div class="totals"><p><span>Subtotal</span><b>${money(quote.subtotal,quote.currency)}</b></p><p><span>Discount</span><b>− ${money(quote.discount,quote.currency)}</b></p><p><span>Tax</span><b>${money(quote.taxes,quote.currency)}</b></p><p><span>Pickup</span><b>${money(quote.deliveryCharge,quote.currency)}</b></p><p class="grand"><span>Total</span><b>${money(quote.grandTotal,quote.currency)}</b></p></div><button class="primary wide">Place COD pickup order</button>` : `<p>Refresh totals to confirm current prices and availability.</p>`}</form></section>`;
+  return `<section class="page narrow"><h1>Checkout</h1>${notice ? `<p class="notice">${esc(notice)}</p>` : ""}<form id="place" class="form-card">${addresses.length?`<label>Saved address (optional for pickup)<select id="address"><option value="">No address needed</option>${addresses.map((item)=>`<option value="${esc(field(item,"name"))}">${esc(field(item,"label","address_title","name"))}</option>`).join("")}</select></label>`:`<input id="address" type="hidden" value="">`}<label>Fulfillment<select id="delivery" required>${delivery.map((item)=>`<option value="${esc(field(item,"name"))}">${esc(field(item,"label","name"))}</option>`).join("")}</select></label><label>Payment<select id="payment" required>${payments.map((item)=>`<option value="${esc(field(item,"name"))}">${esc(field(item,"label","name"))}</option>`).join("")}</select></label><p>Pay when collecting your order from the store.</p><button id="refresh-quote" type="button" ${placing?"disabled":""}>Refresh totals</button>${quote ? `<div class="totals"><p><span>Subtotal</span><b>${money(quote.subtotal,quote.currency)}</b></p><p><span>Discount</span><b>− ${money(quote.discount,quote.currency)}</b></p><p><span>Tax</span><b>${money(quote.taxes,quote.currency)}</b></p><p><span>Pickup</span><b>${money(quote.deliveryCharge,quote.currency)}</b></p><p class="grand"><span>Total</span><b>${money(quote.grandTotal,quote.currency)}</b></p></div><button class="primary wide" ${placing?"disabled":""}>${placing?"Placing order…":"Place COD pickup order"}</button>` : `<p>Refresh totals to confirm current prices and availability.</p>`}</form></section>`;
 }
 
 function ordersView() {
-  return `<section class="page narrow"><div class="section-title"><h1>My orders</h1><button id="logout">Sign out</button></div>${notice ? `<p class="notice">${esc(notice)}</p>` : ""}<div class="order-list">${orderHistory.map((order)=>`<article><div><strong>${esc(field(order,"name","order"))}</strong><small>${esc(field(order,"creation","date"))}</small></div><div><span>${esc(field(order,"delivery_status","status"))}</span><b>${money(field(order,"grand_total"),field(order,"currency")||undefined)}</b></div></article>`).join("") || `<p class="empty">No orders yet.</p>`}</div></section>`;
+  return `<section class="page narrow"><div class="section-title"><h1>My orders</h1><button id="logout">Sign out</button></div>${notice ? `<p class="notice">${esc(notice)}</p>` : ""}<div class="order-list">${orderHistory.map((order)=>`<article><div><strong>${esc(field(order,"name","order"))}</strong><small>${esc(field(order,"transaction_date","creation","date"))}</small></div><div><span>${esc(field(order,"delivery_status","status"))}</span><b>${money(field(order,"grand_total"),field(order,"currency")||undefined)}</b></div></article>`).join("") || `<p class="empty">No orders yet.</p>`}</div></section>`;
 }
 
 function render(next: Screen = screen) {
   screen = next;
-  const content = screen === "home" ? homeView() : screen === "catalog" ? catalogView() : screen === "product" ? productView() : screen === "cart" ? cartView() : screen === "login" ? loginView() : screen === "checkout" ? checkoutView() : ordersView();
+  const content = screen === "home" ? homeView() : screen === "catalog" ? catalogView() : screen === "product" ? productView() : screen === "cart" ? cartView() : screen === "login" ? loginView() : screen === "register" ? registerView() : screen === "checkout" ? checkoutView() : ordersView();
   root.innerHTML = `${header()}${content}${nav()}`;
   bind();
 }
@@ -167,7 +185,8 @@ function bind() {
   document.querySelector<HTMLButtonElement>("#search-open")!.onclick = () => render("catalog");
   document.querySelectorAll<HTMLButtonElement>("[data-category]").forEach((button) => button.onclick = async () => { category=button.dataset.category || ""; await loadProducts(); render("catalog"); });
   document.querySelectorAll<HTMLButtonElement>(".add").forEach((button) => button.onclick = () => {
-    const product = products.find((item)=>field(item,"item_code","name")===button.dataset.item)!;
+    const product = products.find((item)=>field(item,"item_code","name")===button.dataset.item) || selectedProduct;
+    if (!product) return;
     saveCart(addCartLine(cart,{itemCode:field(product,"item_code","name"),itemName:field(product,"item_name","name"),imageUrl:image(product)||null,uom:field(product,"uom","stock_uom")||"Nos",displayedRate:Number(field(product,"rate","price"))||0,modifiers:[]}));
     notice = "Added to cart."; render(screen);
   });
@@ -175,8 +194,9 @@ function bind() {
   document.querySelector<HTMLFormElement>("#search")?.addEventListener("submit", async (event)=>{event.preventDefault();search=document.querySelector<HTMLInputElement>("#query")!.value;await loadProducts();render("catalog");});
   document.querySelectorAll<HTMLButtonElement>("[data-quantity]").forEach((button)=>button.onclick=()=>{const line=cart.lines.find((item)=>item.id===button.dataset.quantity)!;saveCart(setCartQuantity(cart,line.id,line.quantity+Number(button.dataset.delta)));render("cart");});
   document.querySelector<HTMLButtonElement>("#checkout")?.addEventListener("click",()=>{notice="";render(account?"checkout":"login");});
-  document.querySelector<HTMLButtonElement>("#login")?.addEventListener("click",async()=>{try{await credentials!.login();account=await body(await api!.getAccount());notice="";render("checkout");}catch(error){notice=error instanceof Error?error.message:"Sign in failed";render("login");}});
-  document.querySelector<HTMLButtonElement>("#signup")?.addEventListener("click",()=>void Browser.open({url:signupUrl}));
+  document.querySelector<HTMLButtonElement>("#login")?.addEventListener("click",async()=>{try{await credentials!.login();try{account=await body(await api!.getAccount());notice="";render("checkout");}catch(error){notice=error instanceof Error?error.message:"Customer account is not ready";render(allowSelfRegistration?"register":"login");}}catch(error){notice=error instanceof Error?error.message:"Sign in failed";render("login");}});
+  document.querySelector<HTMLFormElement>("#register-customer")?.addEventListener("submit",async(event)=>{event.preventDefault();try{await body(await api!.registerCustomer(document.querySelector<HTMLInputElement>("#customer-name")!.value,document.querySelector<HTMLInputElement>("#customer-mobile")!.value));account=await body(await api!.getAccount());notice="Customer account created.";render("checkout");}catch(error){notice=error instanceof Error?error.message:"Unable to create customer account";render("register");}});
+  document.querySelector<HTMLButtonElement>("#signup")?.addEventListener("click",()=>{if(isNative)void Browser.open({url:signupUrl});else globalThis.open(signupUrl,"_blank","noopener");});
   document.querySelector<HTMLButtonElement>("#refresh-quote")?.addEventListener("click",()=>void refreshQuote());
   document.querySelector<HTMLFormElement>("#place")?.addEventListener("submit",(event)=>void placeOrder(event));
   document.querySelector<HTMLButtonElement>("#logout")?.addEventListener("click",async()=>{await credentials!.clear();account=null;notice="Signed out.";render("home");});
@@ -193,13 +213,22 @@ async function refreshQuote() {
 
 async function placeOrder(event: SubmitEvent) {
   event.preventDefault();
-  if(!quote)return refreshQuote();
+  if(!quote||placing)return refreshQuote();
   try {
-    const result=await body(await api!.placeOrder({requestId:crypto.randomUUID(),quoteToken:quote.quoteToken,addressName:document.querySelector<HTMLInputElement|HTMLSelectElement>("#address")!.value,deliveryMethod:document.querySelector<HTMLSelectElement>("#delivery")!.value,paymentMethod:document.querySelector<HTMLSelectElement>("#payment")!.value}));
-    saveCart(emptyCart()); quote=null; notice=`Order ${field(result,"sales_order","order","name")} placed successfully.`;
+    const saved=JSON.parse(localStorage.getItem(checkoutKey)||"null") as ShoppingCheckoutAttempt|null;
+    const attempt=ensureCheckoutAttempt(cart,saved,()=>crypto.randomUUID());
+    localStorage.setItem(checkoutKey,JSON.stringify(attempt));
+    const input={requestId:attempt.requestId,quoteToken:quote.quoteToken,addressName:document.querySelector<HTMLInputElement|HTMLSelectElement>("#address")!.value,deliveryMethod:document.querySelector<HTMLSelectElement>("#delivery")!.value,paymentMethod:document.querySelector<HTMLSelectElement>("#payment")!.value};
+    assertCheckoutReady(cart,quote,input);
+    placing=true;render("checkout");
+    const result=await body(await api!.placeOrder(input)); placing=false;
+    localStorage.removeItem(checkoutKey); saveCart(emptyCart()); quote=null; notice=`Order ${field(result,"sales_order","order","name")} placed successfully.`;
     account=await body(await api!.getAccount()); await openScreen("orders");
-  } catch(error) { notice=error instanceof Error?error.message:"Order could not be placed";render("checkout"); }
+  } catch(error) { placing=false;notice=error instanceof Error?error.message:"Order could not be placed";render("checkout"); }
 }
 
-if (baseUrl) { void connect(baseUrl).then(loadStore).catch((error)=>setup(error instanceof Error?error.message:"Store unavailable")); }
+if (isOAuthCallback) root.innerHTML = `<section class="setup"><div class="setup-card"><h1>Completing sign in…</h1></div></section>`;
+else if (baseUrl) { void connect(baseUrl).then(loadStore).catch((error)=>setup(error instanceof Error?error.message:"Store unavailable")); }
 else setup();
+
+if (!isNative && "serviceWorker" in navigator) void navigator.serviceWorker.register("./service-worker.js").catch(() => undefined);

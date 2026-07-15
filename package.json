@@ -1,6 +1,6 @@
 {
   "name": "erpnext-offline-pos",
-  "version": "2.6.4",
+  "version": "2.6.5",
   "description": "Aimatic POS App for ERPNext retail stores",
   "main": "dist/main.js",
   "scripts": {
@@ -12,6 +12,7 @@
     "build:restaurant:android:web": "cross-env AI_MATIC_PRODUCT=restaurant npm run build:android:web",
     "build:sales:android:web": "cross-env AI_MATIC_PRODUCT=sales npm run build:android:web",
     "build:shopping:android:web": "cross-env AI_MATIC_PRODUCT=shopping npm run build:android:web",
+    "build:shopping:web": "node scripts/build-product-web.cjs shopping",
     "android:sync": "npm run build:android:web && cap sync android",
     "android:pos:sync": "cross-env AI_MATIC_PRODUCT=pos npm run android:sync",
     "android:restaurant:sync": "cross-env AI_MATIC_PRODUCT=restaurant npm run android:sync",

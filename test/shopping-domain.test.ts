@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { addCartLine, assertCheckoutReady, cartDisplaySubtotal, cartLineId, emptyCart, quoteMatchesCart, setCartQuantity, type ShoppingQuote } from "../src/products/shopping/domain";
+import { addCartLine, assertCheckoutReady, cartDisplaySubtotal, cartLineId, emptyCart, ensureCheckoutAttempt, quoteMatchesCart, setCartQuantity, type ShoppingQuote } from "../src/products/shopping/domain";
 
 const now = "2026-07-15T10:00:00.000Z";
 const line = { itemCode: "TEE-RED-M", itemName: "Red Tee", imageUrl: null, uom: "Nos", displayedRate: 1250, modifiers: [{ code: "SIZE", value: "M" }, { code: "COLOR", value: "Red" }] };
@@ -35,4 +35,16 @@ test("store pickup checkout does not require a delivery address", () => {
   const cart=addCartLine(emptyCart(),{itemCode:"ITEM-1",itemName:"Item",imageUrl:null,uom:"Nos",displayedRate:10,modifiers:[]});
   const quote={quoteToken:"q",currency:"PKR",subtotal:10,discount:0,taxes:0,deliveryCharge:0,grandTotal:10,expiresAt:"2099-01-01T00:00:00Z",lines:[{lineId:"ITEM-1",itemCode:"ITEM-1",quantity:1,rate:10,amount:10,available:true}]};
   assert.doesNotThrow(()=>assertCheckoutReady(cart,quote,{requestId:"r",quoteToken:"q",addressName:"",deliveryMethod:"Store Pickup",paymentMethod:"Cash on Delivery"},new Date("2026-01-01")));
+});
+
+test("checkout retry keeps its request ID until the cart changes", () => {
+  const cart = addCartLine(emptyCart(now), line, now);
+  let generated = 0;
+  const createId = () => `request-${++generated}`;
+  const first = ensureCheckoutAttempt(cart, null, createId);
+  const retry = ensureCheckoutAttempt(cart, first, createId);
+  const changed = ensureCheckoutAttempt(setCartQuantity(cart, cart.lines[0].id, 2, "2026-07-15T10:01:00.000Z"), retry, createId);
+  assert.equal(retry.requestId, first.requestId);
+  assert.notEqual(changed.requestId, first.requestId);
+  assert.equal(generated, 2);
 });
