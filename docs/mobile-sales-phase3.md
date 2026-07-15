@@ -8,6 +8,8 @@ ERPNext OAuth2 PKCE login → ERPNext Company/Warehouse context (optional Ai Mat
 
 The focused mobile navigation is Customers → Order → Drafts → Orders → Profile. Customer and item search are debounced, stale search responses are ignored, recent selections remain on-device, category chips and camera scanning reduce typing, and quantities can be entered directly or changed with plus/minus controls. Draft parsing is cached and queue synchronization runs after the first usable screen is shown. The responsive shell uses portrait-safe areas, 48px primary controls, a persistent cart dock, and one-column phone layouts without importing Electron behavior.
 
+When ERPNext has multiple permitted warehouses and no user/global default, initial context loading remains successful and the Customers screen requires an explicit warehouse selection. The server never guesses between warehouses, and customer pricing/stock calls remain blocked until the selection is made.
+
 The client stores drafts and queued submissions under the Sales application sandbox. Every draft receives one stable `request_id`; retries reuse it. The server's `Mobile Sales Order Request` record maps that ID to at most one Sales Order, preventing repeat taps or queue replays from creating duplicates.
 
 Local states are deliberately explicit: draft, queued, failed, and submitted. Queued/failed cards show their stable request ID and a safe retry action; server history separately exposes Draft, Submitted, Partially Delivered, Completed, and Cancelled filters. A locally displayed estimate is not presented as an ERPNext-confirmed total until preview succeeds.
