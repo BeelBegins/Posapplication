@@ -459,6 +459,7 @@ button:disabled { cursor: wait; opacity: 0.65; }
   scrollbar-width: none;
 }
 .cart-rows::-webkit-scrollbar { display: none; }
+.mobile-cart-actions { display: none; }
 .cart-row { width: 100%; text-align: left; background: var(--color-surface); color: var(--color-text); border-radius: 4px; display: grid; grid-template-columns: 1fr 2fr .6fr .7fr .8fr .7fr 1fr .8fr .5fr; gap: 10px; align-items: center; padding: 10px 12px; cursor: pointer; user-select: none; }
 .cart-row.selected { outline: 3px solid var(--color-accent); background: var(--color-accent-soft); }
 .cart-totals { display: flex; flex-wrap: wrap; gap: 18px; margin-top: 16px; color: var(--color-text); }
@@ -550,6 +551,99 @@ button:disabled { cursor: wait; opacity: 0.65; }
   .settings-form { grid-template-columns: 1fr; }
   .form-actions { align-items: flex-start; flex-direction: column; }
   .profile-details dl { grid-template-columns: 1fr; }
+}
+
+/* Capacitor POS portrait layout. Every selector is Android-scoped so the
+   established Electron cashier workspace retains its desktop geometry. */
+@media (max-width: 720px) {
+  .android-app body { background: var(--color-bg-alt); }
+  .android-app .app-shell { padding: 0; min-height: 100dvh; }
+  .android-app #pos-screen {
+    height: 100dvh;
+    grid-template-rows: auto auto minmax(0, 1fr);
+    padding-top: env(safe-area-inset-top);
+  }
+  .android-app .pos-header {
+    margin: 0;
+    padding: 8px 10px;
+    gap: 7px 10px;
+    align-items: center;
+  }
+  .android-app .pos-header-identity { gap: 5px 12px; width: calc(100% - 50px); }
+  .android-app .pos-header-brand { min-width: 110px; }
+  .android-app .pos-header-field:has(#pos-terminal),
+  .android-app .pos-header-field:has(#pos-opening-entry),
+  .android-app .pos-header-field:has(#pos-session-age) { display: none; }
+  .android-app .pos-header-status { order: 3; width: 100%; gap: 6px; }
+  .android-app .pos-header-badge { display: flex; align-items: center; gap: 5px; padding: 4px 8px; }
+  .android-app .pos-header-actions { margin-left: auto; }
+  .android-app .pos-header-actions .header-action { display: none; }
+  .android-app .pos-header-actions .icon-button { min-width: 44px; min-height: 44px; }
+  .android-app .session-warning,
+  .android-app .offline-banner { padding: 7px 10px; }
+  .android-app .pos-layout {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(210px, 1fr) minmax(270px, 42dvh);
+    min-height: 0;
+  }
+  .android-app .pos-cart-pane { padding: 9px 10px 6px; min-height: 0; }
+  .android-app .pos-search { width: 100%; min-height: 48px; padding: 11px 13px; font-size: 1rem; }
+  .android-app .search-popup { left: 10px; right: 10px; top: 61px; max-height: min(42dvh, 330px); border-radius: var(--radius-md); }
+  .android-app .search-result { grid-template-columns: 92px minmax(0, 1fr) auto; min-height: 48px; padding: 8px 10px; }
+  .android-app .cart-table-head { display: none; }
+  .android-app .cart-rows { max-height: none; height: calc(100% - 108px); gap: 7px; padding: 2px; }
+  .android-app .cart-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: auto auto auto;
+    gap: 3px 12px;
+    min-height: 76px;
+    padding: 9px 11px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+  }
+  .android-app .cart-row span { display: none; }
+  .android-app .cart-row span:nth-child(2),
+  .android-app .cart-row span:nth-child(7),
+  .android-app .cart-row span:nth-child(1),
+  .android-app .cart-row span:nth-child(4),
+  .android-app .cart-row span:nth-child(8) { display: block; }
+  .android-app .cart-row span:nth-child(2) { grid-column: 1; grid-row: 1; font-weight: 800; overflow-wrap: anywhere; }
+  .android-app .cart-row span:nth-child(7) { grid-column: 2; grid-row: 1; font-weight: 900; color: var(--color-accent-strong); }
+  .android-app .cart-row span:nth-child(1) { grid-column: 1; grid-row: 2; color: var(--color-text-muted); font-size: .76rem; }
+  .android-app .cart-row span:nth-child(4) { grid-column: 2; grid-row: 2; font-weight: 800; }
+  .android-app .cart-row span:nth-child(4)::before { content: "Qty "; color: var(--color-text-muted); font-weight: 600; }
+  .android-app .cart-row span:nth-child(8) { grid-column: 1 / -1; grid-row: 3; color: var(--color-text-muted); font-size: .74rem; }
+  .android-app .cart-row span:nth-child(8)::before { content: "Stock "; }
+  .android-app .mobile-cart-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; padding-top: 6px; }
+  .android-app .mobile-cart-actions button { min-height: 44px; padding: 6px 3px; font-size: .76rem; }
+  .android-app .pos-summary { max-height: 42dvh; border: 0; border-top: 1px solid var(--color-border-strong); box-shadow: 0 -8px 24px rgb(43 35 32 / 8%); }
+  .android-app .summary-scroll { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; padding: 6px 8px; }
+  .android-app .summary-group { margin: 0; padding: 5px 8px; }
+  .android-app .summary-actions-group { grid-column: 1 / -1; margin: 0; }
+  .android-app .summary-pay-button { min-height: 46px; margin-top: 0; }
+  .android-app .summary-secondary-actions { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .android-app .summary-scroll .summary-secondary-actions button { min-height: 42px; padding: 6px 3px; font-size: .74rem; }
+  .android-app .summary-action { padding: 7px 8px calc(7px + env(safe-area-inset-bottom)); }
+  .android-app .complete-sale-button { min-height: 50px; }
+  .android-app .shortcut-bar { display: none; }
+  .android-app dialog { width: calc(100vw - 20px); max-width: none; max-height: calc(100dvh - 24px); overflow-y: auto; }
+  .android-app .payment-methods { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .android-app .cashier-login-screen { padding: calc(16px + env(safe-area-inset-top)) 12px calc(16px + env(safe-area-inset-bottom)); place-items: start center; }
+  .android-app .cashier-login-card { width: 100%; padding: 24px 18px; }
+  .android-app .device-enrollment-screen { padding: calc(18px + env(safe-area-inset-top)) 12px calc(18px + env(safe-area-inset-bottom)); }
+  .android-app .device-enrollment-card { padding: 22px 18px; }
+  .android-app #settings-screen,
+  .android-app .op-screen,
+  .android-app .shift-screen { width: 100%; height: auto; min-height: 100dvh; padding: calc(18px + env(safe-area-inset-top)) 12px calc(18px + env(safe-area-inset-bottom)); }
+  .android-app #settings-screen > header { margin-bottom: 22px; }
+  .android-app .shift-grid { grid-template-columns: 1fr; }
+  .android-app .shift-card { padding: 14px; overflow-x: auto; }
+  .android-app .shift-dl { grid-template-columns: 1fr; }
+  .android-app .close-recon-head,
+  .android-app .close-recon-row { min-width: 760px; }
+  .android-app .op-card { grid-template-columns: 1fr; }
+  .android-app .op-card .op-card-actions { justify-content: stretch; }
+  .android-app .op-card .op-card-actions button { flex: 1 1 auto; min-height: 44px; }
 }
 
 .customer-dialog { width: min(720px, 90vw); border: 0; border-radius: 12px; padding: 16px; box-shadow: var(--shadow-lg); background: var(--color-surface); color: var(--color-text); }

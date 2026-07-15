@@ -20,7 +20,7 @@ android {
         manifestPlaceholders = [
             appLabel: productProfile.name,
             oauthRedirectScheme: productProfile.androidAppId,
-            appOrientation: productId == 'pos' ? 'sensorLandscape' : 'unspecified'
+            appOrientation: productProfile.androidOrientation ?: 'sensorPortrait'
         ]
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
