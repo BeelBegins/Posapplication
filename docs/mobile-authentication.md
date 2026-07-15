@@ -4,33 +4,32 @@
 
 Long-lived ERPNext API keys and API secrets must not be embedded in an APK. They also should not be entered and retained on general-purpose customer or staff phones.
 
-The existing Retail POS APK currently stores operator-supplied terminal credentials in Android application storage. They are not compiled into the APK, but they are long-lived bearer credentials. Phase 1 preserves this mode only for compatibility with the working Retail POS server contract.
+Retail POS Android no longer accepts or stores operator-supplied terminal credentials. Its API Key/API Secret controls are removed from the packaged Android HTML. Electron independently retains terminal-token credentials for desktop operation.
 
 Restaurant and Sales profiles require authenticated staff sessions. Shopping requires a restricted customer session. Their profiles cannot select `terminal-token` authentication.
 
-## Target flow
+## Implemented Android POS flow
 
-The production mobile flow should be:
+The Android POS flow is:
 
-1. Connect to an HTTPS ERPNext site.
-2. Authenticate the individual staff member or customer through a server-supported login/OAuth flow.
-3. Receive a short-lived session or access token scoped to that user.
-4. Store session material using platform-protected storage where supported.
-5. Let ERPNext enforce roles and document permissions on every request.
-6. Revoke or expire the session without rebuilding the APK.
+1. Connect only to an HTTPS ERPNext site.
+2. Redeem a supervisor-generated, one-time device-enrollment QR code for a POS Profile.
+3. Store the public device configuration through Android Keystore-backed encrypted storage.
+4. Authenticate the cashier in the system browser using OAuth2 Authorization Code with PKCE (`S256`).
+5. Store access/refresh tokens through the same native secure-storage bridge.
+6. Refresh once on a 401 and retry the request once; a rejected refresh clears the mobile session.
+7. Let ERPNext derive the cashier from the authenticated Bearer session and enforce device, role, POS Profile, branch, and document permissions.
 
-OAuth Authorization Code with PKCE is preferred when the ERPNext deployment supports it. A server-issued session-cookie flow is also possible, but cross-origin cookie, CSRF, Capacitor HTTP, and logout behavior must be tested against the deployed ERPNext version.
+The public OAuth client contains no client secret. The server rotates refresh tokens and treats reuse of a rotated token as replay, revoking the affected user/client token family.
 
-## Migration rule for Retail POS Android
+## Platform boundary
 
-Do not remove the API Key/API Secret fields from the current POS APK until the Ai Matic Frappe app provides and tests an equivalent device-enrollment or staff-session contract for:
+Electron continues using its established terminal-token path and optional first-run provisioning. Android must never fall back to those credentials. Shared request code selects one explicit authentication mode:
 
-- catalogue and customer synchronization;
-- POS Profile and shift access;
-- cart validation and sale submission;
-- offline queue replay and duplicate prevention;
-- refunds and supervisor authorization.
+- `terminal-token` for Electron;
+- `user-session` for employee Android products;
+- `customer-session` for Shopping.
 
-After that contract exists, migrate existing POS installations explicitly, clear stored terminal secrets, and remove the fields from Android UI. Electron terminal authentication can remain independently configurable.
+See [Android device and cashier authentication](android-authentication.md) for enrollment, callback, storage, revocation, and validation details.
 
 The Shopping build must never contain terminal credentials, internal ERPNext users, unrestricted Resource API access, or administrative data.
