@@ -755,7 +755,17 @@ app.whenReady().then(() => {
   ipcMain.handle("window:focus-pos", () => {
     const win = mainWindowRef;
     if (!win || win.isDestroyed()) return false;
+    // A bare win.focus() is frequently not enough to reclaim OS-level
+    // foreground status on Windows right after a native confirm()/alert()
+    // dialog closes - Windows restricts SetForegroundWindow calls from a
+    // background process. Restoring if minimized, then briefly toggling
+    // always-on-top, is the standard workaround to force the window back to
+    // the front instead of leaving the cashier to Alt+Tab manually.
+    if (win.isMinimized()) win.restore();
+    win.setAlwaysOnTop(true);
+    win.show();
     win.focus();
+    win.setAlwaysOnTop(false);
     win.webContents.focus();
     win.webContents.send("pos:focus-scanner");
     return true;
