@@ -832,7 +832,7 @@ dialog input:focus-visible,dialog select:focus-visible,dialog textarea:focus-vis
 }
 
 @media print {
-  @page { size: 80mm auto; margin: 2mm; }
+  @page { size: 80mm auto; margin: 2mm 0.11mm; }
   body { background: #fff; }
   button, input, select, textarea, .receipt-head, #receipt-message, .receipt-dialog .form-actions { display: none !important; }
   .receipt-dialog { width: 80mm; max-height: none; padding: 0; border: 0; border-radius: 0; box-shadow: none; }
