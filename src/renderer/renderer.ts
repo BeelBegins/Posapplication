@@ -426,7 +426,6 @@ function normalizeBenefits(value: AppliedBenefits | Record<string, unknown> | nu
 }
 let appliedBenefits: AppliedBenefits = emptyBenefits();
 let customerBenefits = { loyaltyProgram: "", availablePoints: 0, conversionFactor: 1 };
-let customerGiftVouchers: GiftVoucher[] = [];
 let benefitsOutdated = false;
 const slashSearchEnabled = true;
 let scannerFocusUntil = 0;
@@ -556,7 +555,7 @@ function showCustomer(): void { const e=document.querySelector<HTMLElement>("#po
 function customerInput(): HTMLInputElement | null { return document.querySelector<HTMLInputElement>("#customer-search"); }
 async function selectCustomer(customer: CustomerResult): Promise<void> { const result=await window.posAPI.loadCustomer(customer.name); selectedCustomer=customer; showCustomer(); // mark payment and benefits allocation outdated when customer changes
   if (paymentRows.length) paymentsOutdated = true;
-  appliedBenefits=emptyBenefits(); customerGiftVouchers=[]; benefitsOutdated=true;
+  appliedBenefits=emptyBenefits(); benefitsOutdated=true;
   customerBenefits={loyaltyProgram:"",availablePoints:0,conversionFactor:1};
   void loadCustomerBenefits();
   scheduleCartPreview(); const data=result.customer; const detail=document.querySelector<HTMLElement>("#customer-detail"); if(detail)detail.textContent=data?`${String(data.customer_name??customer.customer_name)} | ${String(data.mobile_no??"")} | ${String(data.customer_group??"")} | ${String(data.loyalty_program??"")}${result.cached?" (Cached)":""}`:result.error??"Customer unavailable"; document.querySelector<HTMLDialogElement>("#customer-dialog")?.close(); focusCart(); }
@@ -1660,10 +1659,10 @@ async function renderHeldSales():Promise<void>{
   }));
 }
 async function renameHeldSaleUi(id:number,current:string):Promise<void>{ const name=await promptName("Rename Held Sale","New name",current); if(!name||!name.trim())return; await window.posAPI.renameHeldSale(id,name.trim()); await renderHeldSales(); }
-async function deleteHeldSaleUi(id:number):Promise<void>{ if(!window.confirm("Delete this held draft? Submitted invoices are never affected."))return; await window.posAPI.deleteHeldSale(id); await renderHeldSales(); }
+async function deleteHeldSaleUi(id:number):Promise<void>{ if(!appConfirm("Delete this held draft? Submitted invoices are never affected."))return; await window.posAPI.deleteHeldSale(id); await renderHeldSales(); }
 
 async function resumeHeldSale(id:number):Promise<void>{
-  if(cartLines.length&&!window.confirm("Replace the current cart with the held sale?"))return;
+  if(cartLines.length&&!appConfirm("Replace the current cart with the held sale?"))return;
   const held=await window.posAPI.getHeldSale(id); if(!held){cartMessage("Held sale not found");await renderHeldSales();return;}
   // Restore exact cart, customer, benefits and the ORIGINAL terminal_invoice_id.
   cartLines=Array.isArray(held.cart)?held.cart as CartLine[]:[];
@@ -2107,46 +2106,26 @@ async function showRefundReceipt(res:Record<string,unknown>):Promise<void>{
 
 async function loadCustomerBenefits():Promise<void>{
   if(!selectedCustomer)return;
-  if(!isOnline()){customerBenefits={loyaltyProgram:"",availablePoints:0,conversionFactor:1};customerGiftVouchers=[];return;}
+  if(!isOnline()){customerBenefits={loyaltyProgram:"",availablePoints:0,conversionFactor:1};return;}
   try{
-    const [result,vouchers]=await Promise.all([
-      window.posAPI.getCustomerBenefits(selectedCustomer.name),
-      window.posAPI.listCustomerGiftVouchers(selectedCustomer.name).catch(()=>({vouchers:[],error:null}))
-    ]);
+    const result=await window.posAPI.getCustomerBenefits(selectedCustomer.name);
     customerBenefits={loyaltyProgram:result.loyaltyProgram??"",availablePoints:result.availablePoints,conversionFactor:result.conversionFactor};
-    customerGiftVouchers=vouchers.vouchers??[];
-  }catch{customerBenefits={loyaltyProgram:"",availablePoints:0,conversionFactor:1};customerGiftVouchers=[];}
+  }catch{customerBenefits={loyaltyProgram:"",availablePoints:0,conversionFactor:1};}
 }
 
-function giftVoucherLabel(voucher: GiftVoucher): string {
-  const code = String(voucher.voucher_code ?? voucher.name ?? "");
-  const amount = Number(voucher.amount) || 0;
-  const expiry = voucher.expiry_date ? ` | Exp ${voucher.expiry_date}` : "";
-  const branch = voucher.branch ? ` | ${voucher.branch}` : "";
-  return `${code} | ${amount.toFixed(2)}${expiry}${branch}`;
-}
-
+// Deliberately does not fetch or list a customer's gift vouchers here for the
+// cashier to browse/click - redemption must only happen when whoever's at the
+// counter provides the actual voucher code (typed or scanned), proving they
+// hold it, not merely that the sale is attributed to a customer who owns one.
+// A browsable list let a cashier redeem any linked customer's voucher without
+// that customer being present or aware - see the loyalty-gift-voucher skill.
 function renderGiftVoucherList(): void {
   const list = document.querySelector<HTMLElement>("#benefits-gift-voucher-list");
   if (!list) return;
-  if (!customerGiftVouchers.length) {
-    const empty = document.createElement("p");
-    empty.className = "card-meta";
-    empty.textContent = isOnline() ? "No active gift vouchers for this customer." : "";
-    list.replaceChildren(empty);
-    return;
-  }
-  list.replaceChildren(...customerGiftVouchers.map((voucher) => {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "secondary-button search-result";
-    button.textContent = giftVoucherLabel(voucher);
-    button.onclick = () => {
-      const input = document.querySelector<HTMLInputElement>("#benefits-gift-voucher-code");
-      if (input) { input.value = String(voucher.voucher_code ?? voucher.name ?? ""); input.focus(); }
-    };
-    return button;
-  }));
+  const hint = document.createElement("p");
+  hint.className = "card-meta";
+  hint.textContent = "Enter or scan the customer's gift voucher code above - codes are never listed here.";
+  list.replaceChildren(hint);
 }
 
 async function renderBenefits():Promise<void>{const dialog=document.querySelector<HTMLDialogElement>("#benefits-dialog");if(!dialog)return;const online=isOnline();const customerNameElem=document.querySelector<HTMLElement>("#benefits-customer");if(customerNameElem)customerNameElem.textContent=selectedCustomer?.customer_name??"—";const offlineMsg=document.querySelector<HTMLElement>("#benefits-offline-message");if(offlineMsg)offlineMsg.hidden=online;const loyaltySection=document.querySelector<HTMLElement>("#benefits-loyalty-section");const voucherSection=document.querySelector<HTMLElement>("#benefits-voucher-section");if(loyaltySection)loyaltySection.style.pointerEvents=online?"auto":"none";if(voucherSection)voucherSection.style.pointerEvents=online?"auto":"none";const programElem=document.querySelector<HTMLElement>("#benefits-loyalty-program");if(programElem)programElem.textContent=customerBenefits.loyaltyProgram||"—";const pointsElem=document.querySelector<HTMLElement>("#benefits-available-points");if(pointsElem)pointsElem.textContent=String(customerBenefits.availablePoints);const conversionElem=document.querySelector<HTMLElement>("#benefits-conversion-factor");if(conversionElem)conversionElem.textContent=String(customerBenefits.conversionFactor);const redeemInput=document.querySelector<HTMLInputElement>("#benefits-redeem-points");const maxBtn=document.querySelector<HTMLButtonElement>("#benefits-max-points");const couponInput=document.querySelector<HTMLInputElement>("#benefits-coupon-code");const applyBtn=document.querySelector<HTMLButtonElement>("#benefits-apply");const removeBtn=document.querySelector<HTMLButtonElement>("#benefits-remove");if(redeemInput){redeemInput.disabled=!online||!customerBenefits.loyaltyProgram;}if(maxBtn){maxBtn.disabled=!online||!customerBenefits.loyaltyProgram;}if(couponInput){couponInput.disabled=!online;}if(applyBtn){applyBtn.disabled=!online;}if(removeBtn){removeBtn.disabled=appliedBenefits.loyaltyPoints===0&&!appliedBenefits.couponCode;}const loyaltyValue=customerBenefits.conversionFactor>0?customerBenefits.availablePoints/customerBenefits.conversionFactor:0;const loyaltyElem=document.querySelector<HTMLElement>("#benefits-loyalty-value");if(loyaltyElem)loyaltyElem.textContent=loyaltyValue.toFixed(2); const redeemedPts=previewNumber(serverTotals,"redeemed_loyalty_points");const loyaltyAmt=previewNumber(serverTotals,"loyalty_amount"); const redeemedRow=document.querySelector<HTMLElement>("#benefits-redeemed-row");if(redeemedRow)redeemedRow.hidden=redeemedPts===null||redeemedPts===0; const redeemedElem=document.querySelector<HTMLElement>("#benefits-redeemed-points");if(redeemedElem)redeemedElem.textContent=redeemedPts!==null?String(redeemedPts):"0"; const loyaltyAmtRow=document.querySelector<HTMLElement>("#benefits-loyalty-amount-row");if(loyaltyAmtRow)loyaltyAmtRow.hidden=loyaltyAmt===null||loyaltyAmt===0; const loyaltyAmtElem=document.querySelector<HTMLElement>("#benefits-loyalty-amount");if(loyaltyAmtElem)loyaltyAmtElem.textContent=loyaltyAmt!==null?loyaltyAmt.toFixed(2):"0.00"; const appliedElem=document.querySelector<HTMLElement>("#benefits-applied");if(appliedElem){const parts:string[]=[];if(appliedBenefits.loyaltyPoints>0)parts.push(`Loyalty: ${appliedBenefits.loyaltyPoints} pts`);if(appliedBenefits.couponCode)parts.push(`Coupon: ${appliedBenefits.couponCode}`);appliedElem.textContent=parts.length?`Applied: ${parts.join(" + ")}`:"";}dialog.showModal();window.setTimeout(()=>document.querySelector<HTMLInputElement>("#benefits-redeem-points")?.focus(),0);}
