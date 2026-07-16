@@ -12,7 +12,7 @@ function isCashierPermissionSyncError(message: string): boolean {
 // The receipt is an ERPNext Print Format (POS Invoice), not a custom API method — render it via the standard print view.
 function thermalReceiptCss(): string {
   return `<style>
-    @page { size: 80mm auto; margin: 2mm; }
+    @page { size: 80mm auto; margin: 2mm 0.11mm; }
     @media print {
       html, body { width: 80mm !important; margin: 0 !important; padding: 0 !important; background: #fff !important; }
       button, input, select, textarea, .btn, .print-toolbar, .page-head, .navbar, #navbar, .web-footer, footer,

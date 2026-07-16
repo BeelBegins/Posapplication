@@ -793,10 +793,22 @@ function buildShiftSummaryHtml(): string {
   const branch = document.querySelector<HTMLInputElement>("#branch")?.value ?? "";
   const cashier = s?.user || (document.querySelector<HTMLElement>("#pos-cashier")?.textContent ?? "—");
   const opened = s?.periodStart ? new Date(s.periodStart).toLocaleString() : "—";
-  const line = (label: string, value: number, bold = false) => `<div style="display:flex;justify-content:space-between">${bold ? "<strong>" : ""}<span>${esc(label)}</span><span>${value.toFixed(2)}</span>${bold ? "</strong>" : ""}</div>`;
-  const perMode = rows.map((r) => `<div style="display:flex;justify-content:space-between"><span>${esc(r.mode)}</span><span>${money2(r.actual - r.expected).toFixed(2)}</span></div>`).join("");
-  return `<div style="font:12px/1.5 monospace;width:280px;padding:8px">
-    <div style="text-align:center"><strong>${esc(branch || "POS")}</strong><br/>SHIFT SUMMARY</div>
+  const line = (label: string, value: number, bold = false) => `<div style="display:flex;justify-content:space-between;font-weight:${bold ? 900 : 700}">${bold ? "<strong>" : ""}<span>${esc(label)}</span><span>${value.toFixed(2)}</span>${bold ? "</strong>" : ""}</div>`;
+  const perMode = rows.map((r) => `<div style="display:flex;justify-content:space-between;font-weight:700"><span>${esc(r.mode)}</span><span>${money2(r.actual - r.expected).toFixed(2)}</span></div>`).join("");
+  // @page + print-color-adjust mirror receiptPrintCss() above: without them,
+  // this print job never registers as an 80mm receipt (wrong printer-driver
+  // defaults for thermal darkness/media) and Chromium is free to lighten
+  // colors for print - both were confirmed causes of shift summaries
+  // printing very light and ignoring the 80mm roll width. No explicit width
+  // on the body content itself, unlike the invoice receipt CSS below, so
+  // there's nothing here that can repeat that same margin-vs-width overflow.
+  const style = `<style>
+    @page{size:80mm auto;margin:2mm 0.11mm}
+    @media print{html,body{margin:0!important;padding:0!important;background:#fff!important}}
+    html,body{color:#000!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  </style>`;
+  const body = `<div style="font:700 12px/1.5 monospace;padding:2mm 0;color:#000">
+    <div style="text-align:center;font-weight:900"><strong>${esc(branch || "POS")}</strong><br/>SHIFT SUMMARY</div>
     <hr/>
     <div>Opening Entry: ${esc(s?.openingEntry ?? "—")}</div>
     <div>Cashier: ${esc(cashier)}</div>
@@ -811,10 +823,11 @@ function buildShiftSummaryHtml(): string {
     ${line("Actual (counted)", actual)}
     ${line("Difference", difference, true)}
     <hr/>
-    <div style="text-align:center;font-size:11px">Difference by mode</div>
+    <div style="text-align:center;font-size:11px;font-weight:800">Difference by mode</div>
     ${perMode}
-    ${s?.isEstimate ? '<hr/><div style="text-align:center;font-size:10px">Local estimate — server is authoritative</div>' : ""}
+    ${s?.isEstimate ? '<hr/><div style="text-align:center;font-size:10px;font-weight:700">Local estimate — server is authoritative</div>' : ""}
   </div>`;
+  return `<!doctype html><html><head><meta charset="utf-8">${style}</head><body>${body}</body></html>`;
 }
 async function printShiftSummary(): Promise<void> {
   const message = document.querySelector<HTMLElement>("#close-shift-message");
@@ -1444,7 +1457,7 @@ async function openReceiptPreview(response:Record<string,unknown>,provisional=fa
 // Build a printable provisional receipt from local cart/totals/payments when there is no server-rendered receipt yet.
 function receiptPrintCss():string{
   return `<style>
-    @page{size:80mm auto;margin:2mm}
+    @page{size:80mm auto;margin:2mm 0.11mm}
     @media print{html,body{width:80mm!important;margin:0!important;padding:0!important;background:#fff!important}button,input,select,textarea,.btn,.print-toolbar,.page-head,.navbar,#navbar,.web-footer,footer,.print-actions,a[href*="download_pdf"],a[href*="pdf"]{display:none!important}.receipt-item-row,.receipt-item,.receipt-totals,.receipt-payments,.receipt-fbr,.receipt-footer,.rc-item,.rc-totals,.rc-fbr,.rc-footer{break-inside:avoid;page-break-inside:avoid}}
     *{box-sizing:border-box}body,.print-format,.pos-receipt{margin:0;padding:0;background:#fff!important;color:#000!important;font-family:Calibri,Arial,sans-serif!important;font-variant-numeric:tabular-nums}
     .print-format,.pos-receipt{width:80mm!important;max-width:80mm!important;margin:0 auto!important;padding:3mm 3mm 4mm!important;font-size:11px!important;line-height:1.35!important}
