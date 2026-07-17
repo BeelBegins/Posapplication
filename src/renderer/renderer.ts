@@ -43,6 +43,7 @@ interface PosAPI {
   previewCart: (input:Record<string,unknown>) => Promise<{preview:Record<string,unknown>|null;error:string|null}>;
   previewFbr: (input:Record<string,unknown>) => Promise<Record<string,unknown>>;
   getPaymentMethods: () => Promise<string[]>;
+  getPaymentMethodTypes: () => Promise<Record<string,string>>;
   loadPaymentDraft: () => Promise<PaymentRow[]>;
   savePaymentDraft: (payments: PaymentRow[]) => Promise<void>;
   getTerminalInvoiceId: () => Promise<string>;
@@ -396,6 +397,7 @@ let refundTerminalId = "";                                   // persistent termi
 let salesHistoryRenderToken = 0;                              // guards a background refund-status patch from clobbering a newer search/filter render
 let refundSubmitting = false;
 let paymentMethods: string[] = [];
+let paymentMethodTypes: Record<string, string> = {};
 const PAYMENT_METHOD_GRID_COLUMNS = 3; // must match .payment-methods CSS grid-template-columns
 let selectedPaymentMethodIndex = 0;
 let paymentRows: PaymentRow[] = [];
@@ -1227,7 +1229,7 @@ async function addPayment():Promise<void>{
   const msg=document.querySelector<HTMLElement>("#payment-message");
   const entered=Number(input?.value);
   const method=paymentMethods[selectedPaymentMethodIndex]??"";
-  const isCash=method.toLowerCase()==="cash";
+  const isCash=(paymentMethodTypes[method]??"").toLowerCase()==="cash";
   if(!Number.isFinite(entered)||entered<=0){if(msg)msg.textContent="Enter a valid amount.";input?.focus();return;}
   // Remaining owed, excluding the row this entry will replace (edited row, or an existing same-method row).
   const targetIndex=paymentEditIndex!==null?paymentEditIndex:paymentRows.findIndex(row=>row.method.toLowerCase()===method.toLowerCase());
@@ -2209,8 +2211,10 @@ function closeBenefitsDialog():void{document.querySelector<HTMLDialogElement>('#
 
 // Cash is the most common tender at retail, so pin it first regardless of its
 // position in the POS Profile's payments child table - rest stays server-order.
-function sortPaymentMethodsCashFirst(methods: string[]): string[] {
-  const cashIndex = methods.findIndex((m) => m.toLowerCase() === "cash");
+// Cash detection uses Mode of Payment.type (server-authoritative), not the display name,
+// since ERPNext auto-suffixes names like "Cash - S1GT" when a plain "Cash" doc collides.
+function sortPaymentMethodsCashFirst(methods: string[], types: Record<string, string>): string[] {
+  const cashIndex = methods.findIndex((m) => (types[m] ?? "").toLowerCase() === "cash");
   if (cashIndex <= 0) return methods;
   const copy = methods.slice();
   const [cash] = copy.splice(cashIndex, 1);
@@ -2254,7 +2258,7 @@ async function openPayment():Promise<void>{
     const blocker=await offlineLocalBlocker(false);
     if(blocker){cartMessage(blocker);return;}
   }
-  if(paymentsOutdated&&paymentRows.length){if(!appConfirm("Cart changed. Clear outdated payments?"))return;paymentRows=[];await persistPayments();paymentsOutdated=false;}paymentMethods=sortPaymentMethodsCashFirst(await window.posAPI.getPaymentMethods());paymentRows=await window.posAPI.loadPaymentDraft();changeDue=0;selectedPaymentMethodIndex=0;
+  if(paymentsOutdated&&paymentRows.length){if(!appConfirm("Cart changed. Clear outdated payments?"))return;paymentRows=[];await persistPayments();paymentsOutdated=false;}paymentMethodTypes=await window.posAPI.getPaymentMethodTypes();paymentMethods=sortPaymentMethodsCashFirst(await window.posAPI.getPaymentMethods(),paymentMethodTypes);paymentRows=await window.posAPI.loadPaymentDraft();changeDue=0;selectedPaymentMethodIndex=0;
   // A row left mid-"Edit" from a previous open of this dialog (e.g. the cashier
   // went back to add more items instead of finishing the edit) must not survive
   // into this fresh session — addPayment() would otherwise silently overwrite
