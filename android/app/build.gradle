@@ -15,6 +15,17 @@ def releaseKeystore = System.getenv('ANDROID_KEYSTORE_PATH')
 android {
     namespace = "com.beelbegins.aimaticpos"
     compileSdk = rootProject.ext.compileSdkVersion
+    // Per-product branded launcher icons (legacy + adaptive) live in
+    // src/main/res-<productId>/, overriding the generic default icon in
+    // src/main/res/ - listed second so AGP's resource merge lets it win on
+    // name collisions. A product with no res-<id>/ directory (e.g.
+    // restaurant, not yet given a branded icon) simply falls back to the
+    // shared default, which is a no-op/safe reference to a missing dir.
+    sourceSets {
+        main {
+            res.srcDirs = ['src/main/res', "src/main/res-${productId}"]
+        }
+    }
     defaultConfig {
         applicationId productProfile.androidAppId
         manifestPlaceholders = [
