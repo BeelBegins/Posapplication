@@ -39,6 +39,16 @@ export function markDraft(draft: SalesDraft, status: SalesDraftStatus, values: P
   return { ...draft, ...values, status, updatedAt: now };
 }
 
+// A draft holds items for exactly one customer at a time - pricing, credit,
+// and stock are all customer-specific. Re-selecting the SAME customer keeps
+// the cart; switching to a genuinely different one clears it, since the
+// cached item pricing (itemIndex) is cleared alongside it in the UI layer
+// and stale lines would otherwise render at a zero/incorrect price until
+// re-searched.
+export function switchDraftCustomer(draft: SalesDraft, name: string, now = new Date().toISOString()): SalesDraft {
+  return { ...draft, customer: name, items: draft.customer === name ? draft.items : [], status: "draft", error: undefined, updatedAt: now };
+}
+
 export function isMeaningfulSalesDraft(draft: SalesDraft): boolean {
   return Boolean(draft.customer || draft.items.length || draft.status !== "draft");
 }
