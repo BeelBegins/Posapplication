@@ -56,6 +56,8 @@ export function createShoppingApi(client: ApiClient) {
       payment_method: input.paymentMethod
     }, init),
     getOrders: (offset = 0, limit = 20, init?: RequestInit) => post("get_orders", { offset, limit }, init),
-    getOrderStatus: (order: string, init?: RequestInit) => post("get_order_status", { order }, init)
+    getOrderStatus: (order: string, init?: RequestInit) => post("get_order_status", { order }, init),
+    requestAccountDeletion: (init?: RequestInit) => post("request_account_deletion", {}, init),
+    getAccountDeletionStatus: (init?: RequestInit) => post("get_account_deletion_status", {}, init)
   };
 }

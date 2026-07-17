@@ -33,6 +33,7 @@ let category = "";
 let search = "";
 let notice = "";
 let account: Row | null = null;
+let deletionRequest: Row | null = null;
 let orderHistory: Row[] = [];
 let quote: ShoppingQuote | null = null;
 let selectedProduct: Row | null = null;
@@ -134,6 +135,12 @@ async function openScreen(next: Screen) {
       notice = error instanceof Error ? error.message : "Unable to load orders";
     }
   }
+  if (next === "account" && account && !deletionRequest) {
+    try {
+      const result = await body(await api!.getAccountDeletionStatus());
+      deletionRequest = (result as Row).request as Row | null || null;
+    } catch { /* non-critical - the request button still works without this */ }
+  }
   if (next === "order" && !selectedOrder) next = "orders";
   render(next);
 }
@@ -212,7 +219,8 @@ function orderView(){
 
 function accountView(){
   if(!account)return loginView();
-  return `<section class="page account-page"><div class="account-hero"><span>${esc(field(account,"customer_name","full_name","name").slice(0,2).toUpperCase())}</span><div><p class="eyebrow">Customer account</p><h1>${esc(field(account,"customer_name","full_name","name"))}</h1><p>${esc(field(account,"email","user"))}</p></div></div><div class="account-grid"><section><h2>Shopping</h2><button data-screen="orders"><span>Order history</span><b>Track orders →</b></button><button data-screen="cart"><span>Saved cart</span><b>${cartCount()} items →</b></button><button data-screen="categories"><span>Categories</span><b>Browse →</b></button></section><section><h2>Delivery details</h2><p>${rows(account.addresses).length} saved address${rows(account.addresses).length===1?"":"es"}</p><p>Address editing remains managed by your secure customer account.</p><button id="logout" class="secondary wide">Sign out securely</button></section><section class="store-connection"><h2>Store connection</h2><p><span>Connected to</span><b>${esc(baseUrl)}</b></p><small>Changing the server signs you out and clears this store's local cart.</small><button id="change-store" class="secondary wide">Change store or server</button></section></div></section>`
+  const deletionStatus=field(deletionRequest||{},"status");
+  return `<section class="page account-page"><div class="account-hero"><span>${esc(field(account,"customer_name","full_name","name").slice(0,2).toUpperCase())}</span><div><p class="eyebrow">Customer account</p><h1>${esc(field(account,"customer_name","full_name","name"))}</h1><p>${esc(field(account,"email","user"))}</p></div></div><div class="account-grid"><section><h2>Shopping</h2><button data-screen="orders"><span>Order history</span><b>Track orders →</b></button><button data-screen="cart"><span>Saved cart</span><b>${cartCount()} items →</b></button><button data-screen="categories"><span>Categories</span><b>Browse →</b></button></section><section><h2>Delivery details</h2><p>${rows(account.addresses).length} saved address${rows(account.addresses).length===1?"":"es"}</p><p>Address editing remains managed by your secure customer account.</p><button id="logout" class="secondary wide">Sign out securely</button></section><section class="store-connection"><h2>Store connection</h2><p><span>Connected to</span><b>${esc(baseUrl)}</b></p><small>Changing the server signs you out and clears this store's local cart.</small><button id="change-store" class="secondary wide">Change store or server</button></section><section class="privacy-section"><h2>Privacy &amp; data</h2>${deletionStatus?`<p>Deletion request status: <b>${esc(deletionStatus)}</b></p><small>We'll process this request per our <a href="https://aimatic.tech/data-deletion.html" target="_blank" rel="noopener">data deletion policy</a>.</small>`:`<p>You can request deletion of your account and personal data at any time.</p><button id="request-deletion" class="text-action danger wide">Request account deletion</button><small>See our <a href="https://aimatic.tech/data-deletion.html" target="_blank" rel="noopener">data deletion policy</a> for what is removed and what may be retained for accounting/tax purposes.</small>`}</section></div></section>`
 }
 
 function render(next: Screen = screen) {
@@ -258,8 +266,17 @@ function bind() {
   document.querySelectorAll<HTMLButtonElement>("[data-order]").forEach((button)=>button.onclick=()=>{selectedOrder=orderHistory.find((order)=>field(order,"name","order")===button.dataset.order)||null;render("order")});
   document.querySelector<HTMLButtonElement>("#reorder")?.addEventListener("click",()=>{showNotice("Reorder is ready for item-detail data from the Shopping order API.","info");render("order")});
   document.querySelector<HTMLElement>("[data-address-edit]")?.addEventListener("click",()=>{showNotice("Address editing remains in the secure customer account until a dedicated Shopping address API is available.","info");render("checkout")});
-  document.querySelector<HTMLButtonElement>("#logout")?.addEventListener("click",async()=>{await credentials!.clear();account=null;notice="Signed out.";render("home");});
+  document.querySelector<HTMLButtonElement>("#logout")?.addEventListener("click",async()=>{await credentials!.clear();account=null;deletionRequest=null;notice="Signed out.";render("home");});
   document.querySelector<HTMLButtonElement>("#change-store")?.addEventListener("click",()=>void changeStore());
+  document.querySelector<HTMLButtonElement>("#request-deletion")?.addEventListener("click",async()=>{
+    if(!confirm("Request deletion of your account and personal data? Order records may be retained for a period as required by tax and accounting rules - see the data deletion policy for details."))return;
+    try{
+      const result=await body(await api!.requestAccountDeletion()) as unknown as Row;
+      deletionRequest=result;
+      showNotice(field(result,"already_requested")==="true"?"A deletion request is already being processed.":"Deletion request submitted. We'll follow up by email.","success");
+    }catch(error){showNotice(error instanceof Error?error.message:"Unable to submit deletion request","danger")}
+    render("account");
+  });
 }
 
 async function changeStore() {
@@ -267,7 +284,7 @@ async function changeStore() {
   await credentials?.clear();
   for (const key of ["aimatic-shopping-url",storageKey,checkoutKey]) localStorage.removeItem(key);
   baseUrl="";api=null;credentials=null;oauthConfig=null;signupUrl="";allowSelfRegistration=false;
-  storefront={};products=[];category="";search="";account=null;orderHistory=[];quote=null;selectedProduct=null;selectedOrder=null;cart=emptyCart();checkoutState={address:"",delivery:"",payment:"",instructions:""};notice="";
+  storefront={};products=[];category="";search="";account=null;deletionRequest=null;orderHistory=[];quote=null;selectedProduct=null;selectedOrder=null;cart=emptyCart();checkoutState={address:"",delivery:"",payment:"",instructions:""};notice="";
   setup();
 }
 
