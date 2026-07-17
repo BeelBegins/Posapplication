@@ -221,6 +221,9 @@ input, select, textarea { min-height: 48px; padding: 10px 12px; border: 1px soli
 .account-grid section > button:not(.secondary) { width: 100%; display: flex; justify-content: space-between; border-bottom: 1px solid var(--line); border-radius: 0; text-align: left; }
 .store-connection { grid-column: 1 / -1; }
 .store-connection p { display: grid; gap: 4px; }
+.privacy-section { grid-column: 1 / -1; }
+.privacy-section small { display: block; margin-top: 6px; }
+.text-action.danger { color: var(--danger); }
 .store-connection p b { overflow-wrap: anywhere; }
 .reorder-strip { margin-top: 28px; padding: 22px; display: flex; justify-content: space-between; align-items: center; gap: 12px; border-radius: var(--radius); background: var(--cream); }
 .reorder-strip h2 { margin: 0; }
