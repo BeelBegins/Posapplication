@@ -64,6 +64,7 @@ contextBridge.exposeInMainWorld("posAPI", {
   ,previewCart: (input: Record<string, unknown>) => ipcRenderer.invoke("cart:preview", input)
   ,previewFbr: (input: Record<string, unknown>) => ipcRenderer.invoke("fbr:preview", input)
   ,getPaymentMethods: () => ipcRenderer.invoke("payments:methods")
+  ,getPaymentMethodTypes: () => ipcRenderer.invoke("payments:methodTypes")
   ,loadPaymentDraft: () => ipcRenderer.invoke("payments:load")
   ,savePaymentDraft: (payments: unknown[]) => ipcRenderer.invoke("payments:save", payments)
   ,loadBenefitsDraft: () => ipcRenderer.invoke("benefits:load")

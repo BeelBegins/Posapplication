@@ -797,6 +797,7 @@ app.whenReady().then(() => {
   });
   ipcMain.handle("customer-display:preview", () => createCustomerDisplayWindow({ forceWindowed: true }));
   ipcMain.handle("payments:methods", () => core.getPaymentMethods());
+  ipcMain.handle("payments:methodTypes", () => core.getPaymentMethodTypes());
   ipcMain.handle("payments:load", () => { const id=core.getCartIdentity(); const cartKey=`${id.hardwareId}::${id.openingEntry}`; return loadPaymentDraft(cartKey); });
   ipcMain.handle("payments:save", (_event, payments) => { const id=core.getCartIdentity(); savePaymentDraft(`${id.hardwareId}::${id.openingEntry}`,Array.isArray(payments)?payments:[]); });
   ipcMain.handle("customers:sync", (_event, mode) => core.syncCustomers(mode === "full" ? "full" : "auto"));

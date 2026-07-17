@@ -86,6 +86,20 @@ export function createPosSessionCore(deps: PosCoreDeps) {
     return [...new Set(rows.map(asRecord).map((row) => textValue(row, "mode_of_payment")).filter(Boolean))];
   }
 
+  // Mode of Payment's own `type` (Cash/Bank/General) is the authoritative signal for
+  // whether a method is physical cash — matches the server's _is_cash() in offline_pos/api.py.
+  function getPaymentMethodTypes(): Record<string, string> {
+    const bootstrap = deps.db.getPosBootstrap(deps.db.loadSettings().posProfile);
+    const modes = Array.isArray(bootstrap?.payment_modes) ? bootstrap.payment_modes : [];
+    const result: Record<string, string> = {};
+    for (const mode of modes) {
+      const record = asRecord(mode);
+      const name = textValue(record, "name");
+      if (name) result[name] = textValue(record, "type") || "General";
+    }
+    return result;
+  }
+
   function applyLocalRefundBreakdown(summary: ShiftSummary, openingEntry: string, collectedAmountIsNet = true): ShiftSummary {
     if (hasPaymentBreakdown(summary)) return summary;
     const rawBreakdown = deps.db.getShiftRefundBreakdown(openingEntry);
@@ -344,7 +358,7 @@ export function createPosSessionCore(deps: PosCoreDeps) {
   }
 
   return {
-    getPaymentMethods, summarizePosSession, syncPosSession, getActivePosSession, startPosSession,
+    getPaymentMethods, getPaymentMethodTypes, summarizePosSession, syncPosSession, getActivePosSession, startPosSession,
     getLocalShiftSummary, getShiftSummary, closeShift, getShiftHistoryList, getCachedSessionSummary,
     getCartIdentity, getTerminalInvoiceId, isOfflineBatchId, getOfflineBatchId, realOpeningEntry, numValue
   };
