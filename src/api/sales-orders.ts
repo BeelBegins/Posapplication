@@ -14,6 +14,7 @@ export function createSalesOrdersApi(client: ApiClient) {
     previewOrder: (input: Record<string, unknown>) => post("preview_order", input),
     createOrder: (input: Record<string, unknown>) => post("create_order", input),
     getOrders: (customer?: string, offset = 0, limit = 20) => post("get_orders", { customer, offset, limit }),
-    getOrder: (order: string) => post("get_order", { order })
+    getOrder: (order: string) => post("get_order", { order }),
+    updateOrder: (order: string, input: Record<string, unknown>) => post("update_order", { order, ...input })
   };
 }
