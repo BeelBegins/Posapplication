@@ -69,6 +69,7 @@ export interface CashierLoginResult {
   canStartShift: boolean;
   canRefund: boolean;
   canCloseShift: boolean;
+  canVoidItems: boolean;
   canOfflineSale: boolean;
   offlineLoginExpiresAt: string;
   requirePinSetup: boolean;

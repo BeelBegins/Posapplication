@@ -168,7 +168,7 @@ async function posCashierLogin(input: Record<string, unknown>): Promise<CashierL
   const offlinePinConfirm = textValue(input, "offlinePinConfirm");
   const empty: CashierLoginResult = {
     success: false, user: "", fullName: "", roles: [], allowedPosProfiles: [], defaultPosProfile: "",
-    canStartShift: false, canRefund: false, canCloseShift: false, canOfflineSale: false, offlineLoginExpiresAt: "",
+    canStartShift: false, canRefund: false, canCloseShift: false, canVoidItems: false, canOfflineSale: false, offlineLoginExpiresAt: "",
     requirePinSetup: false, error: null
   };
   if (!username || !password) return { ...empty, error: "Cashier username and password are required." };
@@ -214,6 +214,7 @@ async function posCashierLogin(input: Record<string, unknown>): Promise<CashierL
       canStartShift: Boolean(payload.can_start_shift ?? false),
       canRefund: Boolean(payload.can_refund ?? false),
       canCloseShift: Boolean(payload.can_close_shift ?? false),
+      canVoidItems: Boolean(payload.can_void_items ?? false),
       canOfflineSale,
       offlineLoginExpiresAt,
       requirePinSetup,
@@ -312,6 +313,7 @@ function cacheCashierOfflinePin(cashier: CashierLoginResult, pin: string): { ok:
     canStartShift: cashier.canStartShift,
     canRefund: cashier.canRefund,
     canCloseShift: cashier.canCloseShift,
+    canVoidItems: cashier.canVoidItems,
     canOfflineSale: cashier.canOfflineSale,
     lastOnlineVerifiedAt: new Date().toISOString(),
     offlineLoginExpiresAt: cashier.offlineLoginExpiresAt,
@@ -332,7 +334,7 @@ async function cashierOfflineLogin(input: Record<string, unknown>): Promise<Cash
   const pin = textValue(input, "pin");
   const empty: CashierLoginResult = {
     success: false, user: "", fullName: "", roles: [], allowedPosProfiles: [], defaultPosProfile: "",
-    canStartShift: false, canRefund: false, canCloseShift: false, canOfflineSale: false, offlineLoginExpiresAt: "",
+    canStartShift: false, canRefund: false, canCloseShift: false, canVoidItems: false, canOfflineSale: false, offlineLoginExpiresAt: "",
     requirePinSetup: false, error: null
   };
   if (!username || !pin) return { ...empty, error: "Cashier username and offline PIN are required." };
@@ -389,6 +391,7 @@ async function cashierOfflineLogin(input: Record<string, unknown>): Promise<Cash
     canStartShift: Boolean(cached.canStartShift),
     canRefund: Boolean(cached.canRefund),
     canCloseShift: Boolean(cached.canCloseShift),
+    canVoidItems: Boolean(cached.canVoidItems),
     canOfflineSale: Boolean(cached.canOfflineSale),
     offlineLoginExpiresAt: expiresAt,
     requirePinSetup: false,
