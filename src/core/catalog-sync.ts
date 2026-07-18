@@ -122,12 +122,16 @@ export function createCatalogSyncCore(deps: PosCoreDeps, http: ReturnType<typeof
       const profile = asRecord(deps.db.getPosBootstrap(settings.posProfile)?.pos_profile);
       const priceList = textValue(profile, "selling_price_list");
       const payload: Record<string, string> = {
-        customer_name: String(input.customer_name ?? ""), customer_type: "Individual", customer_group: String(input.customer_group ?? ""),
+        customer_name: String(input.customer_name ?? ""), customer_group: String(input.customer_group ?? ""),
         territory: String(input.territory ?? ""), mobile_no: mobileNo, email_id: String(input.email_id ?? ""), tax_id: String(input.tax_id ?? "")
       };
       if (priceList) payload.default_price_list = priceList;
       if (!payload.customer_name) return { customer: null, error: "Customer Name is required." };
-      const response = await authFetch(deps, `${base}/api/resource/Customer`, {
+      // Routed through aimatic.offline_pos.api.create_walkin_customer rather
+      // than raw POST /api/resource/Customer - core DocPerm grants POS
+      // User/POS Supervisor no create access there either. customer_type is
+      // always "Individual" server-side, so it's dropped from the payload.
+      const response = await authFetch(deps, `${base}/api/method/aimatic.offline_pos.api.create_walkin_customer`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
@@ -136,8 +140,8 @@ export function createCatalogSyncCore(deps: PosCoreDeps, http: ReturnType<typeof
         const message = await getResponseError(response);
         return { customer: null, error: /mobile/i.test(message) && /duplicate|already|exists/i.test(message) ? `Duplicate mobile number: ${message}` : message };
       }
-      const body = await response.json() as { data?: unknown };
-      const customer = asRecord(body.data);
+      const body = await response.json() as { message?: unknown };
+      const customer = asRecord(body.message);
       if (!customer) return { customer: null, error: "ERPNext returned no Customer document." };
       deps.db.cacheCustomer(textValue(customer, "name"), customer);
       deps.db.upsertCustomers([customer]);

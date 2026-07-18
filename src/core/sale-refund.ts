@@ -218,11 +218,10 @@ export function createSaleRefundCore(
 
   async function findPosInvoicePrintFormat(base: string): Promise<string> {
     try {
-      const query = new URLSearchParams({ filters: JSON.stringify([["doc_type", "=", "POS Invoice"], ["disabled", "=", 0]]), fields: JSON.stringify(["name", "standard"]), limit_page_length: "50" });
-      const response = await authFetch(deps, `${base}/api/resource/Print%20Format?${query.toString()}`);
-      if (!response.ok) return "";
-      const body = await response.json() as { data?: unknown };
-      const rows = Array.isArray(body.data) ? body.data.map(asRecord).filter((row): row is Record<string, unknown> => Boolean(row)) : [];
+      // Routed through http.fetchPagedList (-> list_terminal_resources) rather
+      // than raw GET /api/resource/Print Format - core DocPerm for Print
+      // Format grants nothing to POS User/POS Supervisor.
+      const rows = await http.fetchPagedList(base, "Print Format", ["name", "standard"], [["doc_type", "=", "POS Invoice"], ["disabled", "=", 0]]);
       const custom = rows.find((row) => textValue(row, "standard") === "No"); // prefer a customised thermal format over the standard one
       return textValue(custom ?? rows[0] ?? null, "name");
     } catch {

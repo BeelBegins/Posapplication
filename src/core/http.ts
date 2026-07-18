@@ -145,20 +145,28 @@ export function createHttpCore(deps: PosCoreDeps) {
     }
   }
 
+  // Routed through aimatic.offline_pos.api.get_terminal_resource rather than
+  // Frappe's generic GET /api/resource/<doctype>/<name> - core DocPerm for
+  // several doctypes this is called with (POS Profile, Company, Coupon Code,
+  // Customer, ...) grants nothing to POS User/POS Supervisor, so the raw
+  // resource endpoint 403's for a cashier terminal with only those roles.
+  // get_terminal_resource is a reviewable, explicitly allowlisted read
+  // instead (see that method's docstring in offline_pos/api.py).
   async function fetchErpResource(baseUrl: string, doctype: string, name: string): Promise<Record<string, unknown>> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5_000);
 
     try {
-      const response = await client(baseUrl).getResource(doctype, name, {
-        method: "GET",
-        signal: controller.signal
-      });
+      const query = new URLSearchParams({ doctype, name });
+      const response = await client(baseUrl).request(
+        `/api/method/aimatic.offline_pos.api.get_terminal_resource?${query.toString()}`,
+        { method: "GET", signal: controller.signal }
+      );
       if (!response.ok) {
         throw new Error(await getResponseError(response));
       }
-      const body = await response.json() as { data?: unknown; message?: unknown };
-      const document = asRecord(body.data) ?? asRecord(body.message);
+      const body = await response.json() as { message?: unknown };
+      const document = asRecord(body.message);
       if (!document) {
         throw new Error(`ERPNext returned no ${doctype} document.`);
       }
@@ -188,15 +196,27 @@ export function createHttpCore(deps: PosCoreDeps) {
     }
   }
 
+  // Routed through aimatic.offline_pos.api.list_terminal_resources rather than
+  // Frappe's generic GET /api/resource/<doctype> - see fetchErpResource above
+  // for why. Same page-size-based pagination loop as before (a page shorter
+  // than the requested length means it was the last one).
   async function fetchPagedList(baseUrl: string, doctype: string, fields: string[], filters?: unknown): Promise<Record<string, unknown>[]> {
     const rows: Record<string, unknown>[] = [];
     for (let start = 0; ; start += 500) {
-      const response = await client(baseUrl).listResources(doctype, {
-        fields, filters, limitStart: start, limitPageLength: 500
+      const query = new URLSearchParams({
+        doctype,
+        fields: JSON.stringify(fields),
+        limit_start: String(start),
+        limit_page_length: "500"
       });
+      if (filters) query.set("filters", JSON.stringify(filters));
+      const response = await client(baseUrl).request(
+        `/api/method/aimatic.offline_pos.api.list_terminal_resources?${query.toString()}`,
+        { method: "GET" }
+      );
       if (!response.ok) throw new Error(await getResponseError(response));
-      const body = await response.json() as { data?: unknown };
-      const page = Array.isArray(body.data) ? body.data.map(asRecord).filter((row): row is Record<string, unknown> => Boolean(row)) : [];
+      const body = await response.json() as { message?: unknown };
+      const page = Array.isArray(body.message) ? body.message.map(asRecord).filter((row): row is Record<string, unknown> => Boolean(row)) : [];
       rows.push(...page);
       if (page.length < 500) return rows;
     }

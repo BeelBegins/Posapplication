@@ -125,51 +125,23 @@ export function createPosConfigCore(deps: PosCoreDeps, http: ReturnType<typeof c
       return { success: false, profiles: [], error: "ERPNext URL and credentials are required." };
     }
 
-    let endpoint: string;
+    let baseUrl: string;
     try {
-      const baseUrl = new URL(erpnextUrl.trim()).toString().replace(/\/+$/, "");
-      const query = new URLSearchParams({
-        fields: '["name","company","warehouse"]',
-        limit_page_length: "100"
-      });
-      endpoint = `${baseUrl}/api/resource/POS%20Profile?${query.toString()}`;
+      baseUrl = new URL(erpnextUrl.trim()).toString().replace(/\/+$/, "");
     } catch {
       return { success: false, profiles: [], error: "ERPNext URL is not valid." };
     }
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5_000);
-
     try {
-      const response = await authFetch(deps, endpoint, {
-        method: "GET",
-        signal: controller.signal
-      });
-
-      if (!response.ok) {
-        return { success: false, profiles: [], error: await getResponseError(response) };
-      }
-
-      const body = await response.json() as { data?: unknown };
-      if (!Array.isArray(body.data)) {
-        return { success: false, profiles: [], error: "ERPNext returned no POS Profile list." };
-      }
-
-      const profiles = body.data.flatMap((profile): PosProfileOption[] => {
-        if (typeof profile !== "object" || profile === null || Array.isArray(profile)) {
-          return [];
-        }
-        const record = profile as Record<string, unknown>;
-        if (typeof record.name !== "string") {
-          return [];
-        }
+      const rows = await http.fetchPagedList(baseUrl, "POS Profile", ["name", "company", "warehouse"]);
+      const profiles = rows.flatMap((record): PosProfileOption[] => {
+        if (typeof record.name !== "string") return [];
         return [{
           name: record.name,
           company: typeof record.company === "string" ? record.company : "",
           warehouse: typeof record.warehouse === "string" ? record.warehouse : ""
         }];
       });
-
       return { success: true, profiles, error: null };
     } catch (error) {
       return {
@@ -177,8 +149,6 @@ export function createPosConfigCore(deps: PosCoreDeps, http: ReturnType<typeof c
         profiles: [],
         error: error instanceof Error ? error.message : "Unable to load POS Profiles."
       };
-    } finally {
-      clearTimeout(timeout);
     }
   }
 
@@ -190,37 +160,15 @@ export function createPosConfigCore(deps: PosCoreDeps, http: ReturnType<typeof c
       return { success: false, profile: null, error: "ERPNext URL, credentials, and POS Profile are required.", syncedAt: null };
     }
 
-    let endpoint: string;
+    let baseUrl: string;
     try {
-      const baseUrl = new URL(erpnextUrl.trim()).toString().replace(/\/+$/, "");
-      endpoint = `${baseUrl}/api/resource/POS%20Profile/${encodeURIComponent(posProfile.trim())}`;
+      baseUrl = new URL(erpnextUrl.trim()).toString().replace(/\/+$/, "");
     } catch {
       return { success: false, profile: null, error: "ERPNext URL is not valid.", syncedAt: null };
     }
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5_000);
-
     try {
-      const response = await authFetch(deps, endpoint, {
-        method: "GET",
-        signal: controller.signal
-      });
-
-      if (!response.ok) {
-        return { success: false, profile: null, error: await getResponseError(response), syncedAt: null };
-      }
-
-      const body = await response.json() as { data?: unknown; message?: unknown };
-      const profileData = typeof body.data === "object" && body.data !== null && !Array.isArray(body.data)
-        ? body.data as Record<string, unknown>
-        : typeof body.message === "object" && body.message !== null && !Array.isArray(body.message)
-          ? body.message as Record<string, unknown>
-          : null;
-
-      if (!profileData) {
-        return { success: false, profile: null, error: "ERPNext returned no POS Profile data.", syncedAt: null };
-      }
+      const profileData = await http.fetchErpResource(baseUrl, "POS Profile", posProfile.trim());
 
       const value = (key: string): string => typeof profileData[key] === "string" ? profileData[key] as string : "";
       const paymentMethods = Array.isArray(profileData.payments)
@@ -256,8 +204,6 @@ export function createPosConfigCore(deps: PosCoreDeps, http: ReturnType<typeof c
         error: error instanceof Error ? error.message : "Unable to load POS Profile.",
         syncedAt: null
       };
-    } finally {
-      clearTimeout(timeout);
     }
   }
 
