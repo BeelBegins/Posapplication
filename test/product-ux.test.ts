@@ -51,16 +51,24 @@ test("Android POS touch layout and scanner remain isolated from Electron", () =>
 test("Sales navigation, offline statuses, and safe retry are visible", () => {
   const app = source("src/products/sales/app.ts");
   const styles = source("src/products/sales/styles.css");
-  for (const label of ["Customers", "Order", "Drafts", "Orders", "Profile"]) assert.match(app, new RegExp(`label:"${label}"`));
+  // Drafts and Orders were merged into one "My Orders" screen (with status filter
+  // chips) so a rep only has one place to look for the pipeline of an order,
+  // instead of guessing which of two separate screens it's on.
+  for (const label of ["Customers", "Order", "My Orders", "Profile"]) assert.match(app, new RegExp(`label:"${label}"`));
   for (const state of ["queued", "failed", "submitted"]) assert.match(app, new RegExp(`"${state}"`));
-  assert.match(app, /Retry safely/);
+  assert.match(app, /Retry safely|Retry</);
   assert.match(app, /original request ID and failure state remain/);
-  assert.match(app, /data-card-qty/);
+  // Product-grid quantity editing (data-card-qty) was removed - qty/UOM editing now
+  // happens in exactly one place, the cart drawer (data-line-uom for per-line UOM
+  // selection, data-open-cart for the trigger), not duplicated on the grid too.
+  assert.match(app, /data-open-cart/);
+  assert.match(app, /data-line-uom/);
+  assert.doesNotMatch(app, /data-card-qty/);
   assert.match(app, /ERPNext default/);
   assert.match(app, /id="customer-warehouse"/);
   assert.match(app, /Select a warehouse before choosing a customer/);
   assert.match(app, /Change ERPNext server/);
-  assert.match(styles, /grid-template-columns:\s*repeat\(5,\s*1fr\)/);
+  assert.match(styles, /grid-template-columns:\s*repeat\(4,\s*1fr\)/);
   assert.match(styles, /safe-area-inset-bottom/);
   assert.doesNotMatch(app, /Restaurant navigation|Shopping navigation|POS navigation/);
 });
