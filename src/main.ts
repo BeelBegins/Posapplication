@@ -630,7 +630,11 @@ function applyUpdateFeed(): void {
 function setupAutoUpdater(): void {
   if (autoUpdaterReady) { applyUpdateFeed(); return; }
   autoUpdaterReady = true;
-  autoUpdater.autoDownload = false;            // the in-app button controls download
+  // Download production updates in the background. Previously the updater was
+  // only activated when an administrator opened Settings and clicked three
+  // separate buttons, so live tills could remain on a known-bad payment build
+  // indefinitely without any visible warning.
+  autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
   autoUpdater.autoRunAppAfterInstall = true;
   applyUpdateFeed();
@@ -865,6 +869,17 @@ app.whenReady().then(() => {
   createMainWindow();
   createCustomerDisplayWindow();
   setupAutoUpdater();
+  // Check on every packaged-app launch. Development builds have no installed
+  // update metadata and must not attempt to use electron-updater.
+  if (app.isPackaged) {
+    setTimeout(() => {
+      void autoUpdater.checkForUpdates().catch((e: unknown) => {
+        sendUpdateStatus("error", {
+          error: e instanceof Error ? e.message : "Automatic update check failed"
+        });
+      });
+    }, 5_000);
+  }
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
