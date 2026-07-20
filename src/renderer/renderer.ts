@@ -1376,6 +1376,16 @@ async function submitCurrentSale():Promise<void>{
   }
   // Success: store authoritative (or provisional) response first, keep the cart, then open the receipt preview.
   lastSaleResponse=result.response;
+  // For an online sale, render exactly what ERPNext persisted rather than the
+  // renderer's provisional payment/change calculation. This prevents receipt
+  // preview drift if server-side rounding or payment rules adjust either value.
+  if(!queued&&result.response){
+    const responsePayments=Array.isArray(result.response.payments)?result.response.payments:[];
+    const authoritativePayments=responsePayments.map((raw)=>asTotalsRecord(raw)).filter((raw):raw is Record<string,unknown>=>raw!==null).map((raw)=>({method:String(raw.mode_of_payment??""),amount:previewNumber(raw,"amount")??0})).filter((row)=>row.method&&row.amount>0);
+    if(authoritativePayments.length)paymentRows=authoritativePayments;
+    const authoritativeChange=previewNumber(result.response,"change_amount");
+    if(authoritativeChange!==null)changeDue=Math.max(0,money2(authoritativeChange));
+  }
   // Only after a confirmed successful submission/queue: remove the resumed held draft so it can't be resumed again.
   if(resumedHeldId!==null){try{await window.posAPI.deleteHeldSale(resumedHeldId);}catch{/* non-fatal: held draft cleanup */}resumedHeldId=null;}
   cartMessage(queued?"Sale saved offline — queued for FBR sync":"Sale Submitted");
@@ -2613,10 +2623,10 @@ function setupUpdateUi(): void {
     if (checkBtn) checkBtn.disabled = state === "checking" || state === "downloading";
     switch (state) {
       case "checking": setStatus("Checking for updates…"); break;
-      case "available": { setStatus(`Update available: v${String(p.version ?? "")}. Click Download Update.`); const n = document.querySelector<HTMLElement>("#update-notes"); const notes = String(p.notes ?? "").trim(); if (n) { n.hidden = !notes; n.textContent = notes; } break; }
+      case "available": { const version=String(p.version??"");setStatus(`Update available: v${version}. Downloading automatically…`);cartMessage(`POS update v${version} is downloading. Install it from Settings when the current sale is finished.`);const n=document.querySelector<HTMLElement>("#update-notes");const notes=String(p.notes??"").trim();if(n){n.hidden=!notes;n.textContent=notes;}break; }
       case "not-available": setStatus("You're on the latest version."); break;
       case "downloading": setStatus(`Downloading update… ${String(p.percent ?? 0)}%`); break;
-      case "downloaded": setStatus(`Update v${String(p.version ?? "")} downloaded. Click Install & Restart.`); break;
+      case "downloaded": { const version=String(p.version??"");setStatus(`Update v${version} downloaded. Click Install & Restart.`);cartMessage(`POS update v${version} is ready. Finish the current sale, then use Settings → Install & Restart.`);break; }
       case "installing": setStatus("Installing update. The app will restart automatically..."); break;
       case "error": setStatus(`Update error: ${String(p.error ?? "unknown")}`); break;
       default: break;
