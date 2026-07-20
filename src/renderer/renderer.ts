@@ -386,7 +386,7 @@ let localFbrTotals: Record<string, unknown> | null = null;
 let lastSaleResponse: Record<string, unknown> | null = null; // authoritative submission response, stored before any cart reset
 let lastReceiptHtml: string | null = null;                   // server-rendered receipt HTML for printing
 let receiptInvoice = "";                                     // POS Invoice name for (re)printing
-let changeDue = 0;                                           // cash tendered above the bill, to be returned (never recorded as payment)
+let changeDue = 0;                                           // local estimate; server records gross cash tendered and returns authoritative change
 let resumedHeldId: number | null = null;                     // id of the held sale currently resumed (removed after successful submit)
 let receiptMode: "sale" | "history" | "refund" = "sale";     // sale = just submitted; history = duplicate/view; refund = return receipt
 let receiptAutoPrintPending = false;
@@ -1235,10 +1235,13 @@ async function addPayment():Promise<void>{
   const targetIndex=paymentEditIndex!==null?paymentEditIndex:paymentRows.findIndex(row=>row.method.toLowerCase()===method.toLowerCase());
   const allocatedOthers=paymentRows.reduce((sum,row,i)=> i===targetIndex ? sum : sum+row.amount, 0);
   const remaining=Math.max(0,money2(payableAmount()-allocatedOthers));
-  // No advance / extra payment: only cash may be tendered above the bill, and the excess is returned as change — not recorded.
+  // Non-cash can never exceed the bill (no advance/extra payment on card etc.). Cash may be
+  // tendered above the bill — the full tendered amount is sent to the server as-is (matching
+  // ERPNext's own paid_amount semantics: gross tendered, change tracked separately), which
+  // computes and returns the authoritative change_amount rather than this local estimate.
   if(!isCash && entered>remaining+0.0001){if(msg)msg.textContent="Amount exceeds the bill. No advance or extra payment allowed.";input?.focus();return;}
-  const applied=isCash?Math.min(entered,remaining):entered;
-  changeDue=isCash?money2(entered-applied):0;
+  const applied=entered;
+  changeDue=isCash?money2(entered-Math.min(entered,remaining)):0;
   if(targetIndex>=0)paymentRows[targetIndex]={method,amount:applied};else paymentRows.push({method,amount:applied});
   paymentEditIndex=null;
   await persistPayments();renderPayments();if(input)input.value="";refreshPaymentSummary();
