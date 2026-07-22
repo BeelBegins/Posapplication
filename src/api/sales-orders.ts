@@ -31,6 +31,7 @@ export function createSalesOrdersApi(client: ApiClient) {
     getDiscountApprovals: (status = "Pending", limit = 50) => post("get_discount_approvals", { status, limit }),
     approveDiscount: (orderName: string, approved: boolean, comment = "") => post("approve_discount", { order_name: orderName, approved: approved ? 1 : 0, comment }),
     getOrder: (order: string) => post("get_order", { order }),
-    updateOrder: (order: string, input: Record<string, unknown>) => post("update_order", { order, ...input })
+    updateOrder: (order: string, input: Record<string, unknown>) => post("update_order", { order, ...input }),
+    cancelOrder: (order: string) => post("cancel_order", { order })
   };
 }

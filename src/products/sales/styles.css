@@ -1020,3 +1020,29 @@ html, body, #app { background: #eef2f6; }
   .empty-manager { display: grid; }
   .manager-dashboard { padding: 13px; }
 }
+
+
+/* ERPNext order detail and destructive-action confirmation surface */
+.order-detail-backdrop { position: fixed; inset: 0; z-index: 69; background: #10243d80; backdrop-filter: blur(2px); }
+.order-detail-panel { position: fixed; z-index: 70; top: max(18px, env(safe-area-inset-top)); right: 18px; bottom: max(18px, env(safe-area-inset-bottom)); width: min(520px, calc(100vw - 36px)); overflow: auto; padding: 20px; border-radius: 18px; background: #fff; box-shadow: 0 24px 70px #0c203b52; }
+.order-detail-head, .order-detail-status, .order-detail-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.order-detail-head { align-items: start; }
+.order-detail-head h2 { margin: 2px 0; color: #17375e; }
+.order-detail-head p { margin: 3px 0; color: #66798d; }
+.order-detail-status { justify-content: flex-start; flex-wrap: wrap; margin: 14px 0; }
+.order-detail-lines { border-block: 1px solid #e1e8f0; }
+.order-detail-lines p, .order-detail-summary p { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin: 0; padding: 11px 0; border-top: 1px solid #edf1f5; }
+.order-detail-lines p:first-child, .order-detail-summary p:first-child { border-top: 0; }
+.order-detail-lines span { display: grid; gap: 2px; }
+.order-detail-lines small, .order-detail-summary span, .order-action-explainer { color: #687b90; }
+.order-detail-summary { padding: 8px 0; }
+.order-detail-summary b { max-width: 65%; text-align: right; white-space: pre-wrap; }
+.order-detail-actions { justify-content: flex-end; margin-top: 12px; }
+.order-detail-actions button { min-height: 48px; }
+.danger-action { border-color: #b93e3e; background: #b93e3e; color: #fff; }
+.order-action-explainer { display: block; margin-top: 10px; line-height: 1.4; }
+.empty-approval-panel p { margin: 4px 0 0; color: #66798d; }
+@media (max-width: 560px) {
+  .order-detail-panel { top: max(8px, env(safe-area-inset-top)); right: 8px; bottom: max(8px, env(safe-area-inset-bottom)); width: calc(100vw - 16px); padding: 16px; }
+  .order-detail-actions { display: grid; grid-template-columns: 1fr; }
+}

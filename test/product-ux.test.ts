@@ -91,6 +91,11 @@ test("Sales navigation, offline statuses, and safe retry are visible", () => {
   assert.match(api, /attachSignature/);
   assert.match(api, /recordGeolocation/);
   assert.match(api, /getManagerDashboard/);
+  assert.match(api, /cancelOrder/);
+  assert.match(app, /data-order-detail/);
+  assert.match(app, /data-detail-cancel/);
+  assert.match(app, /Exit edit without saving/);
+  assert.doesNotMatch(app, />Cancel edit</);
   assert.match(api, /assortment_only/);
   assert.match(app, /startReorder/);
   assert.match(app, /newSalesDraft/);
