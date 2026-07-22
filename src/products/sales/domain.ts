@@ -13,6 +13,11 @@ export interface SalesDraft {
   discountReason: string;
   poNo: string;
   remarks: string;
+  proofSignature: string;
+  proofLatitude?: number;
+  proofLongitude?: number;
+  proofAccuracy?: number;
+  proofCapturedAt?: string;
   status: SalesDraftStatus;
   error?: string;
   salesOrder?: string;
@@ -21,7 +26,7 @@ export interface SalesDraft {
 
 export function newSalesDraft(branch = "", now = new Date(), warehouse = ""): SalesDraft {
   const delivery = new Date(now); delivery.setDate(delivery.getDate() + 1);
-  return { requestId: crypto.randomUUID(), branch, warehouse, customer: "", items: [], deliveryDate: delivery.toISOString().slice(0, 10), deliveryLocation: "", discountPercent: 0, discountReason: "", poNo: "", remarks: "", status: "draft", updatedAt: now.toISOString() };
+  return { requestId: crypto.randomUUID(), branch, warehouse, customer: "", items: [], deliveryDate: delivery.toISOString().slice(0, 10), deliveryLocation: "", discountPercent: 0, discountReason: "", poNo: "", remarks: "", proofSignature: "", status: "draft", updatedAt: now.toISOString() };
 }
 
 export function setDraftItem(draft: SalesDraft, item: SalesOrderLineInput, now = new Date().toISOString()): SalesDraft {
@@ -29,7 +34,7 @@ export function setDraftItem(draft: SalesDraft, item: SalesOrderLineInput, now =
   const items = item.qty <= 0 ? draft.items.filter(row => row.item_code !== item.item_code) : draft.items.some(row => row.item_code === item.item_code)
     ? draft.items.map(row => row.item_code === item.item_code ? { ...row, ...item } : row)
     : [...draft.items, { ...item }];
-  return { ...draft, items, status: "draft", error: undefined, updatedAt: now };
+  return { ...draft, items, proofSignature: "", proofLatitude: undefined, proofLongitude: undefined, proofAccuracy: undefined, proofCapturedAt: undefined, status: "draft", error: undefined, updatedAt: now };
 }
 
 export function assertSalesDraftReady(draft: SalesDraft): void {
@@ -50,7 +55,7 @@ export function markDraft(draft: SalesDraft, status: SalesDraftStatus, values: P
 // re-searched.
 export function switchDraftCustomer(draft: SalesDraft, name: string, now = new Date().toISOString()): SalesDraft {
   const sameCustomer = draft.customer === name;
-  return { ...draft, customer: name, items: sameCustomer ? draft.items : [], deliveryLocation: sameCustomer ? draft.deliveryLocation : "", discountPercent: sameCustomer ? draft.discountPercent : 0, discountReason: sameCustomer ? draft.discountReason : "", status: "draft", error: undefined, updatedAt: now };
+  return { ...draft, customer: name, items: sameCustomer ? draft.items : [], deliveryLocation: sameCustomer ? draft.deliveryLocation : "", discountPercent: sameCustomer ? draft.discountPercent : 0, discountReason: sameCustomer ? draft.discountReason : "", proofSignature: sameCustomer ? draft.proofSignature : "", proofLatitude: sameCustomer ? draft.proofLatitude : undefined, proofLongitude: sameCustomer ? draft.proofLongitude : undefined, proofAccuracy: sameCustomer ? draft.proofAccuracy : undefined, proofCapturedAt: sameCustomer ? draft.proofCapturedAt : undefined, status: "draft", error: undefined, updatedAt: now };
 }
 
 export function isMeaningfulSalesDraft(draft: SalesDraft): boolean {

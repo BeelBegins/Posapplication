@@ -13,6 +13,9 @@ const includePlugins = ["@capacitor/app"];
 if (productId === "pos" || productId === "sales") {
   includePlugins.push("@capacitor/barcode-scanner");
 }
+if (productId === "sales") {
+  includePlugins.push("@capacitor/geolocation");
+}
 includePlugins.push("@capacitor/browser");
 
 module.exports = {
