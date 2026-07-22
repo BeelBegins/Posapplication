@@ -133,16 +133,19 @@ small { color: var(--muted); }
 .search-bar input { flex: 1; min-width: 0; height: 48px; border: 0; outline: 0; background: transparent; }
 .search-bar > button:not(.primary) { background: #e7eef2; padding: 9px 13px; }
 .content-section { margin-top: 24px; }
-.recent-row, .category-tabs, .filter-tabs { display: flex; gap: 7px; overflow: auto; padding: 6px 0; scrollbar-width: none; }
+.recent-row, .category-tabs, .brand-tabs, .filter-tabs { display: flex; gap: 7px; overflow: auto; padding: 6px 0; scrollbar-width: none; }
 .recent-row > span { align-self: center; color: var(--muted); font-size: .72rem; font-weight: 800; }
-.recent-chip, .category-tabs button, .filter-tabs button {
+.filter-row { display: grid; grid-template-columns: 62px minmax(0, 1fr); align-items: center; gap: 8px; }
+.filter-row > span { color: var(--muted); font-size: .7rem; font-weight: 850; }
+.filter-row > div { min-width: 0; }
+.recent-chip, .category-tabs button, .brand-tabs button, .filter-tabs button {
   min-height: 42px;
   padding: 7px 13px;
   white-space: nowrap;
   background: var(--surface);
   border: 1px solid var(--line);
 }
-.category-tabs button[aria-selected=true], .filter-tabs button[aria-selected=true] { background: var(--navy); color: #fff; }
+.category-tabs button[aria-selected=true], .brand-tabs button[aria-selected=true], .filter-tabs button[aria-selected=true] { background: var(--navy); color: #fff; }
 .selected-customer {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
@@ -241,6 +244,9 @@ textarea { resize: vertical; }
 .danger-text { color: var(--danger); }
 .warning-text { color: var(--warning); }
 .in-cart-chip { min-width: 78px; padding: 7px 10px; display: flex; flex-direction: column; justify-content: center; align-items: flex-end; gap: 2px; border-left: 1px solid var(--line); background: var(--teal-soft); color: #17695f; }
+.product-actions { min-width: 142px; padding: 8px; display: grid; align-content: center; gap: 6px; border-left: 1px solid var(--line); background: #f7fafb; }
+.product-actions select { min-height: 40px; padding: 5px 7px; font-size: .72rem; font-weight: 750; }
+.product-actions .add { min-height: 40px; padding: 6px 10px; background: var(--teal-soft); color: #17695f; }
 .in-cart-chip small { color: #1a7a6c; font-size: .62rem; text-transform: uppercase; letter-spacing: .06em; font-weight: 800; }
 .in-cart-chip b { font-size: .88rem; }
 .icon-button { min-width: 40px; min-height: 40px; padding: 0; display: grid; place-items: center; background: #e7eef2; color: var(--navy); border-radius: 11px; }

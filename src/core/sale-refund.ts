@@ -229,16 +229,23 @@ export function createSaleRefundCore(
     }
   }
 
-  async function getPosReceipt(posInvoice: string): Promise<{ html: string | null; error: string | null }> {
+  // Shared by getPosReceipt/getDuplicateReceipt. isDuplicate tags the request with
+  // ?is_duplicate=1 so the server (aimatic.pos_printing.get_pos_receipt_context) can
+  // suppress the Gift Voucher issued/redeemed blocks on a reprint - they must not
+  // appear again as if newly earned. A duplicate-flavored render is never cached
+  // under the original invoice's cache key, and never falls back to it either, so a
+  // reprint can't silently borrow content rendered for a different flag state.
+  async function fetchPosReceiptHtml(posInvoice: string, isDuplicate: boolean): Promise<{ html: string | null; error: string | null }> {
     const s = deps.db.loadSettings();
     if (!posInvoice.trim()) return { html: null, error: "Missing POS Invoice name." };
-    const cached = deps.db.getCachedReceiptHtml(posInvoice);
+    const cached = !isDuplicate ? deps.db.getCachedReceiptHtml(posInvoice) : null;
     if (!hasUsableCredentials(deps, s) || !s.erpnextUrl) return cached ? { html: cached, error: null } : { html: null, error: "Online connection required to load receipt." };
     try {
       const base = new URL(s.erpnextUrl).toString().replace(/\/+$/, "");
       const printFormat = await findPosInvoicePrintFormat(base);
       const params = new URLSearchParams({ doctype: "POS Invoice", name: posInvoice, no_letterhead: "1", trigger_print: "0", _lang: "en" });
       if (printFormat) params.set("format", printFormat);
+      if (isDuplicate) params.set("is_duplicate", "1");
       const response = await authFetch(deps, `${base}/printview?${params.toString()}`);
       if (!response.ok) return { html: null, error: await getResponseError(response) };
       const html = await response.text();
@@ -246,7 +253,7 @@ export function createSaleRefundCore(
       // The /printview page carries Frappe's print toolbar (Get PDF / Print / Menu / Letterhead) and page chrome — hide it so only the receipt shows.
       const hideChrome = thermalReceiptCss();
       const clean = /<\/head>/i.test(html) ? html.replace(/<\/head>/i, `${hideChrome}</head>`) : hideChrome + html;
-      deps.db.cacheReceiptHtml(posInvoice, clean);
+      if (!isDuplicate) deps.db.cacheReceiptHtml(posInvoice, clean);
       return { html: clean, error: null };
     } catch (e) {
       if (cached) return { html: cached, error: null };
@@ -254,9 +261,14 @@ export function createSaleRefundCore(
     }
   }
 
-  // Duplicate receipt: same authoritative receipt HTML with a DUPLICATE COPY banner. Never re-submits anything.
+  async function getPosReceipt(posInvoice: string): Promise<{ html: string | null; error: string | null }> {
+    return fetchPosReceiptHtml(posInvoice, false);
+  }
+
+  // Duplicate receipt: same authoritative receipt HTML (minus Gift Voucher blocks, see
+  // fetchPosReceiptHtml) with a DUPLICATE COPY banner. Never re-submits anything.
   async function getDuplicateReceipt(posInvoice: string): Promise<{ html: string | null; error: string | null }> {
-    const base = await getPosReceipt(posInvoice);
+    const base = await fetchPosReceiptHtml(posInvoice, true);
     if (!base.html) return base;
     const banner = `<div class="duplicate-copy">DUPLICATE COPY<br>Invoice ${posInvoice}<br>Reprinted ${new Date().toLocaleString()}</div>`;
     let html = base.html;
