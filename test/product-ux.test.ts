@@ -63,6 +63,11 @@ test("Sales navigation, offline statuses, and safe retry are visible", () => {
   // selection, data-open-cart for the trigger), not duplicated on the grid too.
   assert.match(app, /data-open-cart/);
   assert.match(app, /data-line-uom/);
+  assert.match(app, /data-product-uom/);
+  assert.match(app, /factor<=0/);
+  assert.match(app, /Search item, code, category or brand/);
+  assert.match(app, /data-brand/);
+  assert.match(app, /item_group.*brand/);
   assert.doesNotMatch(app, /data-card-qty/);
   assert.match(app, /ERPNext default/);
   assert.match(app, /id="customer-warehouse"/);
