@@ -8,6 +8,9 @@ export interface SalesDraft {
   customer: string;
   items: SalesOrderLineInput[];
   deliveryDate: string;
+  deliveryLocation: string;
+  discountPercent: number;
+  discountReason: string;
   poNo: string;
   remarks: string;
   status: SalesDraftStatus;
@@ -18,7 +21,7 @@ export interface SalesDraft {
 
 export function newSalesDraft(branch = "", now = new Date(), warehouse = ""): SalesDraft {
   const delivery = new Date(now); delivery.setDate(delivery.getDate() + 1);
-  return { requestId: crypto.randomUUID(), branch, warehouse, customer: "", items: [], deliveryDate: delivery.toISOString().slice(0, 10), poNo: "", remarks: "", status: "draft", updatedAt: now.toISOString() };
+  return { requestId: crypto.randomUUID(), branch, warehouse, customer: "", items: [], deliveryDate: delivery.toISOString().slice(0, 10), deliveryLocation: "", discountPercent: 0, discountReason: "", poNo: "", remarks: "", status: "draft", updatedAt: now.toISOString() };
 }
 
 export function setDraftItem(draft: SalesDraft, item: SalesOrderLineInput, now = new Date().toISOString()): SalesDraft {
@@ -46,7 +49,8 @@ export function markDraft(draft: SalesDraft, status: SalesDraftStatus, values: P
 // and stale lines would otherwise render at a zero/incorrect price until
 // re-searched.
 export function switchDraftCustomer(draft: SalesDraft, name: string, now = new Date().toISOString()): SalesDraft {
-  return { ...draft, customer: name, items: draft.customer === name ? draft.items : [], status: "draft", error: undefined, updatedAt: now };
+  const sameCustomer = draft.customer === name;
+  return { ...draft, customer: name, items: sameCustomer ? draft.items : [], deliveryLocation: sameCustomer ? draft.deliveryLocation : "", discountPercent: sameCustomer ? draft.discountPercent : 0, discountReason: sameCustomer ? draft.discountReason : "", status: "draft", error: undefined, updatedAt: now };
 }
 
 export function isMeaningfulSalesDraft(draft: SalesDraft): boolean {

@@ -10,6 +10,14 @@ The focused mobile navigation is Customers → Order → My Orders → Profile; 
 
 The Order screen provides two persistent catalogue modes. **Fast Order** is the default high-volume list: every row keeps item identity, brand/SKU, UOM-specific availability, assigned-UOM selector, direct quantity/plus-minus controls, and live line estimate in one scan path; a visible row control expands conversion and order details. **Cards** preserves the visual browse-and-add layout. Switching modes preserves the same draft and cart. In both modes alternate UOMs appear only when assigned to the Item with a positive conversion factor, each option shows its stock-UOM conversion, and prices/availability come from the server response. A sticky ambient status strip reports online contact, local queued/failed/syncing state, and opens Profile for details without adding a sync API.
 
+Fast Order also includes the first Phase 2 intelligence feature: when the selected customer bought an item on at least two permission-visible submitted Sales Orders during the last three months, the server returns last quantity, average quantity, frequency, trend, and last-order date in the Item's stock UOM. The row converts those values to the salesperson's currently selected valid UOM and offers an explicit Apply action. Suggestions are hidden offline, are never auto-applied, and remain subject to the same ERPNext stock, price, tax, credit, and document validation as manually entered quantities.
+
+Customer assortments are configured in ERPNext through **Mobile Sales Assortment** rows. A Sales Manager or System Manager can allow an individual Item or an Item Group; group rules include descendant groups. When at least one enabled rule exists, the Order screen shows a customer-specific Products filter. Activating it sends `assortment_only` to the restricted item search API, which resolves the configured union before applying text, barcode, category, brand, permission, sales-item, and disabled-item filters. With no enabled rules the full permitted catalogue remains available. The rule summary and expanded group names are cached locally so the filter remains understandable offline, but the client does not treat the cache as pricing, stock, or transaction authority.
+
+Customer delivery rules are configured through **Mobile Sales Delivery Location**. Each enabled rule maps one customer to an enabled ERPNext Address already linked to that customer, with an optional default, weekday schedule, receiving instructions, and minimum order value. The Order and Review screens select the default location, show the address and available-day chips, move an incompatible default date to the next allowed day, and show a non-blocking minimum-order warning. The selected location is part of the persisted draft and stable offline request payload; cached rules keep offline preparation usable. On preview, create, update, and retry, the restricted backend resolves the location again, rejects another customer's address or a disallowed weekday, and writes the standard Sales Order shipping address. No configured locations preserves ordinary ERPNext address behavior.
+
+Discount authority is configured per employee through **Mobile Sales Discount Authority**. The Review screen shows the current user's server-provided limit, accepts a percentage, and requires a reason above that limit. The requested percentage and reason stay with the local draft and offline queue, but ERPNext recalculates the actual Sales Order; the client never supplies a discount amount or final total. Over-limit creation produces one auditable **Mobile Sales Discount Approval** record and leaves the Sales Order Draft blocked from submission. Sales Managers and System Managers see a permission-filtered approval queue in My Orders, can approve or reject with a required rejection comment, and both decisions update the standard ERPNext discount fields. Notification Log and a live Frappe event alert connected managers/requesters. A server `before_submit` hook prevents pending, rejected, or increased-above-approved discounts from bypassing the decision.
+
 The Customers screen also presents up to three permission-filtered submitted orders from distinct recent customers. **Order Again** creates a new local draft and a new stable request ID, preserving quantities and assigned UOMs only as a starting point. When online, it reloads customer context and revalidates every item and UOM against the selected warehouse before review; unavailable items are omitted and obsolete UOMs fall back to a currently valid Item UOM. A cached reorder may seed an offline draft, but it is labeled cached and cannot receive authoritative totals or create the Sales Order until ERPNext is available. After creation, the confirmation exposes Share, Copy number, and View order actions while explicitly stating that ERPNext created a Draft awaiting submission.
 
 Draft parsing is cached and queue synchronization runs after the first usable screen is shown. The responsive shell uses portrait-safe areas, 48px primary controls, a persistent cart dock, and one-column phone layouts without importing Electron behavior.
@@ -33,6 +41,8 @@ All mobile calls use the restricted `aimatic.mobile_sales.api` namespace. The se
 - reads outstanding balance and credit limit from ERPNext;
 - returns warehouse stock without allowing the client to alter it;
 - builds the Sales Order with ERPNext item/pricing/tax methods and document hooks;
+- resolves configured customer delivery locations, dates, and shipping addresses server-side;
+- applies employee discount authority and manager decisions server-side and blocks undecided submission;
 - inserts the Sales Order through normal permissions and leaves it as a draft;
 - never accepts a client rate, available quantity, outstanding amount, credit limit, company, or warehouse as authority.
 
@@ -46,6 +56,7 @@ Offline drafts can be edited and retained without a connection. A queued create 
 
 ## Release checks
 
+- Run `bench migrate` on each target site when deploying the Phase 2 assortment, delivery-location, discount-authority, and discount-approval schemas.
 - Run `npm test` and `npm run build`.
 - Run `npm run android:sales:apk`.
 - Verify POS Android and Electron builds remain unchanged.
