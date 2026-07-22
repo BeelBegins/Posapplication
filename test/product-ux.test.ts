@@ -51,6 +51,7 @@ test("Android POS touch layout and scanner remain isolated from Electron", () =>
 test("Sales navigation, offline statuses, and safe retry are visible", () => {
   const app = source("src/products/sales/app.ts");
   const styles = source("src/products/sales/styles.css");
+  const api = source("src/api/sales-orders.ts");
   // Drafts and Orders were merged into one "My Orders" screen (with status filter
   // chips) so a rep only has one place to look for the pipeline of an order,
   // instead of guessing which of two separate screens it's on.
@@ -58,12 +59,45 @@ test("Sales navigation, offline statuses, and safe retry are visible", () => {
   for (const state of ["queued", "failed", "submitted"]) assert.match(app, new RegExp(`"${state}"`));
   assert.match(app, /Retry safely|Retry</);
   assert.match(app, /original request ID and failure state remain/);
-  // Product-grid quantity editing (data-card-qty) was removed - qty/UOM editing now
-  // happens in exactly one place, the cart drawer (data-line-uom for per-line UOM
-  // selection, data-open-cart for the trigger), not duplicated on the grid too.
+  // Cards retain pre-add UOM selection, while the explicit Fast Order mode adds
+  // dense in-row quantity/UOM controls without reviving the old card-grid editor.
   assert.match(app, /data-open-cart/);
   assert.match(app, /data-line-uom/);
   assert.match(app, /data-product-uom/);
+  assert.match(app, /data-catalog-view/);
+  assert.match(app, /fastOrderRow/);
+  assert.match(app, /data-fast-uom/);
+  assert.match(app, /data-fast-qty-step/);
+  assert.match(app, /data-fast-qty-input/);
+  assert.match(app, /catalogViewKey/);
+  assert.match(app, /syncBar/);
+  assert.match(app, /data-sync-bar/);
+  assert.match(app, /lastSyncKey/);
+  // Phase 1 acceleration stays permission- and ERP-authoritative: recent orders
+  // seed a fresh local draft, then every line/UOM is refreshed before review.
+  assert.match(api, /getRecentReorderCandidates/);
+  assert.match(api, /getCustomerLastOrder/);
+  assert.match(app, /startReorder/);
+  assert.match(app, /newSalesDraft/);
+  assert.match(app, /Refreshing .* with current ERPNext data/);
+  assert.match(app, /data-reorder-order/);
+  assert.match(app, /reorderCacheKey/);
+  assert.match(app, /customerSearchHistoryKey/);
+  assert.match(app, /itemSearchHistoryKey/);
+  assert.match(app, /data-run-search/);
+  assert.match(app, /data-remove-search/);
+  assert.match(app, /data-clear-search/);
+  assert.match(app, /voiceSearchAvailable/);
+  assert.match(app, /data-confirmation-share/);
+  assert.match(app, /data-confirmation-copy/);
+  assert.match(app, /Draft · awaiting ERPNext submission/);
+  assert.match(styles, /\.fast-order-row/);
+  assert.match(styles, /\.sync-bar/);
+  assert.match(styles, /\.reorder-card/);
+  assert.match(styles, /\.recent-search-row/);
+  assert.match(styles, /\.order-confirmation/);
+  assert.match(styles, /\.confirmation-actions button \{ min-height: 48px/);
+  assert.match(styles, /\.fast-quantity button \{ width: 48px; min-height: 48px/);
   assert.match(app, /factor<=0/);
   assert.match(app, /Search item, code, category or brand/);
   assert.match(app, /data-brand/);
