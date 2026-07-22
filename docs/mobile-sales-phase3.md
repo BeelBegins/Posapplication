@@ -6,7 +6,7 @@ Ai Matic Sales is a focused Capacitor application for employees with Sales User,
 
 ERPNext OAuth2 PKCE login → ERPNext Company/Warehouse context (optional Ai Matic Branch) → customer search → outstanding balance, credit limit, and customer price list → item search or camera barcode scan → warehouse availability → offline draft/cart → ERPNext order preview → draft Sales Order creation → order history/status.
 
-The focused mobile navigation is Customers → Order → My Orders → Profile; My Orders merges on-device drafts/queue states and ERPNext order history into one pipeline. Customer and item search are debounced, stale search responses are ignored, and item search covers code, name, category, and brand. Category and brand chips, the last ten explicit searches, platform voice input, recent selections, and camera scanning reduce typing; voice search falls back to the same keyboard field when platform speech recognition is unavailable.
+The focused mobile navigation is Customers → Order → My Orders → Visits → Profile; My Orders merges on-device drafts/queue states and ERPNext order history into one pipeline. Customer and item search are debounced, stale search responses are ignored, and item search covers code, name, category, and brand. Category and brand chips, the last ten explicit searches, platform voice input, recent selections, and camera scanning reduce typing; voice search falls back to the same keyboard field when platform speech recognition is unavailable.
 
 The Order screen provides two persistent catalogue modes. **Fast Order** is the default high-volume list: every row keeps item identity, brand/SKU, UOM-specific availability, assigned-UOM selector, direct quantity/plus-minus controls, and live line estimate in one scan path; a visible row control expands conversion and order details. **Cards** preserves the visual browse-and-add layout. Switching modes preserves the same draft and cart. In both modes alternate UOMs appear only when assigned to the Item with a positive conversion factor, each option shows its stock-UOM conversion, and prices/availability come from the server response. A sticky ambient status strip reports online contact, local queued/failed/syncing state, and opens Profile for details without adding a sync API.
 
@@ -19,6 +19,14 @@ Customer delivery rules are configured through **Mobile Sales Delivery Location*
 Discount authority is configured per employee through **Mobile Sales Discount Authority**. The Review screen shows the current user's server-provided limit, accepts a percentage, and requires a reason above that limit. The requested percentage and reason stay with the local draft and offline queue, but ERPNext recalculates the actual Sales Order; the client never supplies a discount amount or final total. Over-limit creation produces one auditable **Mobile Sales Discount Approval** record and leaves the Sales Order Draft blocked from submission. Sales Managers and System Managers see a permission-filtered approval queue in My Orders, can approve or reject with a required rejection comment, and both decisions update the standard ERPNext discount fields. Notification Log and a live Frappe event alert connected managers/requesters. A server `before_submit` hook prevents pending, rejected, or increased-above-approved discounts from bypassing the decision.
 
 The Customers screen also presents up to three permission-filtered submitted orders from distinct recent customers. **Order Again** creates a new local draft and a new stable request ID, preserving quantities and assigned UOMs only as a starting point. When online, it reloads customer context and revalidates every item and UOM against the selected warehouse before review; unavailable items are omitted and obsolete UOMs fall back to a currently valid Item UOM. A cached reorder may seed an offline draft, but it is labeled cached and cannot receive authoritative totals or create the Sales Order until ERPNext is available. After creation, the confirmation exposes Share, Copy number, and View order actions while explicitly stating that ERPNext created a Draft awaiting submission.
+
+ERPNext Pricing Rules and Promotional Schemes are surfaced as informational offer cards and item badges. The restricted API filters active selling rules by date, company, currency, warehouse, customer/customer group/territory, Item, Item Group descendants, and Brand. The client never calculates or applies a promotion: it names the qualifying rule and ERPNext remains responsible for free items, tier quantities, discounts, taxes, and the final preview.
+
+**Visits** is a field route built from manager-created **Mobile Sales Visit** records. A representative sees only their own dated schedule, customer address, planned time, instructions, and visit recency. Route optimization is an explicit nearest-next ordering from the device's current position; it does not overwrite the manager's saved route. Check-in and completion each require precise device GPS, timestamp automatically, accept notes and up to three compressed photos, and use stable request IDs. Photos are verified as JPEG/PNG/WebP and stored as private ERPNext files. Offline visit operations queue in order and replay safely; a queued check-in can be followed by a queued completion without producing duplicate audit events.
+
+New order creation requires a customer signature and device location on the Review screen. The PNG signature is size/type validated, saved as a private attachment to the Sales Order, and linked to one immutable **Mobile Sales Order Proof** record with salesperson, timestamp, coordinates, and accuracy. Signature and location remain in the same stable offline order payload, and changing the customer, items, UOM, quantity, delivery, discount, PO reference, notes, branch, or warehouse invalidates stale proof and requires a fresh acknowledgement. Existing Draft edits remain editable without falsely replacing the original proof.
+
+Sales Managers and System Managers receive a role-gated dashboard in Profile. Week/month cards aggregate submitted ERPNext Sales Orders for the selected Company/Warehouse, compare revenue and order count with the preceding period, show average order and completed GPS visits, flag out-of-stock items/stale visits/pending discounts, and rank order owners. The client displays only server aggregates and cannot submit KPI values.
 
 Draft parsing is cached and queue synchronization runs after the first usable screen is shown. The responsive shell uses portrait-safe areas, 48px primary controls, a persistent cart dock, and one-column phone layouts without importing Electron behavior.
 
@@ -43,6 +51,10 @@ All mobile calls use the restricted `aimatic.mobile_sales.api` namespace. The se
 - builds the Sales Order with ERPNext item/pricing/tax methods and document hooks;
 - resolves configured customer delivery locations, dates, and shipping addresses server-side;
 - applies employee discount authority and manager decisions server-side and blocks undecided submission;
+- filters promotion visibility while leaving actual promotion calculation to ERPNext;
+- validates idempotent GPS visit events and private image attachments;
+- stores immutable private signature/location proof against the created Sales Order;
+- computes manager KPIs only from submitted, company-scoped ERPNext records;
 - inserts the Sales Order through normal permissions and leaves it as a draft;
 - never accepts a client rate, available quantity, outstanding amount, credit limit, company, or warehouse as authority.
 
@@ -56,10 +68,14 @@ Offline drafts can be edited and retained without a connection. A queued create 
 
 ## Release checks
 
-- Run `bench migrate` on each target site when deploying the Phase 2 assortment, delivery-location, discount-authority, and discount-approval schemas.
+- Run `bench migrate` on each target site when deploying the assortment, delivery-location, discount-authority, discount-approval, visit, and order-proof schemas.
 - Run `npm test` and `npm run build`.
 - Run `npm run android:sales:apk`.
 - Verify POS Android and Electron builds remain unchanged.
 - On a standard ERPNext company with no Branch records, verify Company/Warehouse defaults, customer permissions, customer-specific price list, stock display, credit warning, draft creation, duplicate replay, queue sync, and order history.
 - On a Branch-managed company, verify assigned-branch enforcement and Branch fallback defaults.
 - Verify a user without a Sales role and a Sales User attempting another branch are rejected.
+- Verify active promotions appear but ERPNext preview remains the only final promotion/price authority.
+- Verify visit check-in/completion online, offline replay, private photos, location denial, and duplicate request IDs.
+- Verify order proof is required for new orders, invalidates after order changes, and creates one private immutable audit record.
+- Verify manager dashboard role gating and Company/Warehouse scoping.
