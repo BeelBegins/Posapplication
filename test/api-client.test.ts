@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createApiClient } from "../src/api/client";
+import { createSalesOrdersApi } from "../src/api/sales-orders";
 
 test("terminal API client supplies token authentication without leaking it into URLs", async () => {
   let requestedUrl = "";
@@ -50,4 +51,27 @@ test("user-session retries one 401 with a refreshed bearer token and never uses 
   assert.deepEqual(deviceIds, ["device-1", "device-1"]);
   assert.equal(refreshes, 1);
   assert.equal(authorizations.some((value) => value.startsWith("token ")), false);
+});
+
+
+test("Sales order view, update, and cancellation use distinct restricted API actions", async () => {
+  const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+  const mockFetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    calls.push({ url: String(input), body: JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown> });
+    return new Response("{}", { status: 200 });
+  }) as typeof fetch;
+  const sales = createSalesOrdersApi(createApiClient({ baseUrl: "https://erp.example.com", authentication: { mode: "session" }, fetch: mockFetch }));
+  await sales.getOrder("SO-1");
+  await sales.updateOrder("SO-1", { remarks: "Keep this PO note" });
+  await sales.cancelOrder("SO-2");
+  assert.deepEqual(calls.map((call) => new URL(call.url).pathname), [
+    "/api/method/aimatic.mobile_sales.api.get_order",
+    "/api/method/aimatic.mobile_sales.api.update_order",
+    "/api/method/aimatic.mobile_sales.api.cancel_order",
+  ]);
+  assert.deepEqual(calls.map((call) => call.body), [
+    { order: "SO-1" },
+    { order: "SO-1", remarks: "Keep this PO note" },
+    { order: "SO-2" },
+  ]);
 });
