@@ -113,6 +113,23 @@ Only FBR section text changes:
 
 Do not change item, tax, payment, total, or amount formatting for offline receipt.
 
+## FBR-Optional Receipt Text
+
+Some POS Profiles allow selling without FBR (server-side `POS Profile.custom_fbr_optional`,
+used when no `FBR Integration Settings` are configured/enabled for that branch — see the
+`aimatic` `fbr_pos` module docs). For a sale/refund where FBR was never attempted, the server
+response has no `fbr_status`, `fbr_invoice_number`, or FBR response code at all — this is
+distinct from a real submission that failed (which always carries a status).
+
+`interpretFbr()` exposes this as `applicable: boolean`. When `applicable` is `false` (and the
+receipt is not the offline-queued provisional case, which always shows its own text above), the
+renderer hides the `.receipt-fbr` block and the `#receipt-fbr-badge` entirely — it does not show
+"Not Accepted" or any other FBR text. This mirrors the server-side print format, which already
+omits its whole FBR section when `custom_fbr_invoice_number` is blank.
+
+Do not fall back to "Not Accepted" for the FBR-optional case. That text is reserved for a sale
+where FBR was actually attempted and failed.
+
 ## Reconnect Sync
 
 When ERPNext is back online and queued sales exist:
