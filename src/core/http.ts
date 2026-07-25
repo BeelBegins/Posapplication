@@ -1,6 +1,7 @@
 import type { PosCoreDeps } from "./types";
 import { createApiClient } from "../api/client";
 import { hasUsableCredentials } from "./auth-fetch";
+import { normalizeErpDisplayText } from "./display-branding";
 
 // ----- Pure helpers, no deps needed — used both by the bound functions below and by
 // main.ts code not yet migrated into src/core/ (see the extraction plan). -----
@@ -42,7 +43,7 @@ export function formatResponseError(status: number, statusText: string, rawBody:
   }
   for (const key of ["exception", "exc_type", "exc"] as const) if (typeof body[key] === "string") messages.push(body[key] as string);
   const message = messages.find(Boolean) || rawBody || `HTTP ${status}: ${statusText}`;
-  return `HTTP ${status}: ${message}`;
+  return normalizeErpDisplayText(`HTTP ${status}: ${message}`);
 }
 
 export async function getResponseError(response: Response): Promise<string> {
@@ -62,7 +63,7 @@ export async function getResponseError(response: Response): Promise<string> {
   }
   for (const key of ["exception", "exc_type", "exc"] as const) if (typeof body[key] === "string") messages.push(body[key] as string);
   const message = messages.find(Boolean) || rawBody || `HTTP ${response.status}: ${response.statusText}`;
-  return `HTTP ${response.status}: ${message}`;
+  return normalizeErpDisplayText(`HTTP ${response.status}: ${message}`);
 }
 
 // ----- Functions bound to PosCoreDeps (need deps.fetch and/or deps.db) -----
@@ -168,7 +169,7 @@ export function createHttpCore(deps: PosCoreDeps) {
       const body = await response.json() as { message?: unknown };
       const document = asRecord(body.message);
       if (!document) {
-        throw new Error(`ERPNext returned no ${doctype} document.`);
+        throw new Error(`ERP returned no ${doctype} document.`);
       }
       return document;
     } finally {
@@ -188,7 +189,7 @@ export function createHttpCore(deps: PosCoreDeps) {
       }
       const body = await response.json() as { message?: unknown };
       if (typeof body.message !== "string" || !body.message) {
-        throw new Error("ERPNext returned no logged-in user.");
+        throw new Error("ERP returned no logged-in user.");
       }
       return body.message;
     } finally {

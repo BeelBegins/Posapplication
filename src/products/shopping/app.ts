@@ -1,5 +1,6 @@
 import { createApiClient } from "../../api/client";
 import { createShoppingApi } from "../../api/shopping";
+import { normalizeErpDisplayText } from "../../core/display-branding";
 import { addCartLine, assertCheckoutReady, cartDisplaySubtotal, emptyCart, ensureCheckoutAttempt, setCartQuantity, type ShoppingCart, type ShoppingCheckoutAttempt, type ShoppingQuote } from "./domain";
 import { capacitorOAuthBrowser } from "../../mobile/capacitor-oauth-browser";
 import { OAuthPkceCredentialProvider, type OAuthPublicClientConfig } from "../../mobile/credential-provider";
@@ -75,7 +76,7 @@ function saveCart(next: ShoppingCart) {
 
 async function body(response: Response): Promise<Row> {
   const value = await response.json().catch(() => ({})) as Row;
-  if (!response.ok) throw new Error(field(value, "message", "exception") || `Server error ${response.status}`);
+  if (!response.ok) throw new Error(normalizeErpDisplayText(field(value, "message", "exception") || `Server error ${response.status}`));
   return value.message && typeof value.message === "object" ? value.message as Row : value;
 }
 
@@ -191,11 +192,11 @@ function cartView() {
 }
 
 function loginView() {
-  return `<section class="page narrow"><div class="form-card auth-card"><p class="eyebrow">Customer account</p><h1>Login or create an account</h1><p>Use your customer account to checkout, save addresses and track orders.</p>${notice ? `<p class="notice ${noticeTone}">${esc(notice)}</p>` : ""}<div class="auth-choice"><section><span>${icon("user", 20)}</span><div><h2>Already a customer?</h2><p>Sign in securely through ERPNext.</p></div><button id="login" class="primary wide">Customer login</button></section><section><span>${icon("plus", 20)}</span><div><h2>New customer?</h2><p>Create a secure website account first.</p></div>${signupUrl?'<button class="secondary wide" data-signup>Create new account</button>':'<button class="secondary wide" disabled>Registration unavailable</button>'}</section></div><button id="change-store" class="text-action wide">Change store or server</button><small>No ERPNext API key, reports, or administrative access is included.</small></div></section>`;
+  return `<section class="page narrow"><div class="form-card auth-card"><p class="eyebrow">Customer account</p><h1>Login or create an account</h1><p>Use your customer account to checkout, save addresses and track orders.</p>${notice ? `<p class="notice ${noticeTone}">${esc(notice)}</p>` : ""}<div class="auth-choice"><section><span>${icon("user", 20)}</span><div><h2>Already a customer?</h2><p>Sign in securely through ERP.</p></div><button id="login" class="primary wide">Customer login</button></section><section><span>${icon("plus", 20)}</span><div><h2>New customer?</h2><p>Create a secure website account first.</p></div>${signupUrl?'<button class="secondary wide" data-signup>Create new account</button>':'<button class="secondary wide" disabled>Registration unavailable</button>'}</section></div><button id="change-store" class="text-action wide">Change store or server</button><small>No ERP API key, reports, or administrative access is included.</small></div></section>`;
 }
 
 function registerView() {
-  return `<section class="page narrow"><div class="form-card"><h1>Finish your customer account</h1><p>Your secure login succeeded. Add your details to create a new shopping Customer.</p>${notice ? `<p class="notice">${esc(notice)}</p>` : ""}<form id="register-customer"><label>Full name<input id="customer-name" autocomplete="name" minlength="2" maxlength="140" required></label><label>Mobile number (optional)<input id="customer-mobile" type="tel" autocomplete="tel" maxlength="30"></label><button class="primary wide">Create customer account</button></form><small>Existing ERPNext customers are never linked automatically.</small></div></section>`;
+  return `<section class="page narrow"><div class="form-card"><h1>Finish your customer account</h1><p>Your secure login succeeded. Add your details to create a new shopping Customer.</p>${notice ? `<p class="notice">${esc(notice)}</p>` : ""}<form id="register-customer"><label>Full name<input id="customer-name" autocomplete="name" minlength="2" maxlength="140" required></label><label>Mobile number (optional)<input id="customer-mobile" type="tel" autocomplete="tel" maxlength="30"></label><button class="primary wide">Create customer account</button></form><small>Existing ERP customers are never linked automatically.</small></div></section>`;
 }
 
 function checkoutView() {

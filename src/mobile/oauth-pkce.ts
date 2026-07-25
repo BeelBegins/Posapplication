@@ -1,3 +1,5 @@
+import { normalizeErpDisplayText } from "../core/display-branding";
+
 export interface OAuthTokenSet {
   accessToken: string;
   refreshToken: string;
@@ -50,7 +52,7 @@ export function parseAuthorizationCallback(callbackUrl: string, redirectUri: str
   if (callback.protocol !== expected.protocol || callback.host !== expected.host || callback.pathname !== expected.pathname) throw new Error("OAuth redirect URI does not match this application.");
   if (callback.searchParams.get("state") !== expectedState) throw new Error("OAuth state validation failed.");
   const error = callback.searchParams.get("error");
-  if (error) throw new Error(callback.searchParams.get("error_description") || `OAuth authorization failed: ${error}`);
+  if (error) throw new Error(normalizeErpDisplayText(callback.searchParams.get("error_description") || `OAuth authorization failed: ${error}`));
   const code = callback.searchParams.get("code");
   if (!code) throw new Error("OAuth authorization code is missing.");
   return code;

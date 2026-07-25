@@ -23,6 +23,7 @@ import {
 } from "./mock-data";
 import { createApiClient } from "../../api/client";
 import { createRestaurantApi } from "../../api/restaurant";
+import { normalizeErpDisplayText } from "../../core/display-branding";
 import { capacitorOAuthBrowser } from "../../mobile/capacitor-oauth-browser";
 import {
   OAuthPkceCredentialProvider,
@@ -189,7 +190,9 @@ async function payload(response: Response) {
   ) as Row;
   if (!response.ok)
     throw new Error(
-      text(value, "message", "exception") || `Server error ${response.status}`,
+      normalizeErpDisplayText(
+        text(value, "message", "exception") || `Server error ${response.status}`,
+      ),
     );
   return value;
 }
@@ -304,7 +307,7 @@ async function configure(baseUrl: string) {
   );
 }
 function setup(error = "") {
-  root.innerHTML = `<section class="restaurant-setup"><div class="setup-card"><div class="brand-mark">AM</div><p class="eyebrow">Restaurant waiter</p><h1>Fast service starts here</h1><p>Connect securely to ERPNext, or explore the interface with isolated demo data.</p>${error ? `<p class="setup-error">${esc(error)}</p>` : ""}<form id="restaurant-setup"><label>ERPNext URL<input id="restaurant-url" type="url" required placeholder="https://erp.example.com" autocomplete="url"></label><button class="primary wide">Connect to ERPNext</button></form><button id="restaurant-demo" class="secondary wide">Explore demo</button><small>v${esc(__APP_VERSION__)} · OAuth PKCE · No API key or secret</small></div></section>`;
+  root.innerHTML = `<section class="restaurant-setup"><div class="setup-card"><div class="brand-mark">AM</div><p class="eyebrow">Restaurant waiter</p><h1>Fast service starts here</h1><p>Connect securely to ERP, or explore the interface with isolated demo data.</p>${error ? `<p class="setup-error">${esc(error)}</p>` : ""}<form id="restaurant-setup"><label>ERP URL<input id="restaurant-url" type="url" required placeholder="https://erp.example.com" autocomplete="url"></label><button class="primary wide">Connect to ERP</button></form><button id="restaurant-demo" class="secondary wide">Explore demo</button><small>v${esc(__APP_VERSION__)} · OAuth PKCE · No API key or secret</small></div></section>`;
   document.querySelector<HTMLFormElement>("#restaurant-setup")!.onsubmit =
     async (event) => {
       event.preventDefault();
@@ -330,7 +333,7 @@ function setup(error = "") {
     };
 }
 function signIn(error = "") {
-  root.innerHTML = `<section class="restaurant-setup"><div class="setup-card"><div class="brand-mark">AM</div><p class="eyebrow">Secure waiter access</p><h1>Sign in to your shift</h1><p>Your ERPNext roles, branch, POS Profile, menu pricing and stock remain authoritative.</p>${error ? `<p class="setup-error">${esc(error)}</p>` : ""}<button id="restaurant-login" class="primary wide">Sign in with ERPNext</button><button id="restaurant-change-server" class="secondary wide">Change server</button></div></section>`;
+  root.innerHTML = `<section class="restaurant-setup"><div class="setup-card"><div class="brand-mark">AM</div><p class="eyebrow">Secure waiter access</p><h1>Sign in to your shift</h1><p>Your ERP roles, branch, POS Profile, menu pricing and stock remain authoritative.</p>${error ? `<p class="setup-error">${esc(error)}</p>` : ""}<button id="restaurant-login" class="primary wide">Sign in with ERP</button><button id="restaurant-change-server" class="secondary wide">Change server</button></div></section>`;
   document.querySelector<HTMLButtonElement>("#restaurant-login")!.onclick =
     async () => {
       try {
@@ -347,7 +350,7 @@ function signIn(error = "") {
 async function loadWorkspace() {
   if (!api) return;
   busy = true;
-  root.innerHTML = `<section class="restaurant-setup"><div class="setup-card"><div class="brand-mark">AM</div><h1>Preparing your floor</h1><p>Loading permitted tables, current orders, ERPNext prices and stock…</p></div></section>`;
+  root.innerHTML = `<section class="restaurant-setup"><div class="setup-card"><div class="brand-mark">AM</div><h1>Preparing your floor</h1><p>Loading permitted tables, current orders, ERP prices and stock…</p></div></section>`;
   try {
     let data = await payload(await api.getBootstrap());
     if (data.requires_profile_selection) {
@@ -732,7 +735,7 @@ function billContent(o: RestaurantOrder) {
     tax = mode === "live" ? (o.taxes ?? 0) : Math.round(subtotal * 0.16),
     service = mode === "live" ? 0 : Math.round(subtotal * 0.05),
     total = mode === "live" ? (o.grandTotal ?? subtotal + tax) : subtotal + tax + service;
-  return `<section class="bill-card"><div class="bill-head"><div><p class="eyebrow">Bill summary</p><h2>${esc(o.name)}</h2></div><span class="bill-status">${esc(o.status)}</span></div>${o.lines.map((x) => `<div class="bill-line"><span>${x.quantity} × ${esc(x.itemName)}</span><b>${money(lineAmount(x))}</b></div>`).join("")}<div class="bill-totals"><p><span>Subtotal</span><b>${money(subtotal)}</b></p><p><span>${mode === "live" && !tax ? "Final taxes at POS billing" : mode === "live" ? "ERPNext taxes" : "Tax preview"}</span><b>${mode === "live" && !tax ? "Pending" : money(tax)}</b></p>${mode === "demo" ? `<p><span>Service charge preview</span><b>${money(service)}</b></p>` : ""}<p class="grand"><span>${mode === "live" && !tax ? "Current subtotal" : "Total"}</span><b>${money(total)}</b></p></div><div class="bill-actions"><button class="secondary" data-action="split-bill">Split bill</button><button class="secondary" data-action="print-preview">Print preview</button><button class="primary" data-action="request-bill">${o.status === "Bill Requested" ? "Bill requested ✓" : "Request bill"}</button></div></section>`;
+  return `<section class="bill-card"><div class="bill-head"><div><p class="eyebrow">Bill summary</p><h2>${esc(o.name)}</h2></div><span class="bill-status">${esc(o.status)}</span></div>${o.lines.map((x) => `<div class="bill-line"><span>${x.quantity} × ${esc(x.itemName)}</span><b>${money(lineAmount(x))}</b></div>`).join("")}<div class="bill-totals"><p><span>Subtotal</span><b>${money(subtotal)}</b></p><p><span>${mode === "live" && !tax ? "Final taxes at POS billing" : mode === "live" ? "ERP taxes" : "Tax preview"}</span><b>${mode === "live" && !tax ? "Pending" : money(tax)}</b></p>${mode === "demo" ? `<p><span>Service charge preview</span><b>${money(service)}</b></p>` : ""}<p class="grand"><span>${mode === "live" && !tax ? "Current subtotal" : "Total"}</span><b>${money(total)}</b></p></div><div class="bill-actions"><button class="secondary" data-action="split-bill">Split bill</button><button class="secondary" data-action="print-preview">Print preview</button><button class="primary" data-action="request-bill">${o.status === "Bill Requested" ? "Bill requested ✓" : "Request bill"}</button></div></section>`;
 }
 function orderFooter(o: RestaurantOrder) {
   const pending = pendingKitchenLines(o).reduce(
@@ -754,10 +757,10 @@ function renderActivity() {
 function renderProfile() {
   const initials = state.waiter.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase();
   const modeActions = mode === "live"
-    ? `<button data-action="restaurant-logout"><span>⇥</span><div><strong>Sign out securely</strong><small>${esc(config?.baseUrl || "ERPNext")}</small></div><b>›</b></button><button data-action="change-server"><span>⌁</span><div><strong>Change ERPNext server</strong><small>Clears the secure Restaurant session</small></div><b>›</b></button>`
+    ? `<button data-action="restaurant-logout"><span>⇥</span><div><strong>Sign out securely</strong><small>${esc(config?.baseUrl || "ERP")}</small></div><b>›</b></button><button data-action="change-server"><span>⌁</span><div><strong>Change ERP server</strong><small>Clears the secure Restaurant session</small></div><b>›</b></button>`
     : `<button data-action="toggle-network"><span>${networkOnline ? "◉" : "○"}</span><div><strong>Demo network</strong><small>${networkOnline ? "Online — tap to simulate offline" : "Offline — demo actions stay queued"}</small></div><b>›</b></button><button data-action="reset-demo"><span>↺</span><div><strong>Reset demo data</strong><small>Restore tables and sample orders</small></div><b>›</b></button>`;
   root.innerHTML = shell(
-    `<section class="profile-card"><div class="profile-avatar">${esc(initials)}</div><h2>${esc(state.waiter)}</h2><p>Waiter · ${esc(state.branch)}</p><span class="shift-badge">● ${mode === "live" ? "ERPNext connected" : "Demo shift"} · ${ago(state.shiftStarted)}</span></section><section class="settings-list"><button data-action="sync"><span>↻</span><div><strong>Synchronization</strong><small>${state.offlineQueue.length} queued · Last sync ${ago(lastSync)}</small></div><b>›</b></button>${modeActions}<button data-action="failure-states"><span>!</span><div><strong>Failure-state guide</strong><small>Offline, unavailable, conflict and timeout behavior</small></div><b>›</b></button></section><p class="prototype-note">Ai Matic Restaurant v${esc(__APP_VERSION__)} · ${mode === "live" ? "ERPNext is authoritative" : "Isolated demo — no ERPNext transactions"}</p>`,
+    `<section class="profile-card"><div class="profile-avatar">${esc(initials)}</div><h2>${esc(state.waiter)}</h2><p>Waiter · ${esc(state.branch)}</p><span class="shift-badge">● ${mode === "live" ? "ERP connected" : "Demo shift"} · ${ago(state.shiftStarted)}</span></section><section class="settings-list"><button data-action="sync"><span>↻</span><div><strong>Synchronization</strong><small>${state.offlineQueue.length} queued · Last sync ${ago(lastSync)}</small></div><b>›</b></button>${modeActions}<button data-action="failure-states"><span>!</span><div><strong>Failure-state guide</strong><small>Offline, unavailable, conflict and timeout behavior</small></div><b>›</b></button></section><p class="prototype-note">Ai Matic Restaurant v${esc(__APP_VERSION__)} · ${mode === "live" ? "ERP is authoritative" : "Isolated demo — no ERP transactions"}</p>`,
     { title: "Profile" },
   );
 }
@@ -1132,7 +1135,7 @@ root.addEventListener("click", (event) => {
   if (action === "save-local") {
     if (mode === "live") {
       modal = "";
-      flash("Order is already saved in ERPNext; it has not been sent to kitchen.");
+      flash("Order is already saved in ERP; it has not been sent to kitchen.");
       return;
     }
     state.offlineQueue.push(`Draft items · ${activeTable()?.title}`);

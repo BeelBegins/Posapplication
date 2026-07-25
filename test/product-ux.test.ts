@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
+import { normalizeErpDisplayText } from "../src/core/display-branding";
 import { bottomNavigation, emptyState } from "../src/products/shared/ui";
 
 const root = process.cwd();
@@ -57,6 +58,46 @@ test("Electron window controls and POS dialogs preserve desktop focus", () => {
   assert.match(main, /openedNativeDialog.*restoreMainWindowFocus/s);
   assert.match(styles, /html\[data-platform="electron"\] \.window-controls/);
   assert.match(mobile, /getWindowState:async\(\)=>\(\{fullscreen:false/);
+});
+
+test("customer display follows the saved POS color theme", () => {
+  const main = source("src/main.ts");
+  const preload = source("src/preload.ts");
+  const display = source("src/renderer/customer-display.ts");
+  const html = source("src/renderer/customer-display.html");
+  assert.match(html, /href="styles\.css"/);
+  assert.match(main, /did-finish-load[^]*sendCustomerDisplayTheme\(loadSettings\(\)\.colorTheme\)/);
+  assert.match(main, /settings:save[^]*sendCustomerDisplayTheme\(loadSettings\(\)\.colorTheme\)/);
+  assert.match(preload, /customer-display:theme/);
+  assert.match(display, /document\.documentElement\.dataset\.theme = theme \|\| "warm-market"/);
+});
+
+test("custom application surfaces use ERP branding", () => {
+  const formerBrand = ["ERP", "Next"].join("");
+  for (const path of [
+    "package.json",
+    "src/main.ts",
+    "src/core/catalog-sync.ts",
+    "src/core/http.ts",
+    "src/core/pos-config.ts",
+    "src/core/pos-session.ts",
+    "src/core/sale-refund.ts",
+    "src/mobile/capacitor-oauth-browser.ts",
+    "src/mobile/mobile.ts",
+    "src/products/restaurant/app.ts",
+    "src/products/sales/app.ts",
+    "src/products/shopping/app.ts",
+    "src/renderer/index.html",
+    "src/renderer/renderer.ts",
+  ]) {
+    assert.doesNotMatch(source(path), new RegExp(formerBrand), `${path} exposes the former ERP brand`);
+  }
+});
+
+test("server-supplied upstream branding is normalized before display", () => {
+  const formerBrand = ["ERP", "Next"].join("");
+  assert.equal(normalizeErpDisplayText(`Sign in through ${formerBrand}.`), "Sign in through ERP.");
+  assert.equal(normalizeErpDisplayText(`Invalid ${formerBrand.toLowerCase()} URL.`), "Invalid ERP URL.");
 });
 
 test("Android POS touch layout and scanner remain isolated from Electron", () => {
@@ -121,7 +162,7 @@ test("Sales navigation, offline statuses, and safe retry are visible", () => {
   assert.match(api, /assortment_only/);
   assert.match(app, /startReorder/);
   assert.match(app, /newSalesDraft/);
-  assert.match(app, /Refreshing .* with current ERPNext data/);
+  assert.match(app, /Refreshing .* with current ERP data/);
   assert.match(app, /data-reorder-order/);
   assert.match(app, /reorderCacheKey/);
   assert.match(app, /customerSearchHistoryKey/);
@@ -132,7 +173,7 @@ test("Sales navigation, offline statuses, and safe retry are visible", () => {
   assert.match(app, /voiceSearchAvailable/);
   assert.match(app, /data-confirmation-share/);
   assert.match(app, /data-confirmation-copy/);
-  assert.match(app, /Draft · awaiting ERPNext submission/);
+  assert.match(app, /Draft · awaiting ERP submission/);
   assert.match(app, /customer_history/);
   assert.match(app, /data-apply-history/);
   assert.match(app, /Last submitted quantity applied/);
@@ -152,7 +193,7 @@ test("Sales navigation, offline statuses, and safe retry are visible", () => {
   assert.match(app, /data-reject-discount/);
   assert.match(app, /Discount approval pending/);
   assert.match(app, /promotionPanel/);
-  assert.match(app, /ERPNext applies the qualifying pricing rule/);
+  assert.match(app, /ERP applies the qualifying pricing rule/);
   assert.match(app, /label:"Visits"/);
   assert.match(app, /captureVisitLocation/);
   assert.match(app, /syncVisitQueue/);
@@ -184,10 +225,10 @@ test("Sales navigation, offline statuses, and safe retry are visible", () => {
   assert.match(app, /data-brand/);
   assert.match(app, /item_group.*brand/);
   assert.doesNotMatch(app, /data-card-qty/);
-  assert.match(app, /ERPNext default/);
+  assert.match(app, /ERP default/);
   assert.match(app, /id="customer-warehouse"/);
   assert.match(app, /Select a warehouse before choosing a customer/);
-  assert.match(app, /Change ERPNext server/);
+  assert.match(app, /Change ERP server/);
   assert.match(styles, /grid-template-columns:\s*repeat\(4,\s*1fr\)/);
   assert.match(styles, /safe-area-inset-bottom/);
   assert.doesNotMatch(app, /Restaurant navigation|Shopping navigation|POS navigation/);

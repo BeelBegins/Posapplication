@@ -81,11 +81,11 @@ export interface IDatabaseService {
   upsertCatalog(data: {
     items: Record<string, unknown>[]; prices: Record<string, unknown>[]; stock: Record<string, unknown>[];
     barcodes: Record<string, unknown>[]; conversions: Record<string, unknown>[]; totals: CatalogTotals;
-    replaceBarcodes: boolean; replaceConversions: boolean;
+    replaceBarcodes: boolean; replaceConversions: boolean; priceList: string;
   }): void;
   getCatalogTotals(): CatalogTotals;
-  searchCatalog(query: string, warehouse: string): CatalogSearchResult[];
-  lookupCatalog(query: string, warehouse: string): { exact: CatalogSearchResult | null; results: CatalogSearchResult[] };
+  searchCatalog(query: string, warehouse: string, priceList: string): CatalogSearchResult[];
+  lookupCatalog(query: string, warehouse: string, priceList: string): { exact: CatalogSearchResult | null; results: CatalogSearchResult[] };
 
   // ----- POS session / bootstrap / profile cache -----
   cachePosSession(openingEntry: string, posProfile: string, user: string, session: Record<string, unknown>, syncedAt: string): void;

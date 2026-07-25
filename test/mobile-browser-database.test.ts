@@ -22,13 +22,30 @@ test("Android catalogue lookup is indexed and cart saves exclude the large catal
     conversions: [{ item_code: "ITEM-1", uom: "Nos", conversion_factor: 1 }],
     totals: { items: 1, prices: 1, barcodes: 1, stockRows: 1, lastSynced: "2026-07-15T00:00:00Z" },
     replaceBarcodes: true,
-    replaceConversions: true
+    replaceConversions: true,
+    priceList: "Standard Selling"
   });
 
-  const lookup = mobileDatabase.lookupCatalog("123456789", "STORE - TC");
+  const lookup = mobileDatabase.lookupCatalog("123456789", "STORE - TC", "Standard Selling");
   assert.equal(lookup.exact?.itemCode, "ITEM-1");
   assert.equal(lookup.exact?.sellingPrice, 125);
   mobileDatabase.saveCartState("hardware", "opening", [{ itemCode: "ITEM-1", quantity: 1 }]);
+
+  // A stale price cached under a *different* (or since-disabled) price list must never win a
+  // lookup scoped to the terminal's current one - this is the exact bug being guarded against.
+  mobileDatabase.upsertCatalog({
+    items: [],
+    prices: [{ name: "PRICE-2", item_code: "ITEM-1", uom: "Nos", price_list_rate: 999, currency: "PKR" }],
+    stock: [], barcodes: [], conversions: [],
+    totals: { items: 1, prices: 2, barcodes: 1, stockRows: 1, lastSynced: "2026-07-16T00:00:00Z" },
+    replaceBarcodes: false,
+    replaceConversions: false,
+    priceList: "Foodpanda Price List"
+  });
+  const afterSwitch = mobileDatabase.lookupCatalog("123456789", "STORE - TC", "Foodpanda Price List");
+  assert.equal(afterSwitch.exact?.sellingPrice, 999, "current price list's rate should win");
+  const oldListNowStale = mobileDatabase.lookupCatalog("123456789", "STORE - TC", "Standard Selling");
+  assert.equal(oldListNowStale.exact?.sellingPrice, null, "old price list's cached rate must not still be reachable");
 
   const operational = JSON.parse(values.get("aimatic-pos-mobile") ?? "{}") as Record<string, unknown>;
   const catalogue = JSON.parse(values.get("aimatic-pos-mobile-catalog") ?? "{}") as Record<string, unknown>;

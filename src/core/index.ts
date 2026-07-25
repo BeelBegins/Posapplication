@@ -10,7 +10,7 @@ export * from "./types";
 export * from "./http";
 
 /**
- * Assembles the platform-agnostic POS business logic (ERPNext HTTP calls,
+ * Assembles the platform-agnostic POS business logic (ERP HTTP calls,
  * sale/session/refund orchestration) into one object, bound to the given deps.
  * Populated one group at a time per the extraction plan
  * (see /home/nabeel/.claude/plans/parallel-nibbling-moler.md), so main.ts's IPC

@@ -72,7 +72,7 @@ const posAPI = {
   loadPosProfiles:()=>core.loadAvailablePosProfiles(),loadPosProfile:()=>core.loadPosProfile(),getPosProfileCacheStatus:async()=>db.getPosProfileCacheStatus(),
   syncPosConfiguration:()=>core.syncPosConfiguration(),getCachedPosConfiguration:async()=>core.getCachedPosConfiguration(),syncPosSession:(input?:Record<string,unknown>)=>core.syncPosSession(input),getCachedPosSession:async()=>core.getCachedSessionSummary(),
   syncItemCatalog:(mode?:"auto"|"full")=>core.syncItemCatalog(m=>catalogListeners.forEach(cb=>cb(m)),mode),getCatalogTotals:async()=>db.getCatalogTotals(),syncFbrConfig:(mode?:"auto"|"full")=>core.syncFbrConfig(mode),getFbrSyncState:async()=>db.getFbrSyncState(),
-  searchCatalog:async(q:string)=>db.searchCatalog(q,textValue(asRecord(db.getPosBootstrap(settings().posProfile)?.pos_profile),"warehouse")),onCatalogProgress:(cb:(m:string)=>void)=>catalogListeners.push(cb),lookupCatalog:async(q:string)=>db.lookupCatalog(q,textValue(asRecord(db.getPosBootstrap(settings().posProfile)?.pos_profile),"warehouse")),
+  searchCatalog:async(q:string)=>db.searchCatalog(q,textValue(asRecord(db.getPosBootstrap(settings().posProfile)?.pos_profile),"warehouse"),textValue(asRecord(db.getPosBootstrap(settings().posProfile)?.pos_profile),"selling_price_list")),onCatalogProgress:(cb:(m:string)=>void)=>catalogListeners.push(cb),lookupCatalog:async(q:string)=>db.lookupCatalog(q,textValue(asRecord(db.getPosBootstrap(settings().posProfile)?.pos_profile),"warehouse"),textValue(asRecord(db.getPosBootstrap(settings().posProfile)?.pos_profile),"selling_price_list")),
   loadCart:async()=>{const x=core.getCartIdentity();return db.loadCartState(x.hardwareId,x.openingEntry);},saveCart:async(lines:unknown[])=>{const x=core.getCartIdentity();db.saveCartState(x.hardwareId,x.openingEntry,lines);},
   syncCustomers:(mode?:"auto"|"full")=>core.syncCustomers(mode),getCustomerSyncState:async()=>db.getCustomerSyncState(),searchCustomers:async(q:string)=>db.searchCustomers(q),loadCustomer:(name:string)=>core.loadCustomer(name),getCustomerCreationOptions:()=>core.getCustomerCreationOptions(),createCustomer:(x:Record<string,unknown>)=>core.createCustomer(x),
   previewCart:(x:Record<string,unknown>)=>core.previewCart(x),previewFbr:async(x:Record<string,unknown>)=>core.calculateFbrCart(x),getPaymentMethods:async()=>core.getPaymentMethods(),getPaymentMethodTypes:async()=>core.getPaymentMethodTypes(),
@@ -106,7 +106,7 @@ function removeTerminalCredentialUi(): void {
   const terminalLabel = document.querySelector<HTMLInputElement>("#terminal-id")?.closest("label");
   if (terminalLabel) terminalLabel.hidden = true;
   const quickDescription = document.querySelector<HTMLElement>("#quick-connect-form .card-meta");
-  if (quickDescription) quickDescription.textContent = "Android devices connect through one-time enrollment and per-cashier ERPNext sign-in.";
+  if (quickDescription) quickDescription.textContent = "Android devices connect through one-time enrollment and per-cashier ERP sign-in.";
   const quickButton = document.querySelector<HTMLButtonElement>("#cashier-login-quick-connect");
   if (quickButton) quickButton.hidden = true;
   const username = document.querySelector<HTMLInputElement>("#cashier-username")?.closest("label");
@@ -114,7 +114,7 @@ function removeTerminalCredentialUi(): void {
   if (username) username.classList.add("android-online-credential");
   if (password) password.classList.add("android-online-credential");
   const submit = document.querySelector<HTMLButtonElement>("#cashier-login-submit");
-  if (submit) submit.textContent = "Sign in with ERPNext";
+  if (submit) submit.textContent = "Sign in with ERP";
 }
 
 function bindAndroidPosUx(): void {
@@ -155,7 +155,7 @@ function enrollmentScreen(error = ""): void {
     screen.className = "device-enrollment-screen";
     document.body.append(screen);
   }
-  screen.innerHTML = `<div class="device-enrollment-card"><p class="eyebrow">Secure Android setup</p><h1>Enroll this POS device</h1><p>A supervisor generates a one-time Device Enrollment QR in ERPNext. Scan it directly with this device's camera. Manual paste remains available if the camera cannot be used.</p>${error?`<p class="settings-message">${error.replace(/[&<>"']/g,(c)=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]!))}</p>`:""}<form id="device-enrollment-form"><button id="scan-enrollment-qr" class="primary-action" type="button">Scan enrollment QR</button><label>Manual enrollment QR value<textarea id="device-enrollment-value" rows="5" autocomplete="off" required></textarea></label><button id="redeem-enrollment-value" class="secondary-button" type="submit">Enroll using pasted value</button></form><small>No API key or API secret is stored in this APK.</small></div>`;
+  screen.innerHTML = `<div class="device-enrollment-card"><p class="eyebrow">Secure Android setup</p><h1>Enroll this POS device</h1><p>A supervisor generates a one-time Device Enrollment QR in ERP. Scan it directly with this device's camera. Manual paste remains available if the camera cannot be used.</p>${error?`<p class="settings-message">${error.replace(/[&<>"']/g,(c)=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]!))}</p>`:""}<form id="device-enrollment-form"><button id="scan-enrollment-qr" class="primary-action" type="button">Scan enrollment QR</button><label>Manual enrollment QR value<textarea id="device-enrollment-value" rows="5" autocomplete="off" required></textarea></label><button id="redeem-enrollment-value" class="secondary-button" type="submit">Enroll using pasted value</button></form><small>No API key or API secret is stored in this APK.</small></div>`;
   const redeem = async (value: string, button: HTMLButtonElement): Promise<void> => {
     button.disabled = true;
     button.textContent = "Enrolling…";

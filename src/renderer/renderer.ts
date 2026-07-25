@@ -598,7 +598,7 @@ function activeEntriesReason(entries: Record<string, unknown>[], selectedProfile
     const profile = String(entry.pos_profile ?? "unknown profile");
     return `${name} | ${user} | ${profile}`;
   }).join("; ");
-  return `Active shift exists but is not available for cashier ${cashierUser} on profile ${selectedProfile}. ${summary}. Login as that cashier or close that shift in ERPNext.`;
+  return `Active shift exists but is not available for cashier ${cashierUser} on profile ${selectedProfile}. ${summary}. Login as that cashier or close that shift in ERP.`;
 }
 // Reads the (already-set-elsewhere) textContent of the three header status
 // fields and reflects it as a data-state attribute for CSS badge coloring —
@@ -641,7 +641,7 @@ async function offlineLocalBlocker(requirePayment = false): Promise<string | nul
   if (!selectedCustomer) return "Missing Customer.";
   if (!cartLines.length) return "Cart is empty.";
   if (cartLines.some((line) => line.sellingPrice === null || line.sellingPrice === undefined)) return "Missing local item price.";
-  if (appliedBenefits.giftVoucherCode) return "Gift voucher redemption requires ERPNext online validation. Remove voucher to sell offline.";
+  if (appliedBenefits.giftVoucherCode) return "Gift voucher redemption requires ERP online validation. Remove voucher to sell offline.";
   if (requirePayment && remainingAmount() > 0.0001) return "Payment is incomplete.";
   if (requirePayment && paymentPreparedVersion !== currentCartVersion) return "Payment not prepared for current cart.";
   if (requirePayment && paymentsOutdated) return "Payment draft is outdated.";
@@ -930,7 +930,7 @@ async function showCloseShift(): Promise<void> {
   const heldCount = await window.posAPI.listHeldSales().then((rows) => rows.length).catch(() => 0);
   if (message) message.textContent = queue.queued > 0
     ? `Warning: ${queue.queued} offline sale(s) could not be synced and are NOT included in expected totals. Sync the queue before closing if possible.`
-    : `Review counted amounts carefully. Submit Close Shift will create the ERPNext POS Closing Entry, close this shift, print the summary, delete ${heldCount} held sale(s), and require a new shift before selling again.`;
+    : `Review counted amounts carefully. Submit Close Shift will create the ERP POS Closing Entry, close this shift, print the summary, delete ${heldCount} held sale(s), and require a new shift before selling again.`;
   const box = document.querySelector<HTMLElement>("#close-recon-rows");
   const normalizedSummary = closeShiftSummary;
   if (box && normalizedSummary) box.replaceChildren(...normalizedSummary.payments.map((p) => {
@@ -967,7 +967,7 @@ async function submitCloseShift(): Promise<void> {
   const rows = reconRows();
   const totalDiff = rows.reduce((sum, r) => sum + (r.actual - r.expected), 0);
   const heldCount = await window.posAPI.listHeldSales().then((rows) => rows.length).catch(() => 0);
-  if (!(await appConfirm(`Close Shift will submit an ERPNext POS Closing Entry, mark this shift closed, print the shift summary, delete ${heldCount} held sale(s), and block new sales until a new shift is opened. Continue?`))) return;
+  if (!(await appConfirm(`Close Shift will submit an ERP POS Closing Entry, mark this shift closed, print the shift summary, delete ${heldCount} held sale(s), and block new sales until a new shift is opened. Continue?`))) return;
   if (Math.abs(totalDiff) >= 0.005 && !(await appConfirm(`There is a difference of ${fmtMoney(totalDiff)} between counted and expected amounts. Submit the closing entry anyway?`))) return;
   closeShiftInFlight = true;
   if (button) button.disabled = true;
@@ -1298,7 +1298,7 @@ async function addPayment():Promise<void>{
   const remaining=Math.max(0,money2(payableAmount()-allocatedOthers));
   // Non-cash can never exceed the bill (no advance/extra payment on card etc.). Cash may be
   // tendered above the bill — the full tendered amount is sent to the server as-is (matching
-  // ERPNext's own paid_amount semantics: gross tendered, change tracked separately), which
+  // ERP's own paid_amount semantics: gross tendered, change tracked separately), which
   // computes and returns the authoritative change_amount rather than this local estimate.
   if(!isCash && entered>remaining+0.0001){if(msg)msg.textContent="Amount exceeds the bill. No advance or extra payment allowed.";input?.focus();return;}
   const applied=entered;
@@ -1388,7 +1388,7 @@ async function submitCurrentSale():Promise<void>{
   if(!cashierSession){cartMessage("Cashier login required.");await showCashierLogin("Cashier login required.");return;}
   if(cashierSession.offlineLogin&&!cashierSession.canOfflineSale){cartMessage("Cashier is not allowed to sell offline.");return;}
   let online=isOnline();
-  if(online&&cashierSession.offlineLogin){cartMessage("Online cashier login required for live sales.");await showCashierLogin("Internet is online. Login with ERPNext cashier password to continue live sales.");return;}
+  if(online&&cashierSession.offlineLogin){cartMessage("Online cashier login required for live sales.");await showCashierLogin("Internet is online. Login with ERP cashier password to continue live sales.");return;}
   // F9 gate: online requires a live POS session; offline uses local cache/payment checks only.
   if(online&&!(await validateSession("submit"))){
     const reachability=await window.posAPI.testServer().catch(()=>({connected:false}));
@@ -1437,7 +1437,7 @@ async function submitCurrentSale():Promise<void>{
   }
   // Success: store authoritative (or provisional) response first, keep the cart, then open the receipt preview.
   lastSaleResponse=result.response;
-  // For an online sale, render exactly what ERPNext persisted rather than the
+  // For an online sale, render exactly what ERP persisted rather than the
   // renderer's provisional payment/change calculation. This prevents receipt
   // preview drift if server-side rounding or payment rules adjust either value.
   if(!queued&&result.response){
@@ -1512,7 +1512,7 @@ async function openReceiptPreview(response:Record<string,unknown>,provisional=fa
   setCartText("#receipt-fbr-status",provisional?"Awaiting internet availability":fbr.statusText);
   setCartText("#receipt-fbr-number",provisional?"Pending":(fbr.invoiceNumber||"—"));
   document.querySelector<HTMLElement>("#receipt-fbr-offline-response")?.remove();
-  if(provisional&&fbrBox){const p=document.createElement("p");p.id="receipt-fbr-offline-response";const a=document.createElement("span");a.textContent="FBR Response";const b=document.createElement("strong");b.textContent="Will submit automatically when ERPNext is online";p.append(a,b);fbrBox.append(p);}
+  if(provisional&&fbrBox){const p=document.createElement("p");p.id="receipt-fbr-offline-response";const a=document.createElement("span");a.textContent="FBR Response";const b=document.createElement("strong");b.textContent="Will submit automatically when ERP is online";p.append(a,b);fbrBox.append(p);}
   const badge=document.querySelector<HTMLElement>("#receipt-fbr-badge");
   if(badge){badge.hidden=notApplicable;badge.textContent=provisional?"Offline Queued":(fbr.accepted?"FBR Accepted":fbr.statusText);badge.className=`fbr-badge ${!provisional&&fbr.accepted?"ok":"warn"}`;}
   const qrBox=document.querySelector<HTMLElement>("#receipt-qr");
@@ -1574,7 +1574,7 @@ function buildLocalReceiptHtml(posInvoice:string):string{
     return `<!doctype html><html><head><meta charset="utf-8">${receiptPrintCss()}</head><body><div class="thermal-receipt"><div class="receipt-company">${esc(company)}</div>${profile?`<div class="receipt-footer" style="border-top:0;margin-top:0;padding-top:0">${esc(profile)}</div>`:""}<div class="receipt-title">POS Receipt - Offline Queued</div>${structured.outerHTML}</div></body></html>`;
   }
   const esc=(value:string)=>value.replace(/[&<>]/g,(c)=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]??c));
-  return `<!doctype html><html><head><meta charset="utf-8">${receiptPrintCss()}</head><body><div class="thermal-receipt"><div class="receipt-title">POS Receipt - Offline Queued</div><div class="receipt-meta"><div><span>Terminal Inv</span><strong>${esc(posInvoice||terminalInvoiceId)}</strong></div><div><span>FBR Status</span><strong>Awaiting internet availability</strong></div><div><span>FBR Invoice No</span><strong>Pending</strong></div><div><span>FBR Response</span><strong>Will submit automatically when ERPNext is online</strong></div></div></div></body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8">${receiptPrintCss()}</head><body><div class="thermal-receipt"><div class="receipt-title">POS Receipt - Offline Queued</div><div class="receipt-meta"><div><span>Terminal Inv</span><strong>${esc(posInvoice||terminalInvoiceId)}</strong></div><div><span>FBR Status</span><strong>Awaiting internet availability</strong></div><div><span>FBR Invoice No</span><strong>Pending</strong></div><div><span>FBR Response</span><strong>Will submit automatically when ERP is online</strong></div></div></div></body></html>`;
 }
 
 function sanitizeReceiptHtml(html:string):string{
@@ -2298,7 +2298,7 @@ function closeBenefitsDialog():void{document.querySelector<HTMLDialogElement>('#
 // Cash is the most common tender at retail, so pin it first regardless of its
 // position in the POS Profile's payments child table - rest stays server-order.
 // Cash detection uses Mode of Payment.type (server-authoritative), not the display name,
-// since ERPNext auto-suffixes names like "Cash - S1GT" when a plain "Cash" doc collides.
+// since ERP auto-suffixes names like "Cash - S1GT" when a plain "Cash" doc collides.
 function sortPaymentMethodsCashFirst(methods: string[], types: Record<string, string>): string[] {
   const cashIndex = methods.findIndex((m) => (types[m] ?? "").toLowerCase() === "cash");
   if (cashIndex <= 0) return methods;
@@ -2313,7 +2313,7 @@ async function openPayment():Promise<void>{
   // F6 gate: validate the POS session, then require the current cart version to be server-validated.
   if(!cashierSession){cartMessage("Cashier login required.");await showCashierLogin("Cashier login required.");return;}
   let online=isOnline();
-  if(online&&cashierSession.offlineLogin){cartMessage("Online cashier login required for live sales.");await showCashierLogin("Internet is online. Login with ERPNext cashier password to continue live sales.");return;}
+  if(online&&cashierSession.offlineLogin){cartMessage("Online cashier login required for live sales.");await showCashierLogin("Internet is online. Login with ERP cashier password to continue live sales.");return;}
   if(online&&shiftClosed){cartMessage("Shift is closed — start a new shift");return;}
   if(!cartLines.length){cartMessage("Cart is empty");return;}
   if(online){
@@ -2803,7 +2803,7 @@ async function runStartup(reason: string = "startup"): Promise<void> {
     const missingAuthentication = isCapacitorRuntime() ? false : (!saved.apiKey || !saved.hasApiSecret);
     if (!saved.erpnextUrl || missingAuthentication || !saved.posProfile) {
       setStep("settings", "failed"); setOverallBadge("Setup Required", "warn");
-      if (progress) progress.textContent = "Terminal settings required"; showSettingsMessage(isCapacitorRuntime() ? "Enroll this Android device for a POS Profile." : "Enter ERPNext URL, API Key/Secret and select a POS Profile, then Save and Complete Setup."); showScreen("settings"); return;
+      if (progress) progress.textContent = "Terminal settings required"; showSettingsMessage(isCapacitorRuntime() ? "Enroll this Android device for a POS Profile." : "Enter ERP URL, API Key/Secret and select a POS Profile, then Save and Complete Setup."); showScreen("settings"); return;
     }
     setStep("settings", "complete");
     // 2) Server (silent)
@@ -2829,7 +2829,7 @@ async function runStartup(reason: string = "startup"): Promise<void> {
     setStep("auth", "running"); if (progress) progress.textContent = "Authenticating…";
     const login = await window.posAPI.testLogin();
     if (!login.success) {
-      if (isCapacitorRuntime()) { setStep("auth", "pending"); setOverallBadge("Cashier Login Required", "info"); if (progress) progress.textContent = "Cashier login required"; await showCashierLogin("Sign in securely with ERPNext."); return; }
+      if (isCapacitorRuntime()) { setStep("auth", "pending"); setOverallBadge("Cashier Login Required", "info"); if (progress) progress.textContent = "Cashier login required"; await showCashierLogin("Sign in securely with ERP."); return; }
       setStep("auth", "failed"); setOverallBadge("Action Required", "err"); if (progress) progress.textContent = "Authentication failed"; showSettingsMessage("Authentication failed. The API key or secret is invalid."); showLoginResult("Authentication failed — check API Key/Secret."); showScreen("settings"); return;
     }
     authenticatedUser = login.loggedUser ?? ""; setStep("auth", "complete"); setLoggedUser(authenticatedUser); showLoginResult(`Logged in as ${authenticatedUser}`);
@@ -2848,7 +2848,7 @@ async function runStartup(reason: string = "startup"): Promise<void> {
     setStep("config", cfg ? "complete" : "warning");
     if (!cashierSession) {
       setOverallBadge("Cashier Login Required", "info"); if (progress) progress.textContent = "Cashier login required";
-      await showCashierLogin("Enter ERPNext cashier credentials.");
+      await showCashierLogin("Enter ERP cashier credentials.");
       return;
     }
     // 6) Session
@@ -2968,7 +2968,7 @@ function setCashierPinMode(mode: CashierPinMode, message = ""): void {
       ? "Use the offline PIN saved after a previous online cashier login."
       : mode === "login"
         ? "Offline PIN is only needed for offline login or when creating/changing the local PIN."
-        : "ERPNext password verifies the cashier online. The Offline Cashier PIN is stored locally as a salted hash.";
+        : "ERP password verifies the cashier online. The Offline Cashier PIN is stored locally as a salted hash.";
   }
   if (msg && message) msg.textContent = message;
   activePinFieldId = "cashier-offline-pin";
@@ -3082,7 +3082,7 @@ async function showCashierLogin(message = ""): Promise<void> {
   if (usernameRow) usernameRow.hidden = useOAuth;
   if (passwordRow) passwordRow.hidden = useOAuth;
   const loginButton = document.querySelector<HTMLButtonElement>("#cashier-login-submit");
-  if (loginButton) loginButton.textContent = useOAuth ? "Sign in with ERPNext" : "Login";
+  if (loginButton) loginButton.textContent = useOAuth ? "Sign in with ERP" : "Login";
   const options = document.querySelector<HTMLDataListElement>("#cashier-email-options");
   if (options) options.replaceChildren(...remembered.map((email) => {
     const option = document.createElement("option");
@@ -3095,7 +3095,7 @@ async function showCashierLogin(message = ""): Promise<void> {
   setText("#cashier-login-profile", settings?.posProfile ?? "");
   setText("#cashier-login-connection", online ? "Online" : "Offline");
   const msg = document.querySelector<HTMLElement>("#cashier-login-message");
-  if (msg) msg.textContent = message || (online ? "Enter ERPNext cashier credentials." : "Enter cashier username and offline PIN.");
+  if (msg) msg.textContent = message || (online ? "Enter ERP cashier credentials." : "Enter cashier username and offline PIN.");
   showLockoutCountdown("");
   setCashierPinMode(online ? "login" : "login");
   showScreen("cashier-login");
@@ -3158,7 +3158,7 @@ async function submitCashierLogin(): Promise<void> {
   if (sendPin && offlinePin !== offlinePinConfirm) { if (msg) msg.textContent = "Offline Cashier PIN confirmation does not match."; return; }
   if (!online && !offlinePin) { if (msg) msg.textContent = "Enter cashier username and offline PIN."; return; }
   if (button) button.disabled = true;
-  if (msg) msg.textContent = useOAuth ? "Opening secure ERPNext sign in…" : online ? "Verifying cashier..." : "Checking offline cashier PIN...";
+  if (msg) msg.textContent = useOAuth ? "Opening secure ERP sign in…" : online ? "Verifying cashier..." : "Checking offline cashier PIN...";
   try {
     const result = online
       ? await window.posAPI.cashierLogin({ username, password, offlinePin: sendPin ? offlinePin : "", offlinePinConfirm: sendPin ? offlinePinConfirm : "" })
@@ -3185,7 +3185,7 @@ async function submitCashierLogin(): Promise<void> {
     cashierSession = { ...result, loginTime: new Date().toISOString() };
     cashierPinMode = "login";
     if (msg) msg.textContent = result.offlineLogin
-      ? "Offline cashier login active — sales will be queued until ERPNext is online."
+      ? "Offline cashier login active — sales will be queued until ERP is online."
       : `Logged in as ${cashierDisplay()}${result.offlineCached ? " and saved offline PIN." : ""}.`;
     updatePosHeader();
     await continueAfterCashierLogin();
@@ -3289,7 +3289,7 @@ function adminMessage(id: string, text: string): void {
 }
 
 // Resetting a specific cashier's forgotten Offline PIN: a supervisor verifies
-// their own ERPNext credentials (never the cashier's) to authorize it. This
+// their own ERP credentials (never the cashier's) to authorize it. This
 // is the one remaining PIN concept that needs supervisor sign-off - Settings
 // access (requestSettingsAuthorization, below) and shift start/close
 // (cashierSession.canStartShift/canCloseShift) no longer go through any PIN
@@ -3302,11 +3302,11 @@ async function requestSupervisorPinSetup(action: "reset_pin", cashierUser: strin
   if (!dialog || !form) return false;
   const label = "Offline Cashier PIN";
   if (!navigator.onLine) {
-    await appAlert(`${label} reset requires an online connection and authorized ERPNext supervisor credentials.`);
+    await appAlert(`${label} reset requires an online connection and authorized ERP supervisor credentials.`);
     return false;
   }
   if (title) title.textContent = `Reset ${label} for ${cashierUser}`;
-  if (note) note.textContent = `A supervisor verifies their own ERPNext credentials to reset ${cashierUser}'s Offline Cashier PIN - ${cashierUser}'s own password is not needed.`;
+  if (note) note.textContent = `A supervisor verifies their own ERP credentials to reset ${cashierUser}'s Offline Cashier PIN - ${cashierUser}'s own password is not needed.`;
   ["#admin-supervisor-user","#admin-supervisor-password","#admin-new-pin","#admin-confirm-pin"].forEach((id)=>{const input=document.querySelector<HTMLInputElement>(id);if(input)input.value="";});
   adminMessage("#admin-supervisor-message", "");
   return new Promise((resolve) => {
@@ -3348,7 +3348,7 @@ async function requestSettingsAuthorization(): Promise<boolean> {
   const dialog = document.querySelector<HTMLDialogElement>("#settings-auth-dialog");
   const form = document.querySelector<HTMLFormElement>("#settings-auth-form");
   if (!dialog || !form) return false;
-  if (!navigator.onLine) { await appAlert("Settings requires an online connection to verify your ERPNext account."); return false; }
+  if (!navigator.onLine) { await appAlert("Settings requires an online connection to verify your ERP account."); return false; }
   ["#settings-auth-user","#settings-auth-password"].forEach((id)=>{const input=document.querySelector<HTMLInputElement>(id);if(input)input.value="";});
   adminMessage("#settings-auth-message", "");
   return new Promise((resolve) => {
@@ -3387,8 +3387,8 @@ async function openSettingsIfAuthorized(): Promise<void> {
 // still prompts fresh credentials every time rather than trusting anything
 // cached client-side, for the same reason requestSettingsAuthorization does.
 const SUPERVISOR_ACTION_COPY: Record<"close_shift" | "void_item", { title: string; note: string }> = {
-  close_shift: { title: "Supervisor Authorization — Close Shift", note: "This cashier is not permitted to close the shift. A POS Supervisor must enter their ERPNext credentials to authorize it." },
-  void_item: { title: "Supervisor Authorization — Void Item", note: "This cashier is not permitted to void items. A POS Supervisor must enter their ERPNext credentials to authorize removing this item." },
+  close_shift: { title: "Supervisor Authorization — Close Shift", note: "This cashier is not permitted to close the shift. A POS Supervisor must enter their ERP credentials to authorize it." },
+  void_item: { title: "Supervisor Authorization — Void Item", note: "This cashier is not permitted to void items. A POS Supervisor must enter their ERP credentials to authorize removing this item." },
 };
 async function requestSupervisorActionAuthorization(action: "close_shift" | "void_item"): Promise<{ ok: boolean; token: string }> {
   const dialog = document.querySelector<HTMLDialogElement>("#supervisor-action-dialog");
@@ -3438,13 +3438,13 @@ function initializeRenderer(): void {
   document.querySelector<HTMLButtonElement>("#retry-startup")?.addEventListener("click", () => void runPosBootstrap("retry"));
   document.querySelector<HTMLFormElement>("#cashier-login-form")?.addEventListener("submit", (event) => { event.preventDefault(); void submitCashierLogin(); });
   initPinKeypad();
-  document.querySelector<HTMLButtonElement>("#cashier-pin-change")?.addEventListener("click", () => setCashierPinMode("change", "Enter ERPNext password, then enter and confirm the new Offline Cashier PIN."));
+  document.querySelector<HTMLButtonElement>("#cashier-pin-change")?.addEventListener("click", () => setCashierPinMode("change", "Enter ERP password, then enter and confirm the new Offline Cashier PIN."));
   document.querySelector<HTMLButtonElement>("#cashier-pin-reset")?.addEventListener("click", () => {
     const cashierUser = document.querySelector<HTMLInputElement>("#cashier-username")?.value.trim() ?? "";
     const msg = document.querySelector<HTMLElement>("#cashier-login-message");
     if (!cashierUser) { if (msg) msg.textContent = "Enter the cashier's username above first, then Reset Offline PIN."; return; }
     // Supervisor-authorized: unlike "Change", this cashier doesn't need to know/enter
-    // their own ERPNext password - a supervisor authorizes the reset instead.
+    // their own ERP password - a supervisor authorizes the reset instead.
     void requestSupervisorPinSetup("reset_pin", cashierUser).then((ok) => {
       if (ok) setCashierPinMode("login", `Offline PIN reset for ${cashierUser}. They can now log in offline with the new PIN.`);
     });
@@ -3453,7 +3453,7 @@ function initializeRenderer(): void {
   document.querySelector<HTMLButtonElement>("#cashier-login-retry")?.addEventListener("click", () => void runPosBootstrap("cashier-login-retry"));
   // Deliberately ungated (no admin PIN, no cashier login): the full Settings
   // screen behind #cashier-login-settings requires an admin PIN, but setting
-  // one up (when none exists yet) itself requires reaching the ERPNext server
+  // one up (when none exists yet) itself requires reaching the ERP server
   // to verify a supervisor — a deadlock on a brand-new terminal with no
   // server URL saved yet, or one saved with a typo. This is the escape hatch.
   document.querySelector<HTMLButtonElement>("#cashier-login-quick-connect")?.addEventListener("click", async () => {
@@ -3551,7 +3551,7 @@ function initializeRenderer(): void {
   // Revalidate the POS session every 60 seconds while online.
   window.setInterval(() => { if (isOnline()) void revalidateLive("interval"); }, 60_000);
 
-  // Fetch API Key/Secret via ERPNext username+password instead of copying them out of Frappe's
+  // Fetch API Key/Secret via ERP username+password instead of copying them out of Frappe's
   // User settings. Only fills the fields — the existing Save and Complete Setup flow still applies.
   document.querySelector<HTMLButtonElement>("#provision-credentials")?.addEventListener("click", async () => {
     const button = document.querySelector<HTMLButtonElement>("#provision-credentials");
@@ -3561,7 +3561,7 @@ function initializeRenderer(): void {
     const password = document.querySelector<HTMLInputElement>("#provision-password")?.value ?? "";
     if (messageEl) { messageEl.textContent = ""; messageEl.classList.remove("error"); }
     if (!erpnextUrl || !username || !password) {
-      if (messageEl) { messageEl.textContent = "ERPNext URL, username, and password are required."; messageEl.classList.add("error"); }
+      if (messageEl) { messageEl.textContent = "ERP URL, username, and password are required."; messageEl.classList.add("error"); }
       return;
     }
     if (button) { button.disabled = true; button.textContent = "Fetching..."; }

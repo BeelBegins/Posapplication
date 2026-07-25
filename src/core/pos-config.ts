@@ -71,7 +71,7 @@ export function createPosConfigCore(deps: PosCoreDeps, http: ReturnType<typeof c
     const settings = deps.db.loadSettings();
     const { erpnextUrl, posProfile } = settings;
     if (!hasUsableCredentials(deps, settings) || !erpnextUrl.trim() || !posProfile.trim()) {
-      return { success: false, summary: null, error: "ERPNext URL, credentials, and POS Profile are required." };
+      return { success: false, summary: null, error: "ERP URL, credentials, and POS Profile are required." };
     }
 
     try {
@@ -122,14 +122,14 @@ export function createPosConfigCore(deps: PosCoreDeps, http: ReturnType<typeof c
     const { erpnextUrl } = settings;
 
     if (!hasUsableCredentials(deps, settings) || !erpnextUrl.trim()) {
-      return { success: false, profiles: [], error: "ERPNext URL and credentials are required." };
+      return { success: false, profiles: [], error: "ERP URL and credentials are required." };
     }
 
     let baseUrl: string;
     try {
       baseUrl = new URL(erpnextUrl.trim()).toString().replace(/\/+$/, "");
     } catch {
-      return { success: false, profiles: [], error: "ERPNext URL is not valid." };
+      return { success: false, profiles: [], error: "ERP URL is not valid." };
     }
 
     try {
@@ -157,14 +157,14 @@ export function createPosConfigCore(deps: PosCoreDeps, http: ReturnType<typeof c
     const { erpnextUrl, posProfile } = settings;
 
     if (!hasUsableCredentials(deps, settings) || !erpnextUrl.trim() || !posProfile.trim()) {
-      return { success: false, profile: null, error: "ERPNext URL, credentials, and POS Profile are required.", syncedAt: null };
+      return { success: false, profile: null, error: "ERP URL, credentials, and POS Profile are required.", syncedAt: null };
     }
 
     let baseUrl: string;
     try {
       baseUrl = new URL(erpnextUrl.trim()).toString().replace(/\/+$/, "");
     } catch {
-      return { success: false, profile: null, error: "ERPNext URL is not valid.", syncedAt: null };
+      return { success: false, profile: null, error: "ERP URL is not valid.", syncedAt: null };
     }
 
     try {

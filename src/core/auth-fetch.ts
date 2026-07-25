@@ -2,7 +2,7 @@ import type { AppSettings } from "../db/database";
 import type { PosCoreDeps } from "./types";
 
 /**
- * The one place every ERPNext-bound fetch in src/core/ should go through.
+ * The one place every ERP-bound fetch in src/core/ should go through.
  * `deps.credentials` is undefined for Electron (main.ts never sets it), so this
  * takes the terminal-token branch byte-for-byte as before — nothing here changes
  * Electron's request headers or behavior. Android (mobile.ts) sets `deps.credentials`
