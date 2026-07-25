@@ -29,6 +29,12 @@ contextBridge.exposeInMainWorld("posAPI", {
   getDatabaseStatus: () => ipcRenderer.invoke("db:getStatus"),
   focusPosWindow: () => ipcRenderer.invoke("window:focus-pos"),
   onFocusScanner: (callback: () => void) => ipcRenderer.on("pos:focus-scanner", () => callback()),
+  getWindowState: () => ipcRenderer.invoke("window:get-state"),
+  minimizeWindow: () => ipcRenderer.invoke("window:minimize"),
+  toggleMaximizeWindow: () => ipcRenderer.invoke("window:toggle-maximize"),
+  closeWindow: () => ipcRenderer.invoke("window:close"),
+  onWindowState: (callback: (state: { fullscreen: boolean; maximized: boolean; minimized: boolean }) => void) =>
+    ipcRenderer.on("window:state", (_event, state) => callback(state)),
   saveSettings: (settings: AppSettings) => ipcRenderer.invoke("settings:save", settings),
   loadSettings: () => ipcRenderer.invoke("settings:load") as Promise<RendererSettings>,
   provisionCredentials: (input: { erpnextUrl: string; username: string; password: string }) =>

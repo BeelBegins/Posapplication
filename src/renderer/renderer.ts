@@ -9,6 +9,11 @@ interface PosAPI {
   getDatabaseStatus: () => Promise<DatabaseStatus>;
   focusPosWindow: () => Promise<boolean>;
   onFocusScanner: (callback: () => void) => void;
+  getWindowState: () => Promise<MainWindowState>;
+  minimizeWindow: () => Promise<boolean>;
+  toggleMaximizeWindow: () => Promise<MainWindowState>;
+  closeWindow: () => Promise<boolean>;
+  onWindowState: (callback: (state: MainWindowState) => void) => void;
   saveSettings: (settings: AppSettings) => Promise<void>;
   loadSettings: () => Promise<RendererSettings>;
   provisionCredentials: (input: { erpnextUrl: string; username: string; password: string }) => Promise<{ success: boolean; apiKey: string; apiSecret: string; error: string | null }>;
@@ -191,6 +196,12 @@ interface RendererSettings {
   hasApiSecret: boolean;
   receiptPrinter: string;
   colorTheme: string;
+}
+
+interface MainWindowState {
+  fullscreen: boolean;
+  maximized: boolean;
+  minimized: boolean;
 }
 
 interface Window {
@@ -483,21 +494,71 @@ function focusCart(sticky = false, nativeFocus = false): void {
   window.setTimeout(tick, 0);
   window.requestAnimationFrame(tick);
 }
-// Electron/Chromium blurs the BrowserWindow at the OS level when a native
-// confirm()/alert() dialog opens, and does not reliably restore it afterward —
-// leaving keyboard input dead (Enter, digit shortcuts, typing) until the user
-// alt-tabs away and back. window:focus-pos (focusPosWindow) already exists
-// for exactly this class of problem (used by afterCartMutation) but wasn't
-// wired to the many confirm()/alert() call sites — these two wrappers are
-// drop-in replacements that add that native refocus on close.
-function appConfirm(message: string): boolean {
-  const result = confirm(message);
-  void window.posAPI.focusPosWindow();
-  return result;
+// POS confirmations/notices stay inside the renderer. Native alert()/confirm()
+// can surrender the Windows foreground window and fail to return it, which is
+// especially disruptive after Clear Cart because scanner input then appears
+// dead until Alt+Tab. This modal never creates another OS window.
+function showAppMessage(message: string, mode: "confirm" | "alert"): Promise<boolean> {
+  const dialog = document.querySelector<HTMLDialogElement>("#app-message-dialog");
+  const title = document.querySelector<HTMLElement>("#app-message-title");
+  const text = document.querySelector<HTMLElement>("#app-message-text");
+  const confirmButton = document.querySelector<HTMLButtonElement>("#app-message-confirm");
+  const cancelButton = document.querySelector<HTMLButtonElement>("#app-message-cancel");
+  if (!dialog || !title || !text || !confirmButton || !cancelButton) return Promise.resolve(mode === "alert");
+  const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  title.textContent = mode === "confirm" ? "Confirm action" : "Notice";
+  text.textContent = message;
+  confirmButton.textContent = mode === "confirm" ? "Continue" : "OK";
+  cancelButton.hidden = mode === "alert";
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (accepted: boolean): void => {
+      if (settled) return;
+      settled = true;
+      confirmButton.removeEventListener("click", accept);
+      cancelButton.removeEventListener("click", reject);
+      dialog.removeEventListener("cancel", cancel);
+      dialog.close();
+      previousFocus?.focus({ preventScroll: true });
+      if (!document.querySelector<HTMLElement>("#pos-screen")?.hidden) focusCart(true);
+      resolve(accepted);
+    };
+    const accept = (): void => finish(true);
+    const reject = (): void => finish(false);
+    const cancel = (event: Event): void => { event.preventDefault(); finish(mode === "alert"); };
+    confirmButton.addEventListener("click", accept);
+    cancelButton.addEventListener("click", reject);
+    dialog.addEventListener("cancel", cancel);
+    dialog.showModal();
+    window.setTimeout(() => confirmButton.focus(), 0);
+  });
 }
-function appAlert(message: string): void {
-  alert(message);
-  void window.posAPI.focusPosWindow();
+function appConfirm(message: string): Promise<boolean> {
+  return showAppMessage(message, "confirm");
+}
+async function appAlert(message: string): Promise<void> {
+  await showAppMessage(message, "alert");
+}
+
+function updateWindowMaximizeButton(state: MainWindowState): void {
+  const button = document.querySelector<HTMLButtonElement>("#window-maximize");
+  if (!button) return;
+  const maximized = state.fullscreen || state.maximized;
+  button.textContent = maximized ? "❐" : "□";
+  button.title = maximized ? "Restore window" : "Maximize window";
+  button.setAttribute("aria-label", button.title);
+}
+
+async function initializeWindowControls(): Promise<void> {
+  const runtime = await window.posAPI.getRuntimeInfo();
+  document.documentElement.dataset.platform = runtime.platform;
+  document.documentElement.dataset.product = runtime.product;
+  if (runtime.platform !== "electron") return;
+  updateWindowMaximizeButton(await window.posAPI.getWindowState());
+  window.posAPI.onWindowState(updateWindowMaximizeButton);
+  document.querySelector<HTMLButtonElement>("#window-minimize")?.addEventListener("click", () => void window.posAPI.minimizeWindow());
+  document.querySelector<HTMLButtonElement>("#window-maximize")?.addEventListener("click", async () => updateWindowMaximizeButton(await window.posAPI.toggleMaximizeWindow()));
+  document.querySelector<HTMLButtonElement>("#window-close")?.addEventListener("click", () => void window.posAPI.closeWindow());
 }
 function cartMessage(message: string): void { const e = document.querySelector<HTMLElement>("#cart-message"); if (e) e.textContent = message; }
 function clearCartSearch(): void { cartSearchResults = []; selectedSearchIndex = 0; const input = cartInput(); if (input) input.value = ""; document.querySelector<HTMLElement>("#cart-search-results")?.replaceChildren(); }
@@ -906,8 +967,8 @@ async function submitCloseShift(): Promise<void> {
   const rows = reconRows();
   const totalDiff = rows.reduce((sum, r) => sum + (r.actual - r.expected), 0);
   const heldCount = await window.posAPI.listHeldSales().then((rows) => rows.length).catch(() => 0);
-  if (!appConfirm(`Close Shift will submit an ERPNext POS Closing Entry, mark this shift closed, print the shift summary, delete ${heldCount} held sale(s), and block new sales until a new shift is opened. Continue?`)) return;
-  if (Math.abs(totalDiff) >= 0.005 && !appConfirm(`There is a difference of ${fmtMoney(totalDiff)} between counted and expected amounts. Submit the closing entry anyway?`)) return;
+  if (!(await appConfirm(`Close Shift will submit an ERPNext POS Closing Entry, mark this shift closed, print the shift summary, delete ${heldCount} held sale(s), and block new sales until a new shift is opened. Continue?`))) return;
+  if (Math.abs(totalDiff) >= 0.005 && !(await appConfirm(`There is a difference of ${fmtMoney(totalDiff)} between counted and expected amounts. Submit the closing entry anyway?`))) return;
   closeShiftInFlight = true;
   if (button) button.disabled = true;
   if (message) message.textContent = "Submitting closing entry…";
@@ -985,7 +1046,7 @@ function shiftReportText(r: ShiftHistoryRow): string {
   lines.push(``, `Net Sales: ${fmtMoney(r.netSales)}`, `Cash Difference: ${fmtMoney(r.difference)}`);
   return lines.join("\n");
 }
-function showShiftHistorySummary(r: ShiftHistoryRow): void { appAlert(shiftReportText(r)); }
+function showShiftHistorySummary(r: ShiftHistoryRow): void { void appAlert(shiftReportText(r)); }
 function printShiftReport(r: ShiftHistoryRow): void {
   const html = `<pre style="font:13px monospace;padding:16px;white-space:pre-wrap">${shiftReportText(r).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c] ?? c))}</pre>`;
   void window.posAPI.printReceipt(html);
@@ -1287,7 +1348,7 @@ async function finalizePaymentReady():Promise<void>{
   void submitCurrentSale();
 }
 
-function closePaymentDialog():void{ document.querySelector<HTMLDialogElement>('#payment-dialog')?.close(); focusCart(true, true); }
+function closePaymentDialog():void{ document.querySelector<HTMLDialogElement>('#payment-dialog')?.close(); focusCart(true); }
 // Single source of truth for why the sale cannot be completed (null === ready).
 function blockedSaleReason():string|null{
   const opening=document.querySelector<HTMLElement>("#session-opening-entry")?.textContent??"";
@@ -1694,10 +1755,10 @@ async function renderHeldSales():Promise<void>{
   }));
 }
 async function renameHeldSaleUi(id:number,current:string):Promise<void>{ const name=await promptName("Rename Held Sale","New name",current); if(!name||!name.trim())return; await window.posAPI.renameHeldSale(id,name.trim()); await renderHeldSales(); }
-async function deleteHeldSaleUi(id:number):Promise<void>{ if(!appConfirm("Delete this held draft? Submitted invoices are never affected."))return; await window.posAPI.deleteHeldSale(id); await renderHeldSales(); }
+async function deleteHeldSaleUi(id:number):Promise<void>{ if(!(await appConfirm("Delete this held draft? Submitted invoices are never affected.")))return; await window.posAPI.deleteHeldSale(id); await renderHeldSales(); }
 
 async function resumeHeldSale(id:number):Promise<void>{
-  if(cartLines.length&&!appConfirm("Replace the current cart with the held sale?"))return;
+  if(cartLines.length&&!(await appConfirm("Replace the current cart with the held sale?")))return;
   const held=await window.posAPI.getHeldSale(id); if(!held){cartMessage("Held sale not found");await renderHeldSales();return;}
   // Restore exact cart, customer, benefits and the ORIGINAL terminal_invoice_id.
   cartLines=Array.isArray(held.cart)?held.cart as CartLine[]:[];
@@ -2048,7 +2109,7 @@ async function submitRefund():Promise<void>{
   if(!mode){if(msg)msg.textContent="Select a refund mode of payment.";return;}
   const reason=document.querySelector<HTMLInputElement>("#refund-reason")?.value??"";
   const totalQty=items.reduce((sum,it)=>sum+it.qty,0);
-  if(!appConfirm(`Refund ${totalQty} item(s) from ${String(refundData.original_invoice??"")}?`))return;
+  if(!(await appConfirm(`Refund ${totalQty} item(s) from ${String(refundData.original_invoice??"")}?`)))return;
   await verifyAndSubmitRefund(items,mode,reason,false);
 }
 
@@ -2283,7 +2344,7 @@ async function openPayment():Promise<void>{
     const blocker=await offlineLocalBlocker(false);
     if(blocker){cartMessage(blocker);return;}
   }
-  if(paymentsOutdated&&paymentRows.length){if(!appConfirm("Cart changed. Clear outdated payments?"))return;paymentRows=[];await persistPayments();paymentsOutdated=false;}paymentMethodTypes=await window.posAPI.getPaymentMethodTypes();paymentMethods=sortPaymentMethodsCashFirst(await window.posAPI.getPaymentMethods(),paymentMethodTypes);paymentRows=await window.posAPI.loadPaymentDraft();changeDue=0;selectedPaymentMethodIndex=0;
+  if(paymentsOutdated&&paymentRows.length){if(!(await appConfirm("Cart changed. Clear outdated payments?")))return;paymentRows=[];await persistPayments();paymentsOutdated=false;}paymentMethodTypes=await window.posAPI.getPaymentMethodTypes();paymentMethods=sortPaymentMethodsCashFirst(await window.posAPI.getPaymentMethods(),paymentMethodTypes);paymentRows=await window.posAPI.loadPaymentDraft();changeDue=0;selectedPaymentMethodIndex=0;
   // A row left mid-"Edit" from a previous open of this dialog (e.g. the cashier
   // went back to add more items instead of finishing the edit) must not survive
   // into this fresh session — addPayment() would otherwise silently overwrite
@@ -2376,7 +2437,7 @@ async function afterCartMutation(message: string): Promise<void> {
   scheduleCartPreview();
   renderCart();
   cartMessage(message);
-  focusCart(true, true);
+  focusCart(true);
 }
 
 async function addToCart(item: CatalogSearchResult): Promise<void> { const index = cartLines.findIndex((line) => line.itemCode === item.itemCode && line.uom === item.uom); let message = "Item added"; if (index >= 0) { cartLines[index].quantity += 1; selectedCartIndex = index; message = "Quantity changed"; } else { cartLines.push({ ...item, quantity: 1 }); selectedCartIndex = cartLines.length - 1; } await afterCartMutation(message); }
@@ -2533,7 +2594,7 @@ async function runSessionValidation(_trigger: string): Promise<boolean> {
   if (sessionState.openingEntry && name !== sessionState.openingEntry) {
     // A different open entry is returned — never switch silently.
     if (cartLines.length) return failSession(`A different shift (${name}) is active. Confirm to switch.`, name);
-    if (!appConfirm(`A different shift (${name}) is active. Switch to it?`)) return failSession(`A different shift (${name}) is active`, name);
+    if (!(await appConfirm(`A different shift (${name}) is active. Switch to it?`))) return failSession(`A different shift (${name}) is active`, name);
   }
   sessionState = { openingEntry: name, status, user, posProfile: profile || selectedProfile, company: company || selectedCompany, postingDate, periodStart, lastChecked: Date.now(), lastError: "", valid: true, reason: "" };
   pendingSwitchEntry = "";
@@ -2548,7 +2609,7 @@ async function revalidateLive(trigger: string): Promise<void> {
 }
 async function switchToActiveShift(): Promise<void> {
   if (!pendingSwitchEntry) return;
-  if (cartLines.length && !appConfirm("Switching shifts keeps the current cart, customer and payment. Continue?")) return;
+  if (cartLines.length && !(await appConfirm("Switching shifts keeps the current cart, customer and payment. Continue?"))) return;
   sessionState.openingEntry = ""; // drop cached entry so the returned one is adopted
   const ok = await validateSession("switch");
   if (ok) {
@@ -3241,7 +3302,7 @@ async function requestSupervisorPinSetup(action: "reset_pin", cashierUser: strin
   if (!dialog || !form) return false;
   const label = "Offline Cashier PIN";
   if (!navigator.onLine) {
-    appAlert(`${label} reset requires an online connection and authorized ERPNext supervisor credentials.`);
+    await appAlert(`${label} reset requires an online connection and authorized ERPNext supervisor credentials.`);
     return false;
   }
   if (title) title.textContent = `Reset ${label} for ${cashierUser}`;
@@ -3287,7 +3348,7 @@ async function requestSettingsAuthorization(): Promise<boolean> {
   const dialog = document.querySelector<HTMLDialogElement>("#settings-auth-dialog");
   const form = document.querySelector<HTMLFormElement>("#settings-auth-form");
   if (!dialog || !form) return false;
-  if (!navigator.onLine) { appAlert("Settings requires an online connection to verify your ERPNext account."); return false; }
+  if (!navigator.onLine) { await appAlert("Settings requires an online connection to verify your ERPNext account."); return false; }
   ["#settings-auth-user","#settings-auth-password"].forEach((id)=>{const input=document.querySelector<HTMLInputElement>(id);if(input)input.value="";});
   adminMessage("#settings-auth-message", "");
   return new Promise((resolve) => {
@@ -3333,7 +3394,7 @@ async function requestSupervisorActionAuthorization(action: "close_shift" | "voi
   const dialog = document.querySelector<HTMLDialogElement>("#supervisor-action-dialog");
   const form = document.querySelector<HTMLFormElement>("#supervisor-action-form");
   if (!dialog || !form) return { ok: false, token: "" };
-  if (!navigator.onLine) { appAlert("Online connection required for supervisor authorization."); return { ok: false, token: "" }; }
+  if (!navigator.onLine) { await appAlert("Online connection required for supervisor authorization."); return { ok: false, token: "" }; }
   const copy = SUPERVISOR_ACTION_COPY[action];
   setText("#supervisor-action-title", copy.title);
   setText("#supervisor-action-note", copy.note);
@@ -3361,6 +3422,7 @@ async function requestSupervisorActionAuthorization(action: "close_shift" | "voi
 }
 
 function initializeRenderer(): void {
+  void initializeWindowControls();
   void showDatabaseStatus();
   void loadPosProfileCacheStatus();
   void loadSettingsIntoForm();
@@ -3446,7 +3508,7 @@ function initializeRenderer(): void {
   document.querySelector<HTMLButtonElement>("#complete-setup")?.addEventListener("click", (e) => { /* form submit handles save + bootstrap */ void e; });
   document.querySelector<HTMLButtonElement>("#refresh-config")?.addEventListener("click", () => void syncConfigNow());
   document.querySelector<HTMLButtonElement>("#start-shift")?.addEventListener("click", () => {
-    if (!cashierSession?.canStartShift) { appAlert("Your account is not permitted to start a shift."); return; }
+    if (!cashierSession?.canStartShift) { void appAlert("Your account is not permitted to start a shift."); return; }
     void startShift();
   });
   document.querySelector<HTMLButtonElement>("#start-shift-refresh")?.addEventListener("click", () => void refreshFromStartShift());
@@ -3711,7 +3773,7 @@ function initializeRenderer(): void {
   document.querySelector("#cart-increase")?.addEventListener("click", () => void changeCartQuantity(1));
   document.querySelector("#cart-remove")?.addEventListener("click", () => void removeSelectedCartRow());
   document.querySelector("#mobile-select-customer")?.addEventListener("click", () => openCustomerSearch());
-  document.querySelector("#cart-clear")?.addEventListener("click", async () => { if (!cartLines.length || !appConfirm("Clear the full cart?")) return; cartLines=[]; selectedCartIndex=-1; await afterCartMutation("Cart cleared"); });
+  document.querySelector("#cart-clear")?.addEventListener("click", async () => { if (!cartLines.length || !(await appConfirm("Clear the full cart?"))) return; cartLines=[]; selectedCartIndex=-1; await afterCartMutation("Cart cleared"); });
   document.querySelector<HTMLFormElement>("#quantity-form")?.addEventListener("submit", (event) => { event.preventDefault(); const submitter = event.submitter as HTMLButtonElement | null; if (submitter?.value === "cancel") { document.querySelector<HTMLDialogElement>("#quantity-dialog")?.close(); focusCart(); } else void saveDialogQuantity(); });
   document.querySelector<HTMLDialogElement>("#quantity-dialog")?.addEventListener("cancel", () => focusCart());
   // Payment dialog controls

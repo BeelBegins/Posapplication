@@ -160,6 +160,7 @@ The bridge includes methods for:
 - refunds
 - shift summary and close shift
 - updates
+- narrow desktop window controls (minimize, fullscreen maximize/restore, close)
 
 Do not expose broad filesystem, database, shell, or credential access here.
 
@@ -184,6 +185,10 @@ Owns:
 - Shift history.
 - Sync and update UI.
 - Keyboard shortcuts.
+- Electron-only frameless window controls.
+- In-app POS confirmations/notices. Do not use native `alert()`/`confirm()` in
+  the POS renderer: on Windows those dialogs can fail to return foreground
+  focus, leaving scanner/keyboard input inactive until Alt+Tab.
 
 Important shortcuts:
 

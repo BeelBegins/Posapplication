@@ -7,6 +7,11 @@
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
+    <div class="window-controls" aria-label="Window controls">
+      <button id="window-minimize" type="button" title="Minimize" aria-label="Minimize window">−</button>
+      <button id="window-maximize" type="button" title="Restore window" aria-label="Restore window">❐</button>
+      <button id="window-close" type="button" class="window-close" title="Close" aria-label="Close Aimatic POS">×</button>
+    </div>
     <main class="app-shell">
       <section id="settings-screen" class="app-screen">
       <header>
@@ -583,6 +588,14 @@
           <label><span id="name-dialog-label">Name</span><input id="name-dialog-input" type="text" /></label>
           <div class="form-actions"><button value="ok">OK</button><button id="name-dialog-cancel" value="cancel" type="button" class="secondary-button">Cancel</button></div>
         </form>
+      </dialog>
+      <dialog id="app-message-dialog" class="customer-dialog app-message-dialog">
+        <h3 id="app-message-title">Confirm action</h3>
+        <p id="app-message-text"></p>
+        <div class="form-actions">
+          <button id="app-message-confirm" type="button">Continue</button>
+          <button id="app-message-cancel" type="button" class="secondary-button">Cancel</button>
+        </div>
       </dialog>
       <dialog id="settings-auth-dialog" class="customer-dialog admin-dialog">
         <form id="settings-auth-form">
