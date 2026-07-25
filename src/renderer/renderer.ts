@@ -1397,7 +1397,7 @@ async function submitCurrentSale():Promise<void>{
 // --- FBR status interpretation ---
 function isValidFbrValue(value:unknown):boolean{const s=String(value??"").trim().toLowerCase();return s!==""&&!["not available","n/a","na","null","none","undefined","-"].includes(s);}
 function pickString(record:Record<string,unknown>,keys:string[]):string{for(const key of keys){if(key in record){const value=record[key];if(value!==null&&value!==undefined&&String(value).trim()!=="")return String(value).trim();}}return "";}
-function interpretFbr(response:Record<string,unknown>):{accepted:boolean;statusText:string;invoiceNumber:string;qr:string}{
+function interpretFbr(response:Record<string,unknown>):{accepted:boolean;statusText:string;invoiceNumber:string;qr:string;applicable:boolean}{
   const nested=asTotalsRecord(response.fbr)??asTotalsRecord(response.fbr_response)??asTotalsRecord(response.fbr_invoice)??{};
   const src:Record<string,unknown>={...nested,...response};
   const invoiceRaw=pickString(src,["fbr_invoice_number","fbr_invoice_no","custom_fbr_invoice_number","fbrinvoicenumber","fbr_inv_num","fbr_ref_no","invoice_number"]);
@@ -1409,8 +1409,13 @@ function interpretFbr(response:Record<string,unknown>):{accepted:boolean;statusT
   const codeOk=["100","000","00","0"].includes(code)||/success|approved|valid|accept/.test(statusLower);
   const accepted=Boolean(invoiceNumber)&&codeOk;
   const qr=pickString(src,["fbr_qr","fbr_qr_code","qr_code","qr_data","qr"]);
+  // No status, no invoice number, no code at all -- FBR was never attempted for this sale
+  // (e.g. POS Profile.custom_fbr_optional sales with no FBR Integration Settings configured),
+  // distinct from a real submission that failed. Callers hide the FBR UI in that case instead
+  // of showing a misleading "Not Accepted".
+  const applicable=Boolean(statusRaw)||Boolean(invoiceNumber)||Boolean(code);
   const statusText=accepted?"Accepted":(statusRaw||(invoiceNumber?"Pending":"Not Accepted"));
-  return {accepted,statusText,invoiceNumber,qr};
+  return {accepted,statusText,invoiceNumber,qr,applicable};
 }
 
 async function openReceiptPreview(response:Record<string,unknown>,provisional=false):Promise<void>{
@@ -1438,15 +1443,17 @@ async function openReceiptPreview(response:Record<string,unknown>,provisional=fa
   if(payBox)payBox.replaceChildren(...paymentRows.map(row=>{const p=document.createElement("p");const label=document.createElement("span");label.textContent=row.method;const value=document.createElement("strong");value.textContent=row.amount.toFixed(2);p.append(label,value);return p;}));
   setCartText("#receipt-change",changeDue.toFixed(2));
   const fbr=interpretFbr(response);
+  // FBR was never attempted for this sale (POS Profile allows selling without FBR and none
+  // is configured) -- hide the FBR section entirely rather than show a misleading status.
+  const notApplicable=!provisional&&!fbr.applicable;
+  const fbrBox=document.querySelector<HTMLElement>(".receipt-fbr");
+  if(fbrBox)fbrBox.hidden=notApplicable;
   setCartText("#receipt-fbr-status",provisional?"Awaiting internet availability":fbr.statusText);
   setCartText("#receipt-fbr-number",provisional?"Pending":(fbr.invoiceNumber||"—"));
   document.querySelector<HTMLElement>("#receipt-fbr-offline-response")?.remove();
-  if(provisional){
-    const fbrBox=document.querySelector<HTMLElement>(".receipt-fbr");
-    if(fbrBox){const p=document.createElement("p");p.id="receipt-fbr-offline-response";const a=document.createElement("span");a.textContent="FBR Response";const b=document.createElement("strong");b.textContent="Will submit automatically when ERPNext is online";p.append(a,b);fbrBox.append(p);}
-  }
+  if(provisional&&fbrBox){const p=document.createElement("p");p.id="receipt-fbr-offline-response";const a=document.createElement("span");a.textContent="FBR Response";const b=document.createElement("strong");b.textContent="Will submit automatically when ERPNext is online";p.append(a,b);fbrBox.append(p);}
   const badge=document.querySelector<HTMLElement>("#receipt-fbr-badge");
-  if(badge){badge.textContent=provisional?"Offline Queued":(fbr.accepted?"FBR Accepted":fbr.statusText);badge.className=`fbr-badge ${!provisional&&fbr.accepted?"ok":"warn"}`;}
+  if(badge){badge.hidden=notApplicable;badge.textContent=provisional?"Offline Queued":(fbr.accepted?"FBR Accepted":fbr.statusText);badge.className=`fbr-badge ${!provisional&&fbr.accepted?"ok":"warn"}`;}
   const qrBox=document.querySelector<HTMLElement>("#receipt-qr");
   if(qrBox){qrBox.replaceChildren();if(provisional){const code=document.createElement("code");code.textContent="Pending";qrBox.append(code);}else if(fbr.qr){if(fbr.qr.startsWith("data:image")){const img=document.createElement("img");img.src=fbr.qr;img.alt="FBR QR";img.className="receipt-qr-img";qrBox.append(img);}else{const code=document.createElement("code");code.textContent=fbr.qr;qrBox.append(code);}}}
   const printBtn=document.querySelector<HTMLButtonElement>("#receipt-print");
@@ -1855,8 +1862,9 @@ async function viewHistoryReceipt(row:SalesHistoryRow):Promise<void>{
   if(payBox)payBox.replaceChildren(...payments.map((p)=>{const r=asTotalsRecord(p)??{};const el=document.createElement("p");const a=document.createElement("span");a.textContent=String(r.mode_of_payment??"");const b=document.createElement("strong");b.textContent=(previewNumber(r,"amount")??0).toFixed(2);el.append(a,b);return el;}));
   setCartText("#receipt-change","0.00");
   const fbr=interpretFbr(response);
+  const historyFbrBox=document.querySelector<HTMLElement>(".receipt-fbr");if(historyFbrBox)historyFbrBox.hidden=!fbr.applicable;
   setCartText("#receipt-fbr-status",fbr.statusText);setCartText("#receipt-fbr-number",fbr.invoiceNumber||"—");
-  const badge=document.querySelector<HTMLElement>("#receipt-fbr-badge");if(badge){badge.textContent=fbr.accepted?"FBR Accepted":fbr.statusText;badge.className=`fbr-badge ${fbr.accepted?"ok":"warn"}`;}
+  const badge=document.querySelector<HTMLElement>("#receipt-fbr-badge");if(badge){badge.hidden=!fbr.applicable;badge.textContent=fbr.accepted?"FBR Accepted":fbr.statusText;badge.className=`fbr-badge ${fbr.accepted?"ok":"warn"}`;}
   const qrBox=document.querySelector<HTMLElement>("#receipt-qr");if(qrBox)qrBox.replaceChildren();
   lastReceiptHtml=null;
   const frame=document.querySelector<HTMLIFrameElement>("#receipt-frame");if(frame){frame.removeAttribute("srcdoc");frame.hidden=true;}
@@ -2121,9 +2129,13 @@ async function showRefundReceipt(res:Record<string,unknown>):Promise<void>{
   if(payBox)payBox.replaceChildren(...payments.map((p)=>{const r=asTotalsRecord(p)??{};const el=document.createElement("p");const a=document.createElement("span");a.textContent=String(r.mode_of_payment??"");const b=document.createElement("strong");b.textContent=(previewNumber(r,"amount")??0).toFixed(2);el.append(a,b);return el;}));
   setCartText("#receipt-change","0.00");
   const fbr=asTotalsRecord(res.fbr)??{};
+  // No status and no invoice number at all -- FBR was never attempted for the original sale
+  // (see interpretFbr's "applicable" note above), not a real submission that's still pending.
+  const fbrApplicable=Boolean(fbr.status)||Boolean(fbr.invoice_number);
   const fbrStatus=String(fbr.status??"Pending");const fbrNumber=String(fbr.invoice_number??"");
+  const refundFbrBox=document.querySelector<HTMLElement>(".receipt-fbr");if(refundFbrBox)refundFbrBox.hidden=!fbrApplicable;
   setCartText("#receipt-fbr-status",fbrStatus);setCartText("#receipt-fbr-number",fbrNumber||"—");
-  const badge=document.querySelector<HTMLElement>("#receipt-fbr-badge");if(badge){const ok=fbrStatus==="Accepted";badge.textContent=`FBR ${fbrStatus}`;badge.className=`fbr-badge ${ok?"ok":"warn"}`;}
+  const badge=document.querySelector<HTMLElement>("#receipt-fbr-badge");if(badge){badge.hidden=!fbrApplicable;const ok=fbrStatus==="Accepted";badge.textContent=`FBR ${fbrStatus}`;badge.className=`fbr-badge ${ok?"ok":"warn"}`;}
   const qrBox=document.querySelector<HTMLElement>("#receipt-qr");if(qrBox)qrBox.replaceChildren();
   lastReceiptHtml=null;
   const frame=document.querySelector<HTMLIFrameElement>("#receipt-frame");if(frame){frame.removeAttribute("srcdoc");frame.hidden=true;}
