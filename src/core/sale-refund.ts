@@ -9,7 +9,7 @@ function isCashierPermissionSyncError(message: string): boolean {
   return /cashier|user|employee|permission|disabled|not allowed|not permitted|pos profile/i.test(message);
 }
 
-// The receipt is an ERPNext Print Format (POS Invoice), not a custom API method — render it via the standard print view.
+// The receipt is an ERP Print Format (POS Invoice), not a custom API method — render it via the standard print view.
 function thermalReceiptCss(): string {
   return `<style>
     @page { size: 80mm auto; margin: 2mm 0.11mm; }
@@ -119,7 +119,7 @@ export function createSaleRefundCore(
 
   // A local stand-in for the server response so the receipt + history have coherent data until the sale syncs.
   function buildProvisionalResponse(id: string, payload: Record<string, unknown>): Record<string, unknown> {
-    return { provisional: true, offline: true, queued: true, terminal_invoice_id: id, pos_invoice: id, posting_datetime: new Date().toISOString(), fbr_status: "Awaiting internet availability", fbr_invoice_number: "Pending", fbr_response: "Will submit automatically when ERPNext is online", estimated_total: posSession.numValue(payload, "estimated_total") };
+    return { provisional: true, offline: true, queued: true, terminal_invoice_id: id, pos_invoice: id, posting_datetime: new Date().toISOString(), fbr_status: "Awaiting internet availability", fbr_invoice_number: "Pending", fbr_response: "Will submit automatically when ERP is online", estimated_total: posSession.numValue(payload, "estimated_total") };
   }
 
   // Persist a completed-offline sale to the queue (status "Queued"); it replays to the server on reconnect.
@@ -138,7 +138,7 @@ export function createSaleRefundCore(
     deps.db.saveSaleHistory(id, "Submitting", payload);
     if (!hasUsableCredentials(deps, settings) || !settings.erpnextUrl) {
       deps.db.saveSaleHistory(id, "Failed", payload);
-      return { success: false, response: null, error: "ERPNext URL and API credentials are required." };
+      return { success: false, response: null, error: "ERP URL and API credentials are required." };
     }
     try {
       const base = new URL(settings.erpnextUrl).toString().replace(/\/+$/, "");
@@ -182,11 +182,11 @@ export function createSaleRefundCore(
   async function syncSaleQueue(): Promise<{ synced: number; failed: number; remaining: number; error: string | null }> {
     const settings = deps.db.loadSettings();
     const counts0 = deps.db.getQueueCounts();
-    if (!hasUsableCredentials(deps, settings) || !settings.erpnextUrl) return { synced: 0, failed: 0, remaining: counts0.queued, error: "ERPNext URL and API credentials are required." };
+    if (!hasUsableCredentials(deps, settings) || !settings.erpnextUrl) return { synced: 0, failed: 0, remaining: counts0.queued, error: "ERP URL and API credentials are required." };
     const auth = await http.testApiAuthentication();
     if (!auth.success) return { synced: 0, failed: 0, remaining: counts0.queued, error: "Terminal API credentials could not be revalidated." };
     let base: string;
-    try { base = new URL(settings.erpnextUrl).toString().replace(/\/+$/, ""); } catch { return { synced: 0, failed: 0, remaining: counts0.queued, error: "Invalid ERPNext URL." }; }
+    try { base = new URL(settings.erpnextUrl).toString().replace(/\/+$/, ""); } catch { return { synced: 0, failed: 0, remaining: counts0.queued, error: "Invalid ERP URL." }; }
     let synced = 0; let failed = 0; let error: string | null = null;
     const openingCache = new Map<string, string>();
     for (const sale of deps.db.getQueuedSales()) {

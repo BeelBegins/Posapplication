@@ -1,4 +1,5 @@
 import type { CredentialProvider } from "../api/client";
+import { normalizeErpDisplayText } from "../core/display-branding";
 import type { SecureStorage } from "./secure-storage";
 import { buildAuthorizationUrl, createPkceRequest, parseAuthorizationCallback, tokenSetFromResponse, type OAuthTokenSet } from "./oauth-pkce";
 
@@ -71,7 +72,7 @@ export class OAuthPkceCredentialProvider implements CredentialProvider {
         body: new URLSearchParams({ grant_type: "authorization_code", code, redirect_uri: config.redirectUri, client_id: config.clientId, code_verifier: request.pending.verifier })
       });
       const body = await response.json().catch(() => ({})) as Record<string, unknown>;
-      if (!response.ok) throw new Error(typeof body.error_description === "string" ? body.error_description : "OAuth token exchange failed.");
+      if (!response.ok) throw new Error(normalizeErpDisplayText(typeof body.error_description === "string" ? body.error_description : "OAuth token exchange failed."));
       const tokens = tokenSetFromResponse(body, this.now());
       await this.save(tokens);
       return tokens.accessToken;

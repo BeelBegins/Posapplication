@@ -103,6 +103,21 @@ const MIGRATIONS: Migration[] = [
     sql: [
       "ALTER TABLE pos_refund_log ADD COLUMN mode_of_payment TEXT"
     ]
+  },
+  {
+    // v4 — pos_item_prices gains a price_list column. Before this, the table had no way to
+    // tell which price list a cached row came from, so searchCatalog/lookupCatalog picked
+    // whichever cached row for an item was most recently `modified`, from ANY price list this
+    // terminal had ever synced — including a price list the terminal's POS Profile no longer
+    // uses (e.g. a branch's regular Selling Price List, after the profile switched to a
+    // Foodpanda Price List with its own separate rates). Existing rows get NULL here; they are
+    // deliberately excluded by the now price_list-scoped lookup queries (rather than backfilled)
+    // so a stale, wrongly-attributed cached price can never resurface — the next catalog sync
+    // repopulates every row for the active price list correctly.
+    version: 4,
+    sql: [
+      "ALTER TABLE pos_item_prices ADD COLUMN price_list TEXT"
+    ]
   }
 ];
 
@@ -567,6 +582,14 @@ export function upsertCatalog(data: {
   totals: CatalogTotals;
   replaceBarcodes: boolean;
   replaceConversions: boolean;
+  // The single price list every row in `prices` was fetched for (the sync call already scopes
+  // its Item Price fetch to `[["price_list", "=", priceList], ...]` - see catalog-sync.ts - so
+  // every row in this batch belongs to the same list; stamped here rather than requested from
+  // the server per-row). Required so searchCatalog/lookupCatalog can filter out stale rows left
+  // over from a previously-configured price list (e.g. after a POS Profile switches from a
+  // branch's Selling Price List to a Foodpanda Price List) instead of silently matching on
+  // whichever cached row happens to have the newest `modified` timestamp.
+  priceList: string;
 }): void {
   if (!database) throw new Error("Database is not initialized.");
   const text = (row: Record<string, unknown>, key: string): string => typeof row[key] === "string" ? row[key] : "";
@@ -574,8 +597,8 @@ export function upsertCatalog(data: {
   const bool = (row: Record<string, unknown>, key: string): number => row[key] ? 1 : 0;
   const item = database.prepare(`INSERT INTO pos_items VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(item_code) DO UPDATE SET item_name=excluded.item_name,item_group=excluded.item_group,stock_uom=excluded.stock_uom,is_stock_item=excluded.is_stock_item,is_sales_item=excluded.is_sales_item,disabled=excluded.disabled,has_batch_no=excluded.has_batch_no,has_serial_no=excluded.has_serial_no,modified=excluded.modified`);
-  const price = database.prepare(`INSERT INTO pos_item_prices VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(name) DO UPDATE SET item_code=excluded.item_code,uom=excluded.uom,price_list_rate=excluded.price_list_rate,currency=excluded.currency,valid_from=excluded.valid_from,valid_upto=excluded.valid_upto,modified=excluded.modified`);
+  const price = database.prepare(`INSERT INTO pos_item_prices VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(name) DO UPDATE SET item_code=excluded.item_code,uom=excluded.uom,price_list_rate=excluded.price_list_rate,currency=excluded.currency,valid_from=excluded.valid_from,valid_upto=excluded.valid_upto,modified=excluded.modified,price_list=excluded.price_list`);
   const stock = database.prepare(`INSERT INTO pos_item_stock VALUES (?, ?, ?, ?, ?, ?)
     ON CONFLICT(item_code,warehouse) DO UPDATE SET actual_qty=excluded.actual_qty,reserved_qty=excluded.reserved_qty,projected_qty=excluded.projected_qty,modified=excluded.modified`);
   const barcode = database.prepare(`INSERT INTO pos_item_barcodes VALUES (?, ?, ?, ?)
@@ -585,7 +608,14 @@ export function upsertCatalog(data: {
   const state = database.prepare("INSERT INTO catalog_sync_state VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value");
   database.transaction(() => {
     for (const row of data.items) item.run(text(row, "name"), text(row, "item_name"), text(row, "item_group"), text(row, "stock_uom"), bool(row, "is_stock_item"), bool(row, "is_sales_item"), bool(row, "disabled"), bool(row, "has_batch_no"), bool(row, "has_serial_no"), text(row, "modified"));
-    for (const row of data.prices) price.run(text(row, "name"), text(row, "item_code"), text(row, "uom"), number(row, "price_list_rate"), text(row, "currency"), text(row, "valid_from"), text(row, "valid_upto"), text(row, "modified"));
+    for (const row of data.prices) price.run(text(row, "name"), text(row, "item_code"), text(row, "uom"), number(row, "price_list_rate"), text(row, "currency"), text(row, "valid_from"), text(row, "valid_upto"), text(row, "modified"), data.priceList);
+    // This terminal operates under one price list at a time (data.priceList); anything cached
+    // under a different list - or NULL, from before this column existed - is stale residue that
+    // the price_list-scoped lookup queries below already ignore, but there is no reason to keep
+    // it around taking up space or risk a future code path re-introducing an unscoped query.
+    if (data.priceList) {
+      database!.prepare("DELETE FROM pos_item_prices WHERE price_list IS NULL OR price_list != ?").run(data.priceList);
+    }
     for (const row of data.stock) stock.run(text(row, "item_code"), text(row, "warehouse"), number(row, "actual_qty"), number(row, "reserved_qty"), number(row, "projected_qty"), text(row, "modified"));
     if (data.replaceBarcodes) database!.prepare("DELETE FROM pos_item_barcodes").run();
     for (const row of data.barcodes) barcode.run(text(row, "item_code") || text(row, "parent"), text(row, "barcode"), text(row, "uom"), text(row, "modified"));
@@ -603,47 +633,48 @@ export function getCatalogTotals(): CatalogTotals {
   return { items: Number(value("items")) || 0, prices: Number(value("prices")) || 0, barcodes: Number(value("barcodes")) || 0, stockRows: Number(value("stock_rows")) || 0, lastSynced: value("last_synced") || null };
 }
 
-export function searchCatalog(query: string, warehouse: string): CatalogSearchResult[] {
+export function searchCatalog(query: string, warehouse: string, priceList: string): CatalogSearchResult[] {
   if (!database || !query.trim()) return [];
   return database.prepare(`SELECT i.item_code itemCode, i.item_name itemName,
     b.barcode barcode,
     COALESCE(b.uom,i.stock_uom) uom,
     COALESCE(c.conversion_factor, CASE WHEN COALESCE(b.uom,i.stock_uom)=i.stock_uom THEN 1 END, 1) conversionFactor,
     COALESCE(
-      (SELECT p.price_list_rate FROM pos_item_prices p WHERE p.item_code=i.item_code AND COALESCE(p.uom,'')=COALESCE(b.uom,i.stock_uom,'') ORDER BY p.modified DESC LIMIT 1),
-      (SELECT p.price_list_rate * COALESCE(c.conversion_factor, CASE WHEN COALESCE(b.uom,i.stock_uom)=i.stock_uom THEN 1 END, 1) FROM pos_item_prices p WHERE p.item_code=i.item_code AND COALESCE(p.uom,'')=COALESCE(i.stock_uom,'') ORDER BY p.modified DESC LIMIT 1)
+      (SELECT p.price_list_rate FROM pos_item_prices p WHERE p.item_code=i.item_code AND p.price_list=@priceList AND COALESCE(p.uom,'')=COALESCE(b.uom,i.stock_uom,'') ORDER BY p.modified DESC LIMIT 1),
+      (SELECT p.price_list_rate * COALESCE(c.conversion_factor, CASE WHEN COALESCE(b.uom,i.stock_uom)=i.stock_uom THEN 1 END, 1) FROM pos_item_prices p WHERE p.item_code=i.item_code AND p.price_list=@priceList AND COALESCE(p.uom,'')=COALESCE(i.stock_uom,'') ORDER BY p.modified DESC LIMIT 1)
     ) sellingPrice,
     COALESCE(
-      (SELECT p.currency FROM pos_item_prices p WHERE p.item_code=i.item_code AND COALESCE(p.uom,'')=COALESCE(b.uom,i.stock_uom,'') ORDER BY p.modified DESC LIMIT 1),
-      (SELECT p.currency FROM pos_item_prices p WHERE p.item_code=i.item_code AND COALESCE(p.uom,'')=COALESCE(i.stock_uom,'') ORDER BY p.modified DESC LIMIT 1)
+      (SELECT p.currency FROM pos_item_prices p WHERE p.item_code=i.item_code AND p.price_list=@priceList AND COALESCE(p.uom,'')=COALESCE(b.uom,i.stock_uom,'') ORDER BY p.modified DESC LIMIT 1),
+      (SELECT p.currency FROM pos_item_prices p WHERE p.item_code=i.item_code AND p.price_list=@priceList AND COALESCE(p.uom,'')=COALESCE(i.stock_uom,'') ORDER BY p.modified DESC LIMIT 1)
     ) currency,
     s.actual_qty actualStock, s.warehouse warehouse, f.custom_mrp mrp
     FROM pos_items i
-    LEFT JOIN pos_item_barcodes b ON b.parent=i.item_code AND b.barcode=?
+    LEFT JOIN pos_item_barcodes b ON b.parent=i.item_code AND b.barcode=@query
     LEFT JOIN pos_item_uom_conversions c ON c.parent=i.item_code AND c.uom=COALESCE(b.uom,i.stock_uom)
-    LEFT JOIN pos_item_stock s ON s.item_code=i.item_code AND s.warehouse=?
+    LEFT JOIN pos_item_stock s ON s.item_code=i.item_code AND s.warehouse=@warehouse
     LEFT JOIN pos_fbr_item_config f ON f.item_code=i.item_code
-    WHERE i.is_sales_item=1 AND i.disabled=0 AND (i.item_code LIKE ? OR i.item_name LIKE ? OR b.barcode IS NOT NULL)
-    ORDER BY CASE WHEN i.item_code=? THEN 0 ELSE 1 END, i.item_name LIMIT 50`).all(query, warehouse, `%${query}%`, `%${query}%`, query) as CatalogSearchResult[];
+    WHERE i.is_sales_item=1 AND i.disabled=0 AND (i.item_code LIKE @likeQuery OR i.item_name LIKE @likeQuery OR b.barcode IS NOT NULL)
+    ORDER BY CASE WHEN i.item_code=@query THEN 0 ELSE 1 END, i.item_name LIMIT 50`)
+    .all({ query, warehouse, priceList, likeQuery: `%${query}%` }) as CatalogSearchResult[];
 }
 
-export function lookupCatalog(query: string, warehouse: string): { exact: CatalogSearchResult | null; results: CatalogSearchResult[] } {
+export function lookupCatalog(query: string, warehouse: string, priceList: string): { exact: CatalogSearchResult | null; results: CatalogSearchResult[] } {
   if (!database || !query.trim()) return { exact: null, results: [] };
   const base = `SELECT i.item_code itemCode,i.item_name itemName,b.barcode barcode,COALESCE(b.uom,i.stock_uom) uom,
     COALESCE(c.conversion_factor, CASE WHEN COALESCE(b.uom,i.stock_uom)=i.stock_uom THEN 1 END, 1) conversionFactor,
     COALESCE(
-      (SELECT p.price_list_rate FROM pos_item_prices p WHERE p.item_code=i.item_code AND COALESCE(p.uom,'')=COALESCE(b.uom,i.stock_uom,'') ORDER BY p.modified DESC LIMIT 1),
-      (SELECT p.price_list_rate * COALESCE(c.conversion_factor, CASE WHEN COALESCE(b.uom,i.stock_uom)=i.stock_uom THEN 1 END, 1) FROM pos_item_prices p WHERE p.item_code=i.item_code AND COALESCE(p.uom,'')=COALESCE(i.stock_uom,'') ORDER BY p.modified DESC LIMIT 1)
+      (SELECT p.price_list_rate FROM pos_item_prices p WHERE p.item_code=i.item_code AND p.price_list=@priceList AND COALESCE(p.uom,'')=COALESCE(b.uom,i.stock_uom,'') ORDER BY p.modified DESC LIMIT 1),
+      (SELECT p.price_list_rate * COALESCE(c.conversion_factor, CASE WHEN COALESCE(b.uom,i.stock_uom)=i.stock_uom THEN 1 END, 1) FROM pos_item_prices p WHERE p.item_code=i.item_code AND p.price_list=@priceList AND COALESCE(p.uom,'')=COALESCE(i.stock_uom,'') ORDER BY p.modified DESC LIMIT 1)
     ) sellingPrice,
     COALESCE(
-      (SELECT p.currency FROM pos_item_prices p WHERE p.item_code=i.item_code AND COALESCE(p.uom,'')=COALESCE(b.uom,i.stock_uom,'') ORDER BY p.modified DESC LIMIT 1),
-      (SELECT p.currency FROM pos_item_prices p WHERE p.item_code=i.item_code AND COALESCE(p.uom,'')=COALESCE(i.stock_uom,'') ORDER BY p.modified DESC LIMIT 1)
+      (SELECT p.currency FROM pos_item_prices p WHERE p.item_code=i.item_code AND p.price_list=@priceList AND COALESCE(p.uom,'')=COALESCE(b.uom,i.stock_uom,'') ORDER BY p.modified DESC LIMIT 1),
+      (SELECT p.currency FROM pos_item_prices p WHERE p.item_code=i.item_code AND p.price_list=@priceList AND COALESCE(p.uom,'')=COALESCE(i.stock_uom,'') ORDER BY p.modified DESC LIMIT 1)
     ) currency,
-    s.actual_qty actualStock,s.warehouse warehouse,f.custom_mrp mrp FROM pos_items i LEFT JOIN pos_item_stock s ON s.item_code=i.item_code AND s.warehouse=? LEFT JOIN pos_item_barcodes b ON b.parent=i.item_code AND b.barcode=? LEFT JOIN pos_item_uom_conversions c ON c.parent=i.item_code AND c.uom=COALESCE(b.uom,i.stock_uom) LEFT JOIN pos_fbr_item_config f ON f.item_code=i.item_code WHERE i.is_sales_item=1 AND i.disabled=0`;
-  const barcode = database.prepare(`${base} AND b.barcode=? LIMIT 1`).get(warehouse, query, query) as CatalogSearchResult | undefined;
+    s.actual_qty actualStock,s.warehouse warehouse,f.custom_mrp mrp FROM pos_items i LEFT JOIN pos_item_stock s ON s.item_code=i.item_code AND s.warehouse=@warehouse LEFT JOIN pos_item_barcodes b ON b.parent=i.item_code AND b.barcode=@query LEFT JOIN pos_item_uom_conversions c ON c.parent=i.item_code AND c.uom=COALESCE(b.uom,i.stock_uom) LEFT JOIN pos_fbr_item_config f ON f.item_code=i.item_code WHERE i.is_sales_item=1 AND i.disabled=0`;
+  const barcode = database.prepare(`${base} AND b.barcode=@query LIMIT 1`).get({ query, warehouse, priceList }) as CatalogSearchResult | undefined;
   if (barcode) return { exact: barcode, results: [] };
-  const code = database.prepare(`${base} AND i.item_code=? LIMIT 1`).get(warehouse, query, query) as CatalogSearchResult | undefined;
-  return code ? { exact: code, results: [] } : { exact: null, results: searchCatalog(query, warehouse) };
+  const code = database.prepare(`${base} AND i.item_code=@query LIMIT 1`).get({ query, warehouse, priceList }) as CatalogSearchResult | undefined;
+  return code ? { exact: code, results: [] } : { exact: null, results: searchCatalog(query, warehouse, priceList) };
 }
 
 export function cachePosSession(openingEntry: string, posProfile: string, user: string, session: Record<string, unknown>, syncedAt: string): void {

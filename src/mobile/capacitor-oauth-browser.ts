@@ -19,7 +19,7 @@ export const capacitorOAuthBrowser: OAuthAuthorizationBrowser = {
       });
       const timeout = window.setTimeout(() => void finish(undefined, new Error("OAuth login timed out.")), 5 * 60_000);
       try { await Browser.open({ url, presentationStyle: "popover" }); }
-      catch (error) { await finish(undefined, error instanceof Error ? error : new Error("Unable to open ERPNext login.")); }
+      catch (error) { await finish(undefined, error instanceof Error ? error : new Error("Unable to open ERP login.")); }
     });
   }
 };

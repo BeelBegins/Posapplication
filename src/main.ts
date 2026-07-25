@@ -106,6 +106,12 @@ function restoreMainWindowFocus(): boolean {
 // one display is connected, since not every terminal has this hardware yet.
 type CustomerDisplayResult = "opened-fullscreen" | "opened-windowed" | "focused" | "no-second-display";
 
+function sendCustomerDisplayTheme(theme = "warm-market"): void {
+  const win = customerDisplayWindow;
+  if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return;
+  win.webContents.send("customer-display:theme", theme || "warm-market");
+}
+
 // `forceWindowed` is only ever honored when there's genuinely no second monitor
 // — it's the escape hatch for testing/previewing the display on a single-screen
 // dev machine (see the "Preview Customer Display" Settings button). When a real
@@ -113,6 +119,7 @@ type CustomerDisplayResult = "opened-fullscreen" | "opened-windowed" | "focused"
 // so the preview affordance can never accidentally shadow the real hardware.
 function createCustomerDisplayWindow(options: { forceWindowed?: boolean } = {}): CustomerDisplayResult {
   if (customerDisplayWindow && !customerDisplayWindow.isDestroyed()) {
+    sendCustomerDisplayTheme(loadSettings().colorTheme);
     customerDisplayWindow.focus();
     return "focused";
   }
@@ -155,6 +162,9 @@ function createCustomerDisplayWindow(options: { forceWindowed?: boolean } = {}):
     }
   });
   customerDisplayWindow = win;
+  win.webContents.once("did-finish-load", () => {
+    sendCustomerDisplayTheme(loadSettings().colorTheme);
+  });
   win.loadFile(path.join(__dirname, "renderer", "customer-display.html"));
   win.once("ready-to-show", () => {
     if (win.isDestroyed()) return;
@@ -174,7 +184,7 @@ function missingCashierLoginEndpointMessage(): string {
   return "Cashier login requires server endpoint aimatic.offline_pos.api.pos_cashier_login";
 }
 
-// Terminal setup: exchange an ERPNext username+password for that user's api_key/api_secret,
+// Terminal setup: exchange an ERP username+password for that user's api_key/api_secret,
 // so first-run setup never requires copying keys out of Frappe's User settings. No apiKey/apiSecret
 // is used or required for this call (unlike posCashierLogin) — the endpoint is allow_guest on the
 // server, gated by the password check itself.
@@ -183,9 +193,9 @@ async function provisionTerminalCredentials(input: Record<string, unknown>): Pro
   const username = textValue(input, "username");
   const password = textValue(input, "password");
   const empty = { success: false, apiKey: "", apiSecret: "", error: null as string | null };
-  if (!erpnextUrl || !username || !password) return { ...empty, error: "ERPNext URL, username, and password are required." };
+  if (!erpnextUrl || !username || !password) return { ...empty, error: "ERP URL, username, and password are required." };
   let base: URL;
-  try { base = new URL(normalizeErpnextUrl(erpnextUrl)); } catch { return { ...empty, error: "ERPNext URL is invalid." }; }
+  try { base = new URL(normalizeErpnextUrl(erpnextUrl)); } catch { return { ...empty, error: "ERP URL is invalid." }; }
   if (base.protocol !== "https:") return { ...empty, error: "HTTPS is required for terminal credential provisioning." };
   const endpoint = `${base.toString().replace(/\/+$/, "")}/api/method/aimatic.offline_pos.api.provision_terminal_credentials`;
   try {
@@ -204,7 +214,7 @@ async function provisionTerminalCredentials(input: Record<string, unknown>): Pro
     if (!apiKey || !apiSecret) return { ...empty, error: "Server returned no credentials." };
     return { success: true, apiKey, apiSecret, error: null };
   } catch (error) {
-    return { ...empty, error: error instanceof Error ? error.message : "Unable to reach ERPNext server." };
+    return { ...empty, error: error instanceof Error ? error.message : "Unable to reach ERP server." };
   }
 }
 
@@ -224,7 +234,7 @@ async function posCashierLogin(input: Record<string, unknown>): Promise<CashierL
     return { ...empty, error: "This POS Profile has no Terminal ID assigned on the server yet. Sync POS Profile or contact your administrator." };
   }
   let base: URL;
-  try { base = new URL(normalizeErpnextUrl(settings.erpnextUrl)); } catch { return { ...empty, error: "ERPNext URL is invalid." }; }
+  try { base = new URL(normalizeErpnextUrl(settings.erpnextUrl)); } catch { return { ...empty, error: "ERP URL is invalid." }; }
   const endpoint = `${base.toString().replace(/\/+$/, "")}/api/method/aimatic.offline_pos.api.pos_cashier_login`;
   try {
     const response = await fetch(endpoint, {
@@ -498,7 +508,7 @@ function validatePinFormat(pin: string): string | null {
 function supervisorAuthNetworkError(error: unknown): string {
   const message = error instanceof Error ? error.message : "network error";
   if (/certificate|cert_|ssl|tls/i.test(message)) {
-    return `Supervisor authorization failed: HTTPS certificate problem. Check SSL certificate validity for ERPNext URL. Details: ${message}`;
+    return `Supervisor authorization failed: HTTPS certificate problem. Check SSL certificate validity for ERP URL. Details: ${message}`;
   }
   return `Supervisor authorization failed: ${message}`;
 }
@@ -519,10 +529,10 @@ async function authorizePosAdminAction(input: Record<string, unknown>): Promise<
   }
   let base: URL;
   const normalizedUrl = normalizeErpnextUrl(settings.erpnextUrl);
-  try { base = new URL(normalizedUrl); } catch { return { ok: false, token: "", error: "ERPNext URL is invalid." }; }
-  console.info("[AdminAuth] ERPNext URL diagnostic", { normalizedUrl: base.toString().replace(/\/+$/, ""), protocol: base.protocol });
+  try { base = new URL(normalizedUrl); } catch { return { ok: false, token: "", error: "ERP URL is invalid." }; }
+  console.info("[AdminAuth] ERP URL diagnostic", { normalizedUrl: base.toString().replace(/\/+$/, ""), protocol: base.protocol });
   if (base.protocol !== "https:" && !ALLOW_HTTP_SUPERVISOR_AUTH) {
-    return { ok: false, token: "", error: "Supervisor authorization requires HTTPS ERPNext URL." };
+    return { ok: false, token: "", error: "Supervisor authorization requires HTTPS ERP URL." };
   }
   const endpoint = `${base.toString().replace(/\/+$/, "")}/api/method/aimatic.offline_pos.api.authorize_pos_admin_action`;
   try {
@@ -539,7 +549,7 @@ async function authorizePosAdminAction(input: Record<string, unknown>): Promise<
     if (!response.ok || !token) {
       const serverError = textValue(payload, "error") || textValue(payload, "message") || textValue(asRecord(parsed) ?? {}, "exception") || textValue(asRecord(parsed) ?? {}, "_server_messages");
       if (base.protocol === "https:" && /https is required|non-https|not https/i.test(serverError)) {
-        return { ok: false, token: "", error: "Server rejected supervisor authorization as non-HTTPS. Check ERPNext proxy/HTTPS forwarding configuration." };
+        return { ok: false, token: "", error: "Server rejected supervisor authorization as non-HTTPS. Check ERP proxy/HTTPS forwarding configuration." };
       }
       return { ok: false, token: "", error: serverError ? `Supervisor authorization failed: ${serverError}` : "Supervisor authorization failed." };
     }
@@ -570,9 +580,9 @@ async function consumePosAdminAction(input: Record<string, unknown>): Promise<{ 
   if (DEV_ADMIN_AUTH_BYPASS) return { ok: true, error: null };
   let base: URL;
   const normalizedUrl = normalizeErpnextUrl(settings.erpnextUrl);
-  try { base = new URL(normalizedUrl); } catch { return { ok: false, error: "ERPNext URL is invalid." }; }
+  try { base = new URL(normalizedUrl); } catch { return { ok: false, error: "ERP URL is invalid." }; }
   if (base.protocol !== "https:" && !ALLOW_HTTP_SUPERVISOR_AUTH) {
-    return { ok: false, error: "Supervisor authorization requires HTTPS ERPNext URL." };
+    return { ok: false, error: "Supervisor authorization requires HTTPS ERP URL." };
   }
   const endpoint = `${base.toString().replace(/\/+$/, "")}/api/method/aimatic.offline_pos.api.consume_pos_admin_authorization`;
   try {
@@ -811,6 +821,7 @@ app.whenReady().then(() => {
     const siteChanged = previous.erpnextUrl !== normalizeErpnextUrl(settings.erpnextUrl)
       || (Boolean(settings.apiKey) && previous.apiKey !== settings.apiKey);
     if (siteChanged) clearSiteScopedCache();
+    sendCustomerDisplayTheme(loadSettings().colorTheme);
     return result;
   });
   ipcMain.handle("settings:load", () => getSettingsForRenderer());
@@ -862,8 +873,8 @@ app.whenReady().then(() => {
   ipcMain.handle("catalog:get-totals", () => getCatalogTotals());
   ipcMain.handle("fbr:sync", (_event, mode) => core.syncFbrConfig(mode === "full" ? "full" : "auto"));
   ipcMain.handle("fbr:state", () => getFbrSyncState());
-  ipcMain.handle("catalog:search", (_event, query) => searchCatalog(String(query), textValue(asRecord(getPosBootstrap(loadSettings().posProfile)?.pos_profile), "warehouse")));
-  ipcMain.handle("catalog:lookup", (_event, query) => lookupCatalog(String(query), textValue(asRecord(getPosBootstrap(loadSettings().posProfile)?.pos_profile), "warehouse")));
+  ipcMain.handle("catalog:search", (_event, query) => { const profile = asRecord(getPosBootstrap(loadSettings().posProfile)?.pos_profile); return searchCatalog(String(query), textValue(profile, "warehouse"), textValue(profile, "selling_price_list")); });
+  ipcMain.handle("catalog:lookup", (_event, query) => { const profile = asRecord(getPosBootstrap(loadSettings().posProfile)?.pos_profile); return lookupCatalog(String(query), textValue(profile, "warehouse"), textValue(profile, "selling_price_list")); });
   ipcMain.handle("cart:load", () => { const id = core.getCartIdentity(); return loadCartState(id.hardwareId, id.openingEntry); });
   ipcMain.handle("cart:save", (_event, lines) => { const id = core.getCartIdentity(); saveCartState(id.hardwareId, id.openingEntry, Array.isArray(lines) ? lines : []); });
   ipcMain.on("customer-display:cart-update", (_event, payload) => {

@@ -28,7 +28,7 @@ after(() => {
 test("initDatabase runs the schema baseline and every migration to the latest version", () => {
   const status = db.getDatabaseStatus();
   assert.equal(status.isReady, true);
-  assert.equal(status.schemaVersion, "3");
+  assert.equal(status.schemaVersion, "4");
 });
 
 test("initDatabase is idempotent — calling it again does not throw or reset state", () => {

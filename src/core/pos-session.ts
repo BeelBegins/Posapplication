@@ -151,7 +151,7 @@ export function createPosSessionCore(deps: PosCoreDeps) {
   async function getActivePosSession(input: Record<string, unknown> = {}): Promise<{ success: boolean; session: Record<string, unknown> | null; error: string | null; diagnosticReason: string; apiUser: string; requestedPosProfile: string; entries: Record<string, unknown>[] }> {
     const s = deps.db.loadSettings();
     const cashierUser = textValue(input, "cashier_user");
-    if (!hasUsableCredentials(deps, s) || !s.erpnextUrl) return { success: false, session: null, error: "Online connection required to load POS session.", diagnosticReason: "Missing ERPNext URL or credentials", apiUser: "", requestedPosProfile: s.posProfile, entries: [] };
+    if (!hasUsableCredentials(deps, s) || !s.erpnextUrl) return { success: false, session: null, error: "Online connection required to load POS session.", diagnosticReason: "Missing ERP URL or credentials", apiUser: "", requestedPosProfile: s.posProfile, entries: [] };
     if (!cashierUser) return { success: false, session: null, error: "Cashier user is required to load POS session.", diagnosticReason: "Cashier user missing", apiUser: "", requestedPosProfile: s.posProfile, entries: [] };
     try {
       const base = new URL(s.erpnextUrl).toString().replace(/\/+$/, "");

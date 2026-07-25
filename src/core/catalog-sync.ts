@@ -70,7 +70,7 @@ export function createCatalogSyncCore(deps: PosCoreDeps, http: ReturnType<typeof
 
   async function syncCustomers(mode: "auto" | "full" = "auto"): Promise<{ success: boolean; state: ReturnType<typeof deps.db.getCustomerSyncState>; error: string | null }> {
     const settings = deps.db.loadSettings();
-    if (!hasUsableCredentials(deps, settings) || !settings.erpnextUrl) return { success: false, state: deps.db.getCustomerSyncState(), error: "ERPNext URL and API credentials are required." };
+    if (!hasUsableCredentials(deps, settings) || !settings.erpnextUrl) return { success: false, state: deps.db.getCustomerSyncState(), error: "ERP URL and API credentials are required." };
     try {
       const base = new URL(settings.erpnextUrl).toString().replace(/\/+$/, "");
       const cursor = deps.db.getMeta("customers_last_sync") ?? "";
@@ -142,7 +142,7 @@ export function createCatalogSyncCore(deps: PosCoreDeps, http: ReturnType<typeof
       }
       const body = await response.json() as { message?: unknown };
       const customer = asRecord(body.message);
-      if (!customer) return { customer: null, error: "ERPNext returned no Customer document." };
+      if (!customer) return { customer: null, error: "ERP returned no Customer document." };
       deps.db.cacheCustomer(textValue(customer, "name"), customer);
       deps.db.upsertCustomers([customer]);
       return { customer, error: null };
@@ -191,7 +191,7 @@ export function createCatalogSyncCore(deps: PosCoreDeps, http: ReturnType<typeof
       }
       const totals = { items: items.length, prices: prices.length, barcodes: barcodes.length, stockRows: stock.length, lastSynced: new Date().toISOString() };
       // Full → DELETE+INSERT (replace) for barcodes/conversions; delta → UPSERT only (no destructive replace).
-      deps.db.upsertCatalog({ items, prices, stock, barcodes, conversions, totals, replaceBarcodes: doFull && !barcodeError, replaceConversions: doFull && !conversionError });
+      deps.db.upsertCatalog({ items, prices, stock, barcodes, conversions, totals, replaceBarcodes: doFull && !barcodeError, replaceConversions: doFull && !conversionError, priceList });
       // Advance watermarks from the server-provided max(modified) — never regress on an empty delta or a failed fetch.
       const itemsWatermark = maxModified(items, prices, stock, conversionError ? [] : conversions);
       if (itemsWatermark) deps.db.setMeta("items_last_sync", itemsWatermark);

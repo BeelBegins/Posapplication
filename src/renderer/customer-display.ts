@@ -92,8 +92,11 @@ function renderCustomerDisplay(payload: CustomerDisplayPayload): void {
 
 type CustomerDisplayBridge = {
   onCustomerDisplayUpdate: (callback: (payload: CustomerDisplayPayload) => void) => void;
+  onCustomerDisplayTheme: (callback: (theme: string) => void) => void;
 };
 
-(window as unknown as { posAPI: CustomerDisplayBridge }).posAPI.onCustomerDisplayUpdate((payload) =>
-  renderCustomerDisplay(payload)
-);
+const bridge = (window as unknown as { posAPI: CustomerDisplayBridge }).posAPI;
+bridge.onCustomerDisplayTheme((theme) => {
+  document.documentElement.dataset.theme = theme || "warm-market";
+});
+bridge.onCustomerDisplayUpdate((payload) => renderCustomerDisplay(payload));
