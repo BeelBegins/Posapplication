@@ -49,8 +49,56 @@ import { createPlatformService } from "./platform/platform-service";
 
 let mainWindowRef: BrowserWindow | null = null;
 let customerDisplayWindow: BrowserWindow | null = null;
+let focusRestoreGeneration = 0;
 const core = createPosCore({ db: database, fetch });
 const runtimeInfo = createPlatformService("electron", "pos");
+
+interface MainWindowState {
+  fullscreen: boolean;
+  maximized: boolean;
+  minimized: boolean;
+}
+
+function getMainWindowState(win = mainWindowRef): MainWindowState {
+  return {
+    fullscreen: Boolean(win && !win.isDestroyed() && win.isFullScreen()),
+    maximized: Boolean(win && !win.isDestroyed() && win.isMaximized()),
+    minimized: Boolean(win && !win.isDestroyed() && win.isMinimized())
+  };
+}
+
+function sendMainWindowState(win = mainWindowRef): void {
+  if (!win || win.isDestroyed()) return;
+  win.webContents.send("window:state", getMainWindowState(win));
+}
+
+// Restore the actual Windows foreground window, then keep the temporary
+// always-on-top promotion alive long enough for the shell to process it.
+// Dropping it synchronously (the previous implementation) raced Windows'
+// foreground activation and was why native print/system dialogs could still
+// leave the POS behind another window until the cashier pressed Alt+Tab.
+function restoreMainWindowFocus(): boolean {
+  const win = mainWindowRef;
+  if (!win || win.isDestroyed()) return false;
+  const generation = ++focusRestoreGeneration;
+  if (win.isMinimized()) win.restore();
+  app.focus();
+  win.setAlwaysOnTop(true);
+  win.show();
+  win.moveTop();
+  win.focus();
+  win.webContents.focus();
+  win.webContents.send("pos:focus-scanner");
+  setTimeout(() => {
+    if (generation !== focusRestoreGeneration || win.isDestroyed()) return;
+    win.setAlwaysOnTop(false);
+    app.focus();
+    win.focus();
+    win.webContents.focus();
+    win.webContents.send("pos:focus-scanner");
+  }, 250);
+  return true;
+}
 
 // Second-monitor, customer-facing display. Greenfield: the app is single-window
 // otherwise (the only other BrowserWindow is a hidden print-rendering one, not
@@ -587,10 +635,15 @@ async function printReceiptHtml(html: string): Promise<{ success: boolean; error
   return new Promise((resolve) => {
     const printWindow = new BrowserWindow({ show: false, webPreferences: { contextIsolation: true, nodeIntegration: false } });
     let settled = false;
+    let openedNativeDialog = false;
     const finish = (result: { success: boolean; error: string | null }) => {
       if (settled) return;
       settled = true;
       if (!printWindow.isDestroyed()) printWindow.close();
+      // A non-silent print uses a Windows-owned system dialog attached to the
+      // hidden print window. Return foreground/input focus to the cashier
+      // window after that temporary owner closes.
+      if (openedNativeDialog) setTimeout(() => restoreMainWindowFocus(), 0);
       resolve(result);
     };
     printWindow.webContents.once("did-finish-load", () => {
@@ -607,6 +660,7 @@ async function printReceiptHtml(html: string): Promise<{ success: boolean; error
       const printOptions: Electron.WebContentsPrintOptions = receiptPrinter
         ? { silent: true, printBackground: true, scaleFactor: 100, deviceName: receiptPrinter }
         : { silent: false, printBackground: true, scaleFactor: 100 };
+      openedNativeDialog = !receiptPrinter;
       printWindow.webContents.print(printOptions, (ok, failureReason) => {
         finish({ success: ok, error: ok ? null : (failureReason || "Printing was cancelled.") });
       });
@@ -700,7 +754,15 @@ function createMainWindow(): void {
     if (mainWindow.isDestroyed()) return;
     mainWindow.setFullScreen(true);
     mainWindow.show();
+    sendMainWindowState(mainWindow);
   });
+  const notifyWindowState = (): void => sendMainWindowState(mainWindow);
+  mainWindow.on("maximize", notifyWindowState);
+  mainWindow.on("unmaximize", notifyWindowState);
+  mainWindow.on("minimize", notifyWindowState);
+  mainWindow.on("restore", notifyWindowState);
+  mainWindow.on("enter-full-screen", notifyWindowState);
+  mainWindow.on("leave-full-screen", notifyWindowState);
   mainWindow.on("closed", () => {
     if (mainWindowRef === mainWindow) mainWindowRef = null;
     // The app is meant to quit when its main window closes (see window-all-closed
@@ -759,22 +821,27 @@ app.whenReady().then(() => {
     const printers = await win.webContents.getPrintersAsync();
     return printers.map((p) => ({ name: p.name, displayName: p.displayName || p.name }));
   });
-  ipcMain.handle("window:focus-pos", () => {
+  ipcMain.handle("window:focus-pos", () => restoreMainWindowFocus());
+  ipcMain.handle("window:get-state", () => getMainWindowState());
+  ipcMain.handle("window:minimize", () => {
     const win = mainWindowRef;
     if (!win || win.isDestroyed()) return false;
-    // A bare win.focus() is frequently not enough to reclaim OS-level
-    // foreground status on Windows right after a native confirm()/alert()
-    // dialog closes - Windows restricts SetForegroundWindow calls from a
-    // background process. Restoring if minimized, then briefly toggling
-    // always-on-top, is the standard workaround to force the window back to
-    // the front instead of leaving the cashier to Alt+Tab manually.
-    if (win.isMinimized()) win.restore();
-    win.setAlwaysOnTop(true);
-    win.show();
-    win.focus();
-    win.setAlwaysOnTop(false);
-    win.webContents.focus();
-    win.webContents.send("pos:focus-scanner");
+    win.minimize();
+    return true;
+  });
+  ipcMain.handle("window:toggle-maximize", () => {
+    const win = mainWindowRef;
+    if (!win || win.isDestroyed()) return getMainWindowState(null);
+    // The cashier shell launches in true fullscreen and deliberately remains
+    // non-resizable. Treat the conventional maximize caption as a fullscreen
+    // toggle so it reliably restores/maximizes this frameless kiosk window.
+    win.setFullScreen(!win.isFullScreen());
+    return getMainWindowState(win);
+  });
+  ipcMain.handle("window:close", () => {
+    const win = mainWindowRef;
+    if (!win || win.isDestroyed()) return false;
+    win.close();
     return true;
   });
   ipcMain.handle("server:test", () => core.testServerReachability());

@@ -37,6 +37,28 @@ test("POS desktop routes and cashier shortcuts remain intact", () => {
   for (const shortcut of ["F6", "F7", "F9"]) assert.match(renderer, new RegExp(shortcut));
 });
 
+test("Electron window controls and POS dialogs preserve desktop focus", () => {
+  const html = source("src/renderer/index.html");
+  const renderer = source("src/renderer/renderer.ts");
+  const styles = source("src/renderer/styles.css");
+  const main = source("src/main.ts");
+  const preload = source("src/preload.ts");
+  const mobile = source("src/mobile/mobile.ts");
+  for (const id of ["window-minimize", "window-maximize", "window-close", "app-message-dialog"]) {
+    assert.match(html, new RegExp(`id="${id}"`));
+  }
+  for (const channel of ["window:get-state", "window:minimize", "window:toggle-maximize", "window:close"]) {
+    assert.match(main, new RegExp(channel));
+    assert.match(preload, new RegExp(channel));
+  }
+  const executableRenderer = renderer.replace(/\/\*[^]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+  assert.doesNotMatch(executableRenderer, /\b(?:window\.)?(?:alert|confirm)\s*\(/);
+  assert.match(renderer, /await appConfirm\("Clear the full cart\?"\)/);
+  assert.match(main, /openedNativeDialog.*restoreMainWindowFocus/s);
+  assert.match(styles, /html\[data-platform="electron"\] \.window-controls/);
+  assert.match(mobile, /getWindowState:async\(\)=>\(\{fullscreen:false/);
+});
+
 test("Android POS touch layout and scanner remain isolated from Electron", () => {
   const styles = source("src/renderer/styles.css");
   const mobile = source("src/mobile/mobile.ts");

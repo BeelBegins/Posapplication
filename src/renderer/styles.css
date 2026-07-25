@@ -66,6 +66,37 @@
 
 body { margin: 0; min-width: 320px; }
 .android-app body { overscroll-behavior: none; }
+.window-controls {
+  position: fixed;
+  top: 4px;
+  right: 5px;
+  z-index: 1000;
+  display: none;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid rgb(255 255 255 / 14%);
+  border-radius: 6px;
+  background: var(--color-header);
+  box-shadow: 0 3px 12px rgb(0 0 0 / 18%);
+  -webkit-app-region: no-drag;
+}
+html[data-platform="electron"] .window-controls { display: flex; }
+.window-controls button {
+  width: 30px;
+  height: 24px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--color-header-contrast);
+  font: 700 14px/1 "Segoe UI Symbol", "Segoe UI", sans-serif;
+}
+.window-controls button:hover,
+.window-controls button:focus-visible { background: rgb(255 255 255 / 14%); }
+.window-controls .window-close:hover,
+.window-controls .window-close:focus-visible { background: #c42b1c; color: #fff; }
+.window-controls button:focus-visible { outline: 2px solid var(--color-accent-on-dark); outline-offset: -2px; }
 .android-app #check-update,
 .android-app #download-update,
 .android-app #install-update,
@@ -470,7 +501,7 @@ button:disabled { cursor: wait; opacity: 0.65; }
    panes need, and once fields wrap to a second line the header's height
    becomes unpredictable. This sizing is tuned to stay a single row at
    typical cashier-station resolutions. */
-.pos-header { display: flex; align-items: center; gap: 14px; padding: 7px 16px; background: var(--color-header); color: var(--color-header-contrast); flex-wrap: wrap; row-gap: 2px; }
+.pos-header { display: flex; align-items: center; gap: 14px; padding: 7px 108px 7px 16px; background: var(--color-header); color: var(--color-header-contrast); flex-wrap: wrap; row-gap: 2px; }
 .pos-header-identity { display: flex; align-items: center; gap: 12px; margin-right: auto; flex-wrap: wrap; row-gap: 2px; }
 .pos-header-status { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; row-gap: 2px; }
 .pos-header-actions { display: flex; align-items: center; gap: 6px; }
@@ -552,6 +583,10 @@ button:disabled { cursor: wait; opacity: 0.65; }
 .shortcut-bar { padding: 8px 16px; background: var(--color-header); color: var(--color-accent-on-dark); font-size:.76rem; }
 button:active { transform: translateY(1px); }
 dialog input:focus-visible,dialog select:focus-visible,dialog textarea:focus-visible { outline: 3px solid color-mix(in srgb,var(--color-accent) 55%,transparent); outline-offset: 1px; }
+.app-message-dialog { width: min(480px, 90vw); }
+.app-message-dialog h3 { margin: 0 0 12px; }
+.app-message-dialog #app-message-text { margin: 0 0 18px; white-space: pre-wrap; line-height: 1.5; color: var(--color-text); }
+.app-message-dialog .form-actions { justify-content: flex-end; }
 
 @media (max-width: 720px) {
   .app-shell { padding: 48px 24px; }

@@ -66,6 +66,7 @@ async function authorizeAdminAction(input:Record<string,unknown>) {
 const posAPI = {
   getRuntimeInfo: async()=>runtimeInfo,
   getDatabaseStatus: async()=>db.getDatabaseStatus(), focusPosWindow:async()=>true, onFocusScanner:(cb:()=>void)=>focusListeners.push(cb),
+  getWindowState:async()=>({fullscreen:false,maximized:false,minimized:false}),minimizeWindow:async()=>false,toggleMaximizeWindow:async()=>({fullscreen:false,maximized:false,minimized:false}),closeWindow:async()=>false,onWindowState:(_cb:(state:{fullscreen:boolean;maximized:boolean;minimized:boolean})=>void)=>{},
   saveSettings:async(s:Parameters<typeof db.saveSettings>[0])=>db.saveSettings(s),loadSettings:async()=>db.getSettingsForRenderer(),listPrinters:async()=>[{name:"android",displayName:"Android Print Service"}],
   testServer:()=>core.testServerReachability(),testLogin:()=>core.testApiAuthentication(),cashierLogin,cashierOfflineLogin,getRememberedCashiers:async()=>remembered(),
   loadPosProfiles:()=>core.loadAvailablePosProfiles(),loadPosProfile:()=>core.loadPosProfile(),getPosProfileCacheStatus:async()=>db.getPosProfileCacheStatus(),
