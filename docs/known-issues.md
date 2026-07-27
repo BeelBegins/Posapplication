@@ -5,7 +5,7 @@ Preserved from private agent memory on 2026-07-28. These issues were explicitly 
 ---
 name: project-posapplication-known-issues
 description: "Deferred permission/shift-boundary bugs found while manually testing Posapplication v2.1.3, explicitly not fixed yet"
-metadata: 
+metadata:
   node_type: memory
   type: project
   originSessionId: 42145cd7-4192-474b-81bc-1b0a2256448e
