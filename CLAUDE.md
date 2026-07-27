@@ -65,6 +65,8 @@ Canonical focused docs:
 - `docs/mobile-sales-phase3.md`, `docs/shopping-preparation.md`,
   `docs/restaurant-phase2.md`: product-specific behavior.
 - `docs/api-contracts.md`: client/server API contracts.
+- `docs/known-issues.md`: deferred issues requiring re-verification.
+- `docs/historical-core-extraction.md`: superseded extraction/release history.
 
 Server counterpart: `/home/nabeel/frappe-bench/apps/aimatic`. Read its scoped
 instructions and align server/client changes in the same task.
