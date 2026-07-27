@@ -1,67 +1,92 @@
-# Aimatic POS App — Claude Code Guidance
+# Posapplication development guide
 
-## Repository overview
+This is the always-loaded router for Claude and Codex. Product architecture
+and incident detail stays in task-specific skills and `docs/` so it is loaded
+only when relevant. The complete former root guide is preserved in
+`docs/ai-guidance-archive-2026-07-28.md`; its version claims are historical.
 
-**Aimatic POS App** — a shared TypeScript codebase for focused Ai Matic products backed by the `aimatic` Frappe app. Retail POS ships on Windows through Electron and on Android through Capacitor; Restaurant is an isolated waiter Capacitor product with a real ERPNext service and an explicit demo mode; Sales is a focused Capacitor product; Shopping is a focused customer Capacitor/web product using COD and Store Pickup. Retail POS is online-first with offline sale support via the existing cache and durable sale queue. Current version is tracked in `package.json` (independent from the server app's versioning).
+## Authority
 
-**ERPNext/`aimatic` is the source of truth** for final invoice calculations, stock, accounting, POS Invoice/refund submission, FBR e-invoicing submission, and loyalty/gift-voucher redemption. Electron owns only local UI/cache/offline-queue state, local receipt printing, and local PIN verification — **it must never call FBR directly**. See `docs/architecture.md` for the full runtime/data model, `docs/offline-pos-rules.md` for offline queue/PIN rules, and `docs/fbr-refund-rules.md` for FBR/refund contract details — those three files are the canonical reference; this section is only a map to them.
+Use this order when facts conflict:
 
-- Server counterpart: `~/frappe-bench/apps/aimatic` (repo `BeelBegins/aimatic`; developer guidance is in `~/frappe-bench/CLAUDE.md`), branch `master`. The client talks to it through centralized domain API modules; inspect and reuse the existing whitelisted `aimatic.offline_pos`/`aimatic.gift_voucher` surface before adding endpoints. ERPNext remains the business-rule and permission authority.
-- Key files: `src/main.ts` (Electron bootstrap, IPC handlers, all ERPNext API calls — `contextIsolation: true`, `nodeIntegration: false`), `src/preload.ts` (the *only* renderer bridge, exposes `window.posAPI`), `src/renderer/renderer.ts` (screens/routing/keyboard shortcuts), `src/db/database.ts` (versioned SQLite schema — cache, offline queue, sales history, held sales, shift history), `src/domain/fbr-calculation.ts` (local FBR *estimate* only, never final).
-- Local cache is not site-scoped (no table carries the server URL), so `main.ts`'s `settings:save` handler calls `database.ts`'s `clearSiteScopedCache()` whenever `erpnextUrl`/`apiKey` changes — otherwise a repointed terminal keeps serving the old site's cached catalog/POS Profile/cart data (see `docs/architecture.md`'s `src/db/database.ts` section for the exact table list).
-- Settings has a cosmetic, client-only `colorTheme` field (default `warm-market`; other options are CSS palette swaps applied via `document.documentElement.dataset.theme`, see `docs/architecture.md`'s "Settings And URL Handling" section) — purely UI, not server-meaningful, and untouched by `clearSiteScopedCache()`.
-- `src/db/IDatabaseService.ts` — the persistence-layer contract extracted from `database.ts`'s exports, kept purely as a type (no second implementation exists). It exists so a future non-SQLite backend (e.g. a CapacitorJS/Android port using `@capacitor-community/sqlite`) has an explicit target to implement rather than needing to reverse-engineer one from `main.ts`'s call sites. A compile-time check at the bottom of that file (`AssertCurrentModuleImplementsContract`) fails `tsc` if `database.ts`'s exports ever drift from this interface — update the interface, not the check, when that happens. `main.ts` still imports `database.ts` directly today; nothing about how it's wired changes until/unless a second backend is actually built.
-- Product/build separation is defined in `src/config/product-profiles.json` and enforced by the build scripts. Electron is POS-only. Do not put Restaurant, Sales, or Shopping screens into the POS renderer and hide them with CSS/roles. See `docs/product-architecture.md` and `docs/build-profiles.md`.
-- Shared presentational helpers live in `src/products/shared/ui.ts`: escaped status badges, loading/empty states, money formatting, and focused bottom navigation. They contain no product state or API behavior. Sales and Shopping may reuse them, but their routes and navigation remain separate.
-- `src/products/shared/ui.ts` also exports `icon(name, size?)`, a hand-drawn inline-SVG icon set (home, search, cart, grid, list, user, chevron-left, chevron-right, plus, minus, check, x, tag, truck, credit-card, map-pin, star, refresh, menu - `stroke="currentColor"`, no external asset/font/library). Added 2026-07-19 during a Shopping UI redesign to replace raw Unicode glyphs (⌂ ▦ ⌕ ▤ ▣ ● etc.) that rendered inconsistently across Android fonts. Any new product UI needing an icon should use this instead of a Unicode character or a new dependency. `emptyState`'s `icon` parameter is intentionally NOT HTML-escaped (the other three parameters still are) so it can take raw SVG markup from `icon()` - safe only because every call site passes a developer-supplied literal, never user/API-derived text.
-- Android launch orientation is profile-driven (`androidOrientation`) and currently portrait-first. Keep POS responsive rules scoped under `.android-app` so Electron desktop geometry is unchanged.
-- Platform detection and platform-specific behavior stay centralized. Electron-only IPC, printing, filesystem, updater, hardware, and keyboard behavior must never be imported by Android code; Capacitor plugins must not load during Electron startup.
-- Authentication is platform-specific behind the shared API layer: Electron keeps terminal-token credentials; Android POS has no API Key/API Secret UI and uses one-time device enrollment plus per-cashier OAuth2 Authorization Code with PKCE. Enrollment returns a random device proof (never an ERPNext API credential); only its hash is stored server-side, while the proof and OAuth tokens are stored through the native Keystore-backed `SecureStoragePlugin`. Every Android POS token exchange, refresh, and Bearer API call includes `X-Aimatic-Device-ID` and `X-Aimatic-Device-Token`. `src/api/client.ts` owns auth-mode headers and the single 401 refresh/retry path; `src/core/auth-fetch.ts` is the shared legacy request adapter. Do not add raw authorization or device-proof headers elsewhere. See `docs/android-authentication.md`.
-- Android auth entry points are `src/mobile/device-enrollment.ts`, `enrollment-qr-scanner.ts`, `oauth-pkce.ts`, `capacitor-oauth-browser.ts`, `credential-provider.ts`, and `secure-storage.ts`. Enrollment QR scanning uses the official `@capacitor/barcode-scanner`, QR-only/back-camera mode, with manual paste fallback; its native dependency requires Android minSdk 26. `capacitor.config.js` includes this large native plugin only for POS and Sales—the Shopping build must remain scanner-free. Native registration is in `android/app/src/main/java/com/beelbegins/aimaticpos/MainActivity.java`; the encrypted storage bridge is `SecureStoragePlugin.java`; the OAuth callback is `com.beelbegins.aimaticpos://oauth/callback`. Pre-production enrollment records that predate device proof are discarded and must be enrolled again.
-- Android POS keeps the existing application-storage JSON adapter, but stores the large synced catalogue in a separate native file from carts, payments, sessions, and queue state. Barcode, price, and UOM lookups use in-memory indexes. Never recombine them: serializing and `fsync`ing the full catalogue on every scan blocks the Android WebView. Existing single-file data migrates automatically on first launch.
-- Shopping code lives under `src/products/shopping/`. Its auth accepts only a distinct customer OAuth `customer-session`; it must never accept terminal credentials, employee sessions, generic Resource API access, costs, purchasing, accounts, or administrative data. It calls only `aimatic.shopping.api`, exposes only explicitly enabled `Shopping Product` rows, and supports signed quotes plus idempotent Sales Orders for Cash on Delivery / Store Pickup. After standard Website User signup, enabled self-registration may create a new Customer and `portal_users` link; it never claims an existing Customer by email/mobile/name. Android tokens use Keystore storage and callback `com.beelbegins.aimaticshopping://oauth/callback`; browser tokens use session storage and an exact configured HTTPS callback. `npm run build:shopping:web` produces the deployable PWA under `dist-web/shopping`. See `docs/shopping-preparation.md`.
-- Sales code lives under `src/products/sales/`, uses `src/api/sales-orders.ts`, and calls only `aimatic.mobile_sales.api`. It uses a distinct public OAuth PKCE client, accepts no API key/secret or client-authoritative pricing/credit/stock values, keeps stable request IDs for offline retries, and remains Capacitor-only. Company/Warehouse defaults work without an Ai Matic Branch; when Branch management is configured, it remains an optional stricter layer. If multiple warehouses exist without a default, login must return the choices and require explicit selection before customer/item calls rather than guessing or failing before the UI loads. Item search includes item code/name, category, and brand. Fast Order (default) and Cards are two views of the same draft: both expose only Item-assigned UOMs with positive conversion factors, show stock-UOM conversion, and preserve cart state when switching. Fast Order keeps UOM, stock, direct quantity controls, and line estimate in one dense row; its ambient sync strip is derived from local queue state and last successful server contact, not a separate API. Order Again uses permission-filtered submitted orders, creates a fresh stable request ID, and refreshes customer context plus every item/UOM against ERPNext before online review; cached history may seed an offline draft but never confirms pricing. Customer/item search history is device-local and voice search uses platform speech support with keyboard fallback. Successful creation shows an actionable confirmation that explicitly labels the ERPNext document Draft. Phase 2 customer quantity suggestions come only from permission-filtered submitted Sales Orders, are batched into item search, use `stock_qty` for UOM-comparable history, appear only after at least two orders, and convert to the currently selected valid Item UOM before filling the draft; they never bypass preview or submission validation. Customer assortments are explicit `Mobile Sales Assortment` Item/Item Group rules managed by Sales Manager or System Manager; group rules include descendants, zero enabled rules means the full permitted catalogue, the optional filter is applied again by `search_items`, and the client caches only the rule summary for offline UI continuity. See `docs/mobile-sales-phase3.md`.
-- Sales delivery rules come only from `get_customer_delivery_locations` and are cached per customer under `deliveryCacheKey`. The persisted draft carries `deliveryLocation`; customer switches clear it, while reopen/reorder/edit flows restore and refresh it. The backend must re-resolve `Mobile Sales Delivery Location`, its Customer-linked Address, and allowed weekday on preview/create/update/retry before setting the standard Sales Order shipping address. Minimum order value is a warning, not client authority. No configured rows keeps normal ERPNext address behavior.
-- Sales discounts use only the server-provided `discount_authority_percent` and ERPNext's standard Sales Order discount fields. The draft/queue persists the requested percentage and reason, never a discount amount or final total. Requests above a `Mobile Sales Discount Authority` limit create/update one `Mobile Sales Discount Approval`; managers decide through the restricted API and the backend `before_submit` hook blocks pending, rejected, or increased-above-approved requests. The manager queue is permission-filtered. Frappe Notification Log/realtime alerts are in-app/live signals, not a claim of external background push delivery.
-- Sales order actions remain distinct: View calls `get_order` and opens read-only server details; Edit is available only for an ERPNext Draft and snapshots any active local draft; Exit Edit restores that snapshot without a server mutation; Cancel Order is shown only from server `can_cancel` and calls the restricted `cancel_order` endpoint after explicit confirmation. PO reference and notes round-trip through the backend, status tabs use normalized `mobile_status`, and an approval-feed failure must not hide the ordinary order feed.
-- Sales Phase 3 promotion cards/badges come only from the restricted active-Pricing-Rule feed and are informational; ERPNext preview/create still applies the real rule. `Mobile Sales Visit` operations require Capacitor geolocation, use stable check-in/check-out request IDs, replay offline in order, and upload at most three compressed private images; the backend validates image signatures and Company scope. New Sales Order creates require a PNG customer signature plus GPS, carried in the stable draft payload and stored as one private immutable `Mobile Sales Order Proof`; any order-content change invalidates stale proof. The Profile manager dashboard is role-gated and displays only server-computed, submitted-order/Company/Warehouse-scoped aggregates. `@capacitor/geolocation` is included only in the Sales Capacitor profile; its Android coarse/fine permissions must remain declared.
-- Sales navigation is Customers / Order / My Orders / Visits / Profile; local drafts and ERPNext orders share the filtered My Orders pipeline. Shopping navigation is Home / Categories / Cart / Orders / Account. Do not add cross-product links. Both shells reserve Android safe areas, use 48px primary touch targets, keep cart/submit actions visible, and expose offline/queued/failed states instead of silently retrying. Sales stores the active draft separately from the visible queue so blank drafts never accumulate; `syncing` is explicit and recovers to `queued` after interruption, automatic reconnect retries only queued network work, and a reopened draft refreshes customer pricing/stock before review. Shopping cart revisions are monotonic, typed quantities are supported, stale search responses are ignored, and checkout selections survive quote re-renders.
-- Restaurant code lives under `src/products/restaurant/` and is released as its own APK. It authenticates through public OAuth PKCE, calls only `aimatic.restaurant.api` via `src/api/restaurant.ts`, and maps server-owned profiles, floors, tables, menu prices/stock, orders, modifiers and KOT dispatch into the waiter shell. Its explicit Explore Demo path remains isolated in `mock-data.ts`; demo state is never submitted. Navigation is Tables / Orders / Menu / Activity / Profile. Kitchen status is read-only for waiters in live mode. Transfer, split bill, scanner and POS Invoice creation remain visual/deferred actions; never connect them to generic Resource APIs. See `docs/restaurant-phase2.md`.
-- Commands: `npm run dev` (watch + run), `npm run build` (tsc + copy renderer assets), `npm run dist` / `dist:protected` (local NSIS installer build only, the latter also obfuscates via `scripts/obfuscate.cjs`), `npm run rebuild` (rebuilds `better-sqlite3` native bindings, runs automatically as `postinstall`).
-- **Real releases are built and published by CI, not locally.** `.github/workflows/build-release.yml` triggers on **every push to `main`** (no path/tag filter) and runs, in parallel after a `test` gate: a Windows job (`electron-builder --win nsis` on `windows-latest`), an Android job (matrix over all 4 products, `./gradlew assembleRelease bundleRelease` per product signed via 4 repo secrets — `ANDROID_KEYSTORE_BASE64`/`ANDROID_KEYSTORE_PASSWORD`/`ANDROID_KEY_ALIAS`/`ANDROID_KEY_PASSWORD`), and a Shopping web job — then a `publish` job combines everything into one GitHub Release via `scripts/publish-github-release.cjs --require-product-apks --require-web`. `npm run release` (local `electron-builder` + manual `publish-github-release.cjs` invocation) is a fallback only, and can't run on a Linux machine without Wine anyway — it is **not** the real release path. Because the workflow has no path/tag filter, **every push to `main` is a production release build** — always bump `package.json`'s version first (the release script keys off it and overwrites the existing tag's assets if unbumped), and treat pushing to `main` with the same care as cutting a release, not as a routine commit.
-- Packaged Electron builds check for updates five seconds after every launch and download them in the background; the cashier gets visible POS-screen messages when an update starts and when it is ready, while installation remains an explicit Settings → Install & Restart action after the current sale is safe. Do not regress to a Settings-button-only update check: Counter 3 remained on v2.7.10 after v2.7.11 fixed gross cash tender/change because the app never checked unless an administrator manually opened Settings.
-- The Electron POS is frameless/fullscreen and exposes its own compact minimize, fullscreen maximize/restore, and close controls through narrow preload IPC methods. POS confirmations/notices are renderer-owned `<dialog>` modals, never native `alert()`/`confirm()`, because those native dialogs repeatedly failed to return Windows foreground focus after clear-cart and other cashier actions. Native print/system-dialog completion uses `main.ts`'s delayed focus restoration fallback; keep the always-on-top release delayed rather than toggling it off synchronously.
-- User-facing copy in every custom desktop, POS, Restaurant, Sales, and Shopping surface uses the neutral label `ERP`, never the upstream product name. Keep technical compatibility identifiers such as `erpnextUrl`, package IDs, API paths, Python imports, and internal architecture documentation unchanged; they are integration contracts rather than displayed branding.
-- The customer display receives the saved POS `colorTheme` from the Electron main process after its renderer loads and after every settings save. Keep this separate from cart updates so an empty/idle customer screen changes palette immediately without fabricating cart state.
-- Online receipt previews must replace local `paymentRows`/`changeDue` estimates with the authoritative `payments`/`change_amount` returned by `submit_online_sale` before rendering. Local values remain necessary for offline provisional receipts, but must not win after ERPNext has persisted the real invoice.
-- Google Play builds use the signed Android job above (CI) or the local `android:<product>:aab` commands for manual bundles under `dist-apk/`; the release keystore and its passwords must remain outside the repository (CI restores it from secrets, never committed). `dist-apk/` locally accumulates unsigned `*-debug.apk` files from local `android:*:apk` dev/test runs across many versions — these are throwaway test artifacts, not release builds; don't confuse them with the signed, CI-published APKs on the GitHub Release page. Restaurant must not be submitted to production while demo-backed behavior remains enabled.
-- `npm test` (Node's built-in test runner) covers domain/database behavior plus shared API authentication, PKCE, credential-provider isolation, device enrollment, and Shopping authentication boundaries. It does **not** fully cover `src/main.ts`/`src/preload.ts`/renderer UI glue or physical Android browser/deep-link behavior, so desktop smoke tests and real-device enrollment/login checks remain release gates.
-  - `tsconfig.test.json` compiles `src/domain/**`, `src/db/**`, and `test/**` to `.test-out/` (gitignored, wiped at the start of every `npm test` run — never shipped in the `electron-builder` installer, which only packages `dist/**`).
-  - `database.ts` imports Electron's `app` at module scope (`app.getPath("userData")`) and pulls in `better-sqlite3`, a native addon rebuilt for **Electron's** ABI by the `postinstall`/`electron-rebuild` step — it will fail to load under a plain `node` process (`NODE_MODULE_VERSION` mismatch). So the test script runs through the local `electron` binary itself in Node-only mode (`cross-env ELECTRON_RUN_AS_NODE=1 electron --experimental-test-module-mocks --test .test-out/test`), which uses Electron's own bundled Node runtime (matching ABI) and Node's built-in module-mocking (`node:test`'s `mock.module`, still experimental) to fake `app.getPath` before `database.ts` is first required — see `test/db/database.test.ts`'s header comment. Note Electron's bundled Node is older than the system Node (e.g. Electron 33 ships Node 20), so `--test <dir>` (not a glob pattern) is used for file discovery — glob support in `node --test` arguments needs a newer Node than Electron currently bundles.
-  - Add new unit-testable logic under `src/domain/` (pure, no Electron/SQLite import) when possible — it avoids the mocking/ABI machinery entirely, same as `fbr-calculation.ts`.
-  - CI (`.github/workflows/build-release.yml`) runs `npm test` right after `npm ci`, before the installer build/publish steps — a failing test blocks the release.
-  - `docs/architecture.md`'s "Build And Test" section still lists the manual verification checklist (online/offline sale, refund, receipt/duplicate print, close shift with refund, cashier login online/offline, settings/shift PIN, auto-update) required before a release — `npm test` doesn't replace that, it only covers the calculation/persistence layer, not the UI/IPC flow.
-- Operational boundaries (don't change without server alignment — full list in `docs/architecture.md`): tax calculation contract, FBR payload contract, refund payload contract, POS Opening/Closing Entry ownership, payment reconciliation rules, gift voucher/loyalty settlement rules. Never send an `OFFLINE-*` local session ID to ERPNext as `opening_entry`; never allow offline refunds, offline close-shift, or offline customer creation.
+1. local code, configuration, package version and uncommitted diff;
+2. verified runtime/server behavior;
+3. current focused docs and skills;
+4. dated historical guidance;
+5. remote Git state.
 
-## Rules
+The local worktree is primary during development. Never discard unfamiliar
+changes. Current application version is `package.json` (3.0.4 when this guide
+was reorganized); do not hard-code it elsewhere as current.
 
-- Do what has been asked; nothing more, nothing less
-- NEVER create files unless absolutely necessary — prefer editing existing files
-- NEVER create documentation files unless explicitly requested
-- NEVER save working files or tests to root — use `/src`, `/tests`, `/docs`, `/config`, `/scripts`
-- ALWAYS read a file before editing it
-- NEVER commit secrets, credentials, or .env files
-- NEVER add a `Co-Authored-By` trailer to user commits unless this project's `.claude/settings.json` has `attribution.commit` set (#2078). The Claude Code Bash tool may suggest one in its default commit-message template — ignore it. `Co-Authored-By` is semantic authorship attribution under git/GitHub convention; the tool is the facilitator, not a co-author.
-- Keep files under 500 lines
-- ALWAYS consult this `CLAUDE.md` before making changes.
-- After completing a task, review this guidance and update it when the work introduces durable project knowledge, conventions, or operational rules.
-- Validate input at system boundaries
+## Critical boundaries
 
-## Build & Test
+- Retail POS is business-critical and handles roughly 2,000 transactions per
+  day. Preserve sale/refund, payment, shift, offline queue/idempotency,
+  receipt, pricing, FBR, stock/GL and permission behavior.
+- ERP/aimatic is authoritative for final calculations, stock, accounting,
+  invoice/refund/FBR submission, permissions, loyalty and vouchers. Clients
+  must not trust their own price, identity, authorization or final totals.
+- Electron owns local UI/cache/queue/printing/PIN behavior and never submits
+  directly to FBR.
+- Product separation is mandatory: POS, Sales, Shopping and Restaurant have
+  distinct entry points, auth, navigation, APIs, builds and release artifacts.
+- Public mobile clients use OAuth Authorization Code with PKCE and no client
+  secret. Never commit keys, tokens, keystores, passwords or `.env` files.
+- Platform-specific Electron/Capacitor behavior stays behind existing bridges
+  and adapters. Do not import Electron APIs into Android paths.
+- User-facing branding says `ERP`; compatibility identifiers remain unchanged.
 
-- ALWAYS run tests after code changes
-- ALWAYS verify build succeeds before committing
+## Release gate
+
+Every push to `main` runs the full release workflow and publishes all products.
+A `main` push is never a routine documentation/code push. It requires an
+intentional versioned release, complete tests/builds, artifact review and user
+approval. Guidance-only work stays on a non-release branch.
+
+Load `.claude/skills/posapplication-release/SKILL.md` before release work.
+
+## Route work
+
+- POS/Electron/Android POS, payments, shifts, offline queue, cache, receipts,
+  auth or hardware: `pos-client-development`.
+- Sales, Shopping, Restaurant, shared mobile UI/API/auth or product boundaries:
+  `product-client-development`.
+- Builds, APK/AAB/PWA/NSIS, versioning, CI, tags or GitHub releases:
+  `posapplication-release`.
+
+Canonical focused docs:
+
+- `docs/architecture.md`: runtime/data/build/test architecture.
+- `docs/offline-pos-rules.md`: queue, PIN and offline invariants.
+- `docs/fbr-refund-rules.md`: FBR and refund contracts.
+- `docs/android-authentication.md`: device enrollment, OAuth and secure storage.
+- `docs/product-architecture.md`, `docs/build-profiles.md`: product isolation.
+- `docs/mobile-sales-phase3.md`, `docs/shopping-preparation.md`,
+  `docs/restaurant-phase2.md`: product-specific behavior.
+- `docs/api-contracts.md`: client/server API contracts.
+
+Server counterpart: `/home/nabeel/frappe-bench/apps/aimatic`. Read its scoped
+instructions and align server/client changes in the same task.
+
+## Validation
+
+Safe local tests/builds are allowed and expected for code changes:
 
 ```bash
-npm run build && npm test
+npm run build
+npm test
 ```
+
+Use the product-specific build named in `package.json` when relevant. Tests do
+not cover every renderer/IPC/native/deep-link/hardware path; complete the
+manual smoke and real-device gates in `docs/architecture.md` before release.
+Do not run live sale/refund/FBR tests without explicit approval and a rollback
+plan.
+
+## Keep guidance current
+
+When a durable contract, entry point, product boundary, release rule or known
+incident changes, update the closest doc/skill in the same commit. Keep this
+router short. Preserve dated history instead of presenting old versions or
+site roles as current.
