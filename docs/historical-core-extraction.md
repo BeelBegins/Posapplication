@@ -5,7 +5,7 @@ Preserved from private agent memory on 2026-07-28. Version and architecture clai
 ---
 name: project-posapplication-core-extraction
 description: "Posapplication's src/core/ business-logic extraction (v2.1.3 snapshot) — historical only, superseded by v2.7.0 with Sales/Shopping/Restaurant now real products; see oauth-client-surfaces skill instead"
-metadata: 
+metadata:
   node_type: memory
   type: project
   originSessionId: 42145cd7-4192-474b-81bc-1b0a2256448e
