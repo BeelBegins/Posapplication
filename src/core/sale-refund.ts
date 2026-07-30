@@ -43,7 +43,7 @@ function thermalReceiptCss(): string {
     .rc-item-nums { display: grid !important; grid-template-columns: minmax(0,1fr) 16mm 20mm 22mm !important; gap: 1.5mm !important; font-size: 10px !important; color: #000 !important; font-weight: 700 !important; }
     .rc-item-nums .c-num, .rc-col-hdr .c-num { width: auto !important; text-align: right !important; white-space: nowrap !important; }
     .rc-item { padding: 2px 1px !important; border-bottom: 1px dotted #999 !important; }
-    .rc-item-code { display: none !important; }
+    .rc-item-code { display: block !important; font-size: 10px !important; font-weight: 700 !important; }
     .rc-item-tax { margin-top: 1px !important; padding: 1px 2px !important; border-left: 0 !important; background: transparent !important; font-size: 9.5px !important; line-height: 1.15 !important; color: #000 !important; font-weight: 800 !important; }
     .rc-item-tax-3rd, .rc-item-disc { display: none !important; }
     .rc-tot-row { font-size: 12px !important; color: #000 !important; font-weight: 700 !important; }
