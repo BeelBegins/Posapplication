@@ -83,7 +83,7 @@ export function createPosSessionCore(deps: PosCoreDeps) {
   function getPaymentMethods(): string[] {
     const profile = asRecord(deps.db.getPosBootstrap(deps.db.loadSettings().posProfile)?.pos_profile);
     const rows = Array.isArray(profile?.payments) ? profile.payments : [];
-    return [...new Set(rows.map(asRecord).map((row) => textValue(row, "mode_of_payment")).filter(Boolean))];
+    return [...new Set(rows.map(asRecord).map((row) => textValue(row, "mode_of_payment")).filter((mode) => Boolean(mode) && mode !== "Food Panda Credit"))];
   }
 
   // Mode of Payment's own `type` (Cash/Bank/General) is the authoritative signal for
