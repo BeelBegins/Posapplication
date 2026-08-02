@@ -1333,6 +1333,29 @@ async function completePaymentAllocation():Promise<void>{
 // right after was a redundant extra step. If submission is blocked for an unrelated
 // reason (session, customer, etc.) submitCurrentSale() reports it and leaves focus on
 // Complete Sale & Print, same as before, so F9 still works as a manual fallback/retry.
+async function finalizeFoodPandaCreditSale(): Promise<void> {
+  const msg = document.querySelector<HTMLElement>("#payment-message");
+  if (!isFoodPandaCreditProfile()) {
+    if (msg) msg.textContent = "Credit Sale is only available for the S1 Food Panda customer.";
+    return;
+  }
+  if (!cartLines.length) {
+    if (msg) msg.textContent = "Cart is empty.";
+    return;
+  }
+  paymentRows = [{ method: FOOD_PANDA_CREDIT_MODE, amount: 0 }];
+  changeDue = 0;
+  await persistPayments();
+  paymentsOutdated = false;
+  paymentPreparedVersion = currentCartVersion;
+  renderPayments();
+  renderCart();
+  if (msg) msg.textContent = "Credit Sale Ready";
+  document.querySelector<HTMLDialogElement>("#payment-dialog")?.close();
+  void window.posAPI.focusPosWindow();
+  window.setTimeout(() => void submitCurrentSale(), 0);
+}
+
 async function finalizePaymentReady():Promise<void>{
   await persistPayments();
   paymentsOutdated=false;
@@ -1356,6 +1379,7 @@ function blockedSaleReason():string|null{
   const profile=document.querySelector<HTMLSelectElement>("#pos-profile")?.value??"";
   const online=isOnline();
   const giftVoucherError=fbrTotalsView().giftVoucherError;
+  const creditReady=isFoodPandaCreditPrepared();
   return (online&&shiftClosed)?"Shift is closed — start a new shift"
     :(online&&!sessionState.valid)?(sessionState.reason||"POS session is no longer active")
     :(online&&(!opening||opening==="No active POS Opening Entry"))?"No active POS Opening Entry"
@@ -1363,7 +1387,7 @@ function blockedSaleReason():string|null{
     :!cartLines.length?"Cart is empty"
     :(online&&validatedCartVersion!==currentCartVersion)?(previewError?`Cart not validated — ${previewError}`:"Validating cart…")
     :(online&&appliedBenefits.giftVoucherCode&&giftVoucherError)?giftVoucherError
-    :remainingAmount()>0.0001?"Payment is incomplete"
+    :(!creditReady&&remainingAmount()>0.0001)?"Payment is incomplete"
     :paymentPreparedVersion!==currentCartVersion?"Payment not prepared for current cart"
     :paymentsOutdated?"Payment draft is outdated"
     :!terminal?"Missing Terminal ID — assign a Terminal ID to this POS Profile on the server"
@@ -2308,6 +2332,20 @@ function sortPaymentMethodsCashFirst(methods: string[], types: Record<string, st
   return copy;
 }
 
+const FOOD_PANDA_PROFILE = "S1 Food Panda";
+const FOOD_PANDA_CUSTOMER = "Food Panda";
+const FOOD_PANDA_CREDIT_MODE = "Food Panda Credit";
+function isFoodPandaCreditProfile(): boolean {
+  const profile = document.querySelector<HTMLSelectElement>("#pos-profile")?.value ?? "";
+  return profile === FOOD_PANDA_PROFILE && selectedCustomer?.name === FOOD_PANDA_CUSTOMER;
+}
+function isFoodPandaCreditPrepared(): boolean {
+  return isFoodPandaCreditProfile()
+    && paymentRows.length === 1
+    && paymentRows[0].method === FOOD_PANDA_CREDIT_MODE
+    && paymentRows[0].amount === 0;
+}
+
 function renderPaymentMethods():void{const box=document.querySelector<HTMLElement>("#payment-methods");if(!box)return;box.replaceChildren(...paymentMethods.map((m,i)=>{const b=document.createElement("button");b.type="button";b.className=`secondary-button search-result${i===selectedPaymentMethodIndex?" selected":""}`;if(i<9){const key=document.createElement("span");key.className="payment-method-key";key.textContent=String(i+1);b.append(key);}b.append(document.createTextNode(m));b.onclick=()=>{selectedPaymentMethodIndex=i;renderPaymentMethods();document.querySelector<HTMLInputElement>("#payment-amount")?.focus();};return b;}));}
 async function openPayment():Promise<void>{
   // F6 gate: validate the POS session, then require the current cart version to be server-validated.
@@ -2344,13 +2382,13 @@ async function openPayment():Promise<void>{
     const blocker=await offlineLocalBlocker(false);
     if(blocker){cartMessage(blocker);return;}
   }
-  if(paymentsOutdated&&paymentRows.length){if(!(await appConfirm("Cart changed. Clear outdated payments?")))return;paymentRows=[];await persistPayments();paymentsOutdated=false;}paymentMethodTypes=await window.posAPI.getPaymentMethodTypes();paymentMethods=sortPaymentMethodsCashFirst(await window.posAPI.getPaymentMethods(),paymentMethodTypes);paymentRows=await window.posAPI.loadPaymentDraft();changeDue=0;selectedPaymentMethodIndex=0;
+  if(paymentsOutdated&&paymentRows.length){if(!(await appConfirm("Cart changed. Clear outdated payments?")))return;paymentRows=[];await persistPayments();paymentsOutdated=false;}paymentMethodTypes=await window.posAPI.getPaymentMethodTypes();paymentMethods=sortPaymentMethodsCashFirst((await window.posAPI.getPaymentMethods()).filter((mode)=>mode!==FOOD_PANDA_CREDIT_MODE),paymentMethodTypes);paymentRows=await window.posAPI.loadPaymentDraft();changeDue=0;selectedPaymentMethodIndex=0;
   // A row left mid-"Edit" from a previous open of this dialog (e.g. the cashier
   // went back to add more items instead of finishing the edit) must not survive
   // into this fresh session — addPayment() would otherwise silently overwrite
   // that stale row instead of adding a new payment.
   paymentEditIndex=null;
-  renderPaymentMethods();const amountInput=document.querySelector<HTMLInputElement>("#payment-amount");if(amountInput)amountInput.value="";const payMsg=document.querySelector<HTMLElement>("#payment-message");if(payMsg)payMsg.textContent="";renderPayments();document.querySelector<HTMLDialogElement>("#payment-dialog")?.showModal();window.setTimeout(()=>amountInput?.focus(),0);}
+  renderPaymentMethods();const creditButton=document.querySelector<HTMLButtonElement>("#payment-credit");if(creditButton)creditButton.hidden=!isFoodPandaCreditProfile();const amountInput=document.querySelector<HTMLInputElement>("#payment-amount");if(amountInput)amountInput.value="";const payMsg=document.querySelector<HTMLElement>("#payment-message");if(payMsg)payMsg.textContent="";renderPayments();document.querySelector<HTMLDialogElement>("#payment-dialog")?.showModal();window.setTimeout(()=>amountInput?.focus(),0);}
 function renderCart(): void {
   const container = document.querySelector<HTMLElement>("#cart-rows"); if (!container) return; container.replaceChildren();
   cartLines.forEach((line, index) => { const row = document.createElement("div"); row.setAttribute("role", "button"); row.setAttribute("aria-label", `${line.itemName}, quantity ${line.quantity}, line total ${((line.sellingPrice ?? 0) * line.quantity).toFixed(2)}`); row.tabIndex = -1; const lowStock=line.actualStock !== null&&line.actualStock!==undefined&&line.quantity>line.actualStock; row.className = `cart-row${index === selectedCartIndex ? " selected" : ""}${lowStock?" stock-warning":""}`; const cells = [line.itemCode,line.itemName,line.uom,String(line.quantity),String(line.sellingPrice ?? 0),"0.00",((line.sellingPrice ?? 0) * line.quantity).toFixed(2),`${line.actualStock ?? "—"}${lowStock ? " ⚠" : ""}`,"Remove"]; cells.forEach((text,cellIndex) => { const cell=document.createElement("span");cell.textContent=text;if(cellIndex===7&&lowStock)cell.title="Requested quantity exceeds displayed stock";row.append(cell); }); row.onpointerdown = (event) => event.preventDefault(); row.onclick = () => { selectedCartIndex = index; renderCart(); focusCart(true); }; container.append(row); });
@@ -3782,6 +3820,7 @@ function initializeRenderer(): void {
   document.querySelector<HTMLButtonElement>('#payment-exact')?.addEventListener('click', () => void addExactAmount());
   document.querySelector<HTMLButtonElement>('#payment-add')?.addEventListener('click', () => void addPayment());
   document.querySelector<HTMLButtonElement>('#payment-complete')?.addEventListener('click', () => void completePaymentAllocation());
+  document.querySelector<HTMLButtonElement>('#payment-credit')?.addEventListener('click', () => void finalizeFoodPandaCreditSale());
   document.querySelector<HTMLButtonElement>('#complete-sale')?.addEventListener('click', () => void submitCurrentSale());
   // Enter-to-add is handled by the capture-phase global keydown listener
   // (search for "pressing Enter on the Payment screen") — a listener bound
