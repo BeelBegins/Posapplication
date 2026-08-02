@@ -1183,7 +1183,8 @@ async function runCartPreview(version: number): Promise<void> {
   // 3) Validate the exact cart / customer / coupon / loyalty / voucher state with the server.
   const previewInput: Record<string, unknown> = {
     customer: selectedCustomer?.name ?? "",
-    items: cartLines.map((line) => ({ item_code: line.itemCode, uom: line.uom, qty: line.quantity }))
+    items: cartLines.map((line) => ({ item_code: line.itemCode, uom: line.uom, qty: line.quantity })),
+    cashier_user: cashierSession?.user ?? ""
   };
   if (appliedBenefits.loyaltyPoints > 0) { previewInput.redeem_loyalty_points = appliedBenefits.loyaltyPoints; previewInput.loyalty_points = appliedBenefits.loyaltyPoints; }
   if (appliedBenefits.couponCode) previewInput.coupon_code = appliedBenefits.couponCode;

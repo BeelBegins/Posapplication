@@ -38,3 +38,35 @@ test("summarizePosConfiguration maps a synced configuration bundle", () => {
     lastSynced: "2026-01-01T00:00:00.000Z", cacheStatus: "Ready"
   });
 });
+
+test("previewCart sends the human cashier identity to the server", async () => {
+  const sentBodies: Record<string, unknown>[] = [];
+  const deps: PosCoreDeps = {
+    fetch: (async (_url: string | URL | Request, init?: RequestInit) => {
+      sentBodies.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
+      return new Response(JSON.stringify({ message: { totals: {} } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }) as typeof fetch,
+    db: {
+      loadSettings: () => ({
+        erpnextUrl: "https://szl.example.com",
+        apiKey: "terminal-key",
+        apiSecret: "terminal-secret",
+        posProfile: "S1GT Counter 1"
+      })
+    } as PosCoreDeps["db"]
+  };
+  const core = createPosConfigCore(deps, createHttpCore(deps));
+
+  const result = await core.previewCart({
+    customer: "Walk In Customer",
+    items: [{ item_code: "ITEM-1", qty: 1 }],
+    cashier_user: "smir@aimatic.tech"
+  });
+
+  assert.equal(result.error, null);
+  assert.equal(sentBodies[0]?.cashier_user, "smir@aimatic.tech");
+  assert.equal(sentBodies[0]?.pos_profile, "S1GT Counter 1");
+});
