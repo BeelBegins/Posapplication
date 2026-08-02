@@ -52,6 +52,7 @@ export function createPosConfigCore(deps: PosCoreDeps, http: ReturnType<typeof c
       if (input.redeem_loyalty_points) payload.redeem_loyalty_points = input.redeem_loyalty_points;
       if (input.loyalty_points) payload.loyalty_points = input.loyalty_points;
       if (input.gift_voucher_code) payload.gift_voucher_code = String(input.gift_voucher_code);
+      if (input.cashier_user) payload.cashier_user = String(input.cashier_user);
       const response = await authFetch(deps, `${base}/api/method/aimatic.offline_pos.api.preview_cart`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
