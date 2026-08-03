@@ -1344,6 +1344,18 @@ async function finalizeFoodPandaCreditSale(): Promise<void> {
     if (msg) msg.textContent = "Cart is empty.";
     return;
   }
+  // A gift voucher / coupon / loyalty redemption applied earlier in this same cart
+  // (e.g. the cashier started ringing it up as a normal sale before switching to
+  // Credit Sale) would otherwise still ride along in the submit payload. The server
+  // rejects a Food Panda Credit submission that carries a gift voucher outright, and
+  // silently falls through to the ordinary "payments don't cover the total" check for
+  // stray payment/coupon state — surfacing as a confusing failure right when the
+  // cashier expects the zero-amount credit marker to just go through. Clear all of it
+  // here so Credit Sale always submits clean.
+  if (appliedBenefits.loyaltyPoints || appliedBenefits.couponCode || appliedBenefits.giftVoucherCode) {
+    appliedBenefits = emptyBenefits();
+    await saveBenefitsDraft();
+  }
   paymentRows = [{ method: FOOD_PANDA_CREDIT_MODE, amount: 0 }];
   changeDue = 0;
   await persistPayments();
