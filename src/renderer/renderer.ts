@@ -3927,8 +3927,8 @@ function initializeRenderer(): void {
     else if (event.key === "Enter" && cartSearchResults.length && scannerActive) { event.preventDefault(); event.stopPropagation(); void addToCart(cartSearchResults[selectedSearchIndex] ?? cartSearchResults[0]); }
     else if (event.key === "ArrowUp") { event.preventDefault(); event.stopPropagation(); if (cartSearchResults.length && scannerActive) { selectedSearchIndex = Math.max(0, selectedSearchIndex - 1); showCartSearchResults(cartSearchResults, true); } else if (cartLines.length) { selectedCartIndex = Math.max(0, selectedCartIndex - 1); renderCart(); } }
     else if (event.key === "ArrowDown") { event.preventDefault(); event.stopPropagation(); if (cartSearchResults.length && scannerActive) { selectedSearchIndex = Math.min(cartSearchResults.length - 1, selectedSearchIndex + 1); showCartSearchResults(cartSearchResults, true); } else if (cartLines.length) { selectedCartIndex = Math.min(cartLines.length - 1, selectedCartIndex + 1); renderCart(); } }
-    else if (event.key === "*" || event.key === "+") { event.preventDefault(); event.stopPropagation(); void changeCartQuantity(1); }
-    else if (event.key === "-") { event.preventDefault(); event.stopPropagation(); void changeCartQuantity(-1); }
+    else if ((event.key === "*" || event.key === "+") && !isEditableElement(document.activeElement)) { event.preventDefault(); event.stopPropagation(); void changeCartQuantity(1); }
+    else if (event.key === "-" && !isEditableElement(document.activeElement)) { event.preventDefault(); event.stopPropagation(); void changeCartQuantity(-1); }
     else if (event.key === "F4") { event.preventDefault(); event.stopPropagation(); clearCartSearch(); void editSelectedQuantity(); }
     else if (event.key === "Delete" || event.key === "F8") { event.preventDefault(); event.stopPropagation(); clearCartSearch(); void removeSelectedCartRow(); }
     else if (event.key === "F10") { event.preventDefault(); event.stopPropagation(); (document.querySelector<HTMLButtonElement>("#cart-clear"))?.click(); }
