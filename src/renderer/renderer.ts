@@ -453,7 +453,7 @@ function isEditableElement(element: Element | null): boolean {
   return element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement || Boolean(element?.closest("[contenteditable='true']"));
 }
 function isScannerTextKey(event: KeyboardEvent): boolean {
-  return !event.ctrlKey && !event.altKey && !event.metaKey && /^[a-zA-Z0-9]$/.test(event.key);
+  return !event.ctrlKey && !event.altKey && !event.metaKey && /^[a-zA-Z0-9\-_.]$/.test(event.key);
 }
 function captureScannerTextKey(event: KeyboardEvent): boolean {
   if (!isScannerTextKey(event) || !shouldFocusScanner() || isEditableElement(document.activeElement)) return false;
