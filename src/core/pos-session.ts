@@ -80,10 +80,14 @@ function realOpeningEntry(value: string): string {
  * sale/refund group. Bound to PosCoreDeps.
  */
 export function createPosSessionCore(deps: PosCoreDeps) {
+  // Deliberately includes every configured mode, including "Food Panda Credit" — shift
+  // open/close balances and the offline-readiness check need the profile's full payment
+  // method set (a Food-Panda-only profile has no other mode to fall back to). The sale
+  // payment picker excludes "Food Panda Credit" itself, at its own call site.
   function getPaymentMethods(): string[] {
     const profile = asRecord(deps.db.getPosBootstrap(deps.db.loadSettings().posProfile)?.pos_profile);
     const rows = Array.isArray(profile?.payments) ? profile.payments : [];
-    return [...new Set(rows.map(asRecord).map((row) => textValue(row, "mode_of_payment")).filter((mode) => Boolean(mode) && mode !== "Food Panda Credit"))];
+    return [...new Set(rows.map(asRecord).map((row) => textValue(row, "mode_of_payment")).filter((mode) => Boolean(mode)))];
   }
 
   // Mode of Payment's own `type` (Cash/Bank/General) is the authoritative signal for
