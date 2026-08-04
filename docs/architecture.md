@@ -323,9 +323,11 @@ Cashier user:
 
 Supervisor/admin authorizer:
 
-- Used only to authorize protected local PIN setup/reset.
+- Used to authorize protected local PIN setup/reset and sensitive terminal actions such as
+  closing a shift, voiding an item, or clearing a full cart.
 - Password is never stored.
-- Server returns short-lived authorization result/token.
+- Server returns a short-lived, action-bound token; void and clear-cart tokens are consumed
+  before the client changes its local cart.
 
 ## Local PIN Scopes
 
@@ -644,7 +646,19 @@ Held sales are local only.
 
 Held sales are deleted when shift closes successfully.
 
+## New Bill Reset
+
+Closing a completed receipt, holding the active sale, or explicitly clearing the full cart starts
+a new bill. The reset clears cart/payment/benefit state, generates a fresh `terminal_invoice_id`,
+and reselects the active POS Profile's cached default customer so it works online and offline.
+A customer selected by the cashier applies only to the current bill. Removing individual lines,
+including the last line, does not by itself reset the customer.
+
+For a normal cashier, explicit Clear Cart first requires online POS Supervisor authorization and
+consumes a single-use `clear_cart` token before the bill is abandoned. A cashier already holding
+POS Supervisor/System Manager capability follows the same privilege bypass as item voiding.
 ## Sales History
+
 
 Sales history is local SQLite-backed.
 

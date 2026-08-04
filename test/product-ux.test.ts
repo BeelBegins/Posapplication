@@ -38,6 +38,21 @@ test("POS desktop routes and cashier shortcuts remain intact", () => {
   for (const shortcut of ["F6", "F7", "F9"]) assert.match(renderer, new RegExp(shortcut));
 });
 
+test("new bills reselect the POS Profile default customer", () => {
+  const renderer = source("src/renderer/renderer.ts");
+  assert.match(renderer, /async function resetCustomerToProfileDefault\(\): Promise<void> \{[^]*?getCachedPosConfiguration\(\)[^]*?seedDefaultCustomerFromConfig\(cfg, true\)/);
+  assert.match(renderer, /async function clearActiveSale\(message:string\):Promise<void>\{[^]*?await resetCustomerToProfileDefault\(\)/);
+  assert.match(renderer, /async function clearFullCart\(\): Promise<void> \{[^]*?await clearActiveSale\("Cart cleared"\)/);
+});
+
+test("Clear Cart uses action-bound supervisor authorization", () => {
+  const main = source("src/main.ts");
+  const renderer = source("src/renderer/renderer.ts");
+  assert.match(main, /type AdminAction = [^;]*"clear_cart"/);
+  assert.match(renderer, /async function clearFullCart\(\): Promise<void> \{[^]*?!cashierSession\?\.canVoidItems[^]*?requestSupervisorActionAuthorization\("clear_cart"\)[^]*?consumeAdminAction\(\{ token: auth\.token, action: "clear_cart" \}\)[^]*?clearActiveSale\("Cart cleared"\)/);
+  assert.match(renderer, /querySelector\("#cart-clear"\)[^]*?clearFullCart\(\)/);
+});
+
 test("Electron window controls and POS dialogs preserve desktop focus", () => {
   const html = source("src/renderer/index.html");
   const renderer = source("src/renderer/renderer.ts");

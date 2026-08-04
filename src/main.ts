@@ -471,14 +471,14 @@ const DEV_ADMIN_AUTH_BYPASS = !app.isPackaged || process.env.POS_DEV_ADMIN_AUTH_
 // own shift). Shift close and void-item, when the active cashier session
 // isn't itself a POS Supervisor/System Manager, also go through
 // authorizePosAdminAction - close_shift is verified+consumed server-side
-// inside close_pos_session itself (see api.py); void_item has no server
+// inside close_pos_session itself (see api.py); void_item and clear_cart have no server
 // document to bind to (a cart is pure pre-sale client state), so it's
 // consumed via a second explicit call, consumePosAdminAction below, before
 // the cashier's local removal is allowed to proceed. The only PIN concept
 // left is each cashier's own Offline PIN (for offline login), whose "forgot
 // PIN" reset still needs supervisor authorization too.
-type AdminAction = "reset_pin" | "change_credentials" | "close_shift" | "void_item";
-const POS_ADMIN_ACTIONS: readonly AdminAction[] = ["reset_pin", "change_credentials", "close_shift", "void_item"];
+type AdminAction = "reset_pin" | "change_credentials" | "close_shift" | "void_item" | "clear_cart";
+const POS_ADMIN_ACTIONS: readonly AdminAction[] = ["reset_pin", "change_credentials", "close_shift", "void_item", "clear_cart"];
 let pendingAdminAuthorization: { tokenHash: string; action: AdminAction; terminalId: string; expiresAt: number; cashierUser?: string } | null = null;
 
 function hashSecret(value: string): string {
@@ -562,7 +562,7 @@ async function authorizePosAdminAction(input: Record<string, unknown>): Promise<
 
 // Consumes a token minted by authorizePosAdminAction against the server's
 // consume_pos_admin_authorization, for actions with no server document of
-// their own to bind the authorization to (currently just void_item - close_
+// their own to bind the authorization to (void_item and clear_cart - close_
 // shift instead passes its token straight through to close_pos_session,
 // which consumes it in-process, atomically with the close itself; see the
 // AdminAction comment above for why the two differ). Mirrors
