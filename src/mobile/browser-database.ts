@@ -54,7 +54,11 @@ const catalogStorageKey = "aimatic-pos-mobile-catalog";
 const catalogFields = ["fbr", "fbrState", "customers", "items", "prices", "stock", "barcodes", "conversions", "catalogTotals"] as const;
 
 function rebuildCatalogIndexes(): void {
-  barcodeIndex = new Map(state.barcodes.map((row) => [rowText(row, "barcode"), row]).filter(([barcode]) => Boolean(barcode)) as Array<[string, Row]>);
+  barcodeIndex = new Map(
+    state.barcodes
+      .map((row) => [rowText(row, "barcode").toLowerCase(), row] as [string, Row])
+      .filter(([barcode]) => Boolean(barcode))
+  );
   pricesByItem = new Map();
   for (const row of Object.values(state.prices)) {
     const itemCode = rowText(row, "item_code");
@@ -161,8 +165,8 @@ export const mobileDatabase: IDatabaseService = {
     if(data.priceList){state.prices=Object.fromEntries(Object.entries(state.prices).filter(([,v])=>rowText(v,"price_list")===data.priceList));}
     for(const x of data.stock){const k=`${rowText(x,"item_code")}:${rowText(x,"warehouse")}`;state.stock[k]={...state.stock[k],...x};}if(data.replaceBarcodes)state.barcodes=[];for(const x of data.barcodes){const parent=rowText(x,"item_code")||rowText(x,"parent"),barcode=rowText(x,"barcode");state.barcodes=state.barcodes.filter(v=>!(rowText(v,"parent")===parent&&rowText(v,"barcode")===barcode));state.barcodes.push({...x,parent});}if(data.replaceConversions)state.conversions=[];for(const x of data.conversions){const parent=rowText(x,"item_code")||rowText(x,"parent"),uom=rowText(x,"uom");state.conversions=state.conversions.filter(v=>!(rowText(v,"parent")===parent&&rowText(v,"uom")===uom));state.conversions.push({...x,parent});}state.catalogTotals={items:Object.keys(state.items).length,prices:Object.keys(state.prices).length,barcodes:state.barcodes.length,stockRows:Object.keys(state.stock).length,lastSynced:data.totals.lastSynced};rebuildCatalogIndexes();persistCatalog(); },
   getCatalogTotals() { return state.catalogTotals; },
-  searchCatalog(query,warehouse,priceList) { const q=query.trim().toLowerCase();if(!q)return[];const barcode=barcodeIndex.get(query);if(barcode){const code=rowText(barcode,"parent");return code&&state.items[code]?[catalogResult(code,query,warehouse,priceList)]:[];}const codes=Object.keys(state.items).filter(code=>{const x=state.items[code];return !x.disabled&&x.is_sales_item!==false&&(code.toLowerCase().includes(q)||rowText(x,"item_name").toLowerCase().includes(q));}).slice(0,50);return codes.map(code=>catalogResult(code,query,warehouse,priceList)); },
-  lookupCatalog(query,warehouse,priceList) { const exactCode=state.items[query]?query:rowText(barcodeIndex.get(query)??{},"parent");if(exactCode){const exact=catalogResult(exactCode,query,warehouse,priceList);return{exact,results:[]};}return{exact:null,results:mobileDatabase.searchCatalog(query,warehouse,priceList)}; },
+  searchCatalog(query,warehouse,priceList) { const q=query.trim().toLowerCase();if(!q)return[];const barcode=barcodeIndex.get(q);if(barcode){const code=rowText(barcode,"parent");return code&&state.items[code]?[catalogResult(code,query,warehouse,priceList)]:[];}const codes=Object.keys(state.items).filter(code=>{const x=state.items[code];return !x.disabled&&x.is_sales_item!==false&&(code.toLowerCase().includes(q)||rowText(x,"item_name").toLowerCase().includes(q));}).slice(0,50);return codes.map(code=>catalogResult(code,query,warehouse,priceList)); },
+  lookupCatalog(query,warehouse,priceList) { const q=query.trim();const exactCode=state.items[q]?q:Object.keys(state.items).find((code)=>code.toLowerCase()===q.toLowerCase())||rowText(barcodeIndex.get(q.toLowerCase())??{},"parent");if(exactCode){const exact=catalogResult(exactCode,query,warehouse,priceList);return{exact,results:[]};}return{exact:null,results:mobileDatabase.searchCatalog(query,warehouse,priceList)}; },
   cachePosSession(openingEntry,posProfile,_user,session,syncedAt) { state.sessions[posProfile]={openingEntry,data:session,syncedAt};persist(); },
   getCachedPosSession(posProfile) { return state.sessions[posProfile]?.data??null; },
   cachePosBootstrap(posProfile,configuration,syncedAt) { state.bootstraps[posProfile]={data:configuration,syncedAt};persist(); },
@@ -172,7 +176,7 @@ export const mobileDatabase: IDatabaseService = {
 };
 
 function catalogResult(code: string, query: string, warehouse: string, priceList: string): CatalogSearchResult {
-  const item=state.items[code]??{};const indexedBarcode=barcodeIndex.get(query);const barcode=indexedBarcode&&rowText(indexedBarcode,"parent")===code?indexedBarcode:undefined;const uom=rowText(barcode??{},"uom")||rowText(item,"stock_uom");const conversion=Number(conversionIndex.get(`${code}:${uom}`)?.conversion_factor??1)||1;
+  const item=state.items[code]??{};const indexedBarcode=barcodeIndex.get(query.trim().toLowerCase());const barcode=indexedBarcode&&rowText(indexedBarcode,"parent")===code?indexedBarcode:undefined;const uom=rowText(barcode??{},"uom")||rowText(item,"stock_uom");const conversion=Number(conversionIndex.get(`${code}:${uom}`)?.conversion_factor??1)||1;
   // Scoped to the terminal's currently configured price list - upsertCatalog already purges
   // rows tagged with any other price list, but filtering here too means a lookup is correct
   // regardless of whether that cleanup has run yet (e.g. immediately after this field was

@@ -334,7 +334,8 @@ async function seedSessionFromCache(): Promise<boolean> {
     openingEntry: entry, status: "Open", user: summary.user || authenticatedUser,
     posProfile: document.querySelector<HTMLSelectElement>("#pos-profile")?.value || sessionState.posProfile,
     company: document.querySelector<HTMLElement>("#config-company")?.textContent || sessionState.company,
-    postingDate: "", periodStart: summary.startDateTime || "", lastChecked: Date.now(), lastError: "", valid: true, reason: ""
+    postingDate: "", periodStart: summary.startDateTime || "", lastChecked: Date.now(), lastError: "", valid: true, reason: "",
+    failedClosing: "", failedClosingError: ""
   };
   applySessionToHeader(); renderSessionInfo(); updateCompleteSaleState();
   return true;
@@ -429,8 +430,8 @@ let cashierSession: CashierSession | null = null;
 type CashierPinMode = "login" | "setup" | "change";
 let cashierPinMode: CashierPinMode = "login";
 // --- POS session health ---
-interface SessionState { openingEntry: string; status: string; user: string; posProfile: string; company: string; postingDate: string; periodStart: string; lastChecked: number; lastError: string; valid: boolean; reason: string; }
-let sessionState: SessionState = { openingEntry: "", status: "", user: "", posProfile: "", company: "", postingDate: "", periodStart: "", lastChecked: 0, lastError: "", valid: false, reason: "Not checked" };
+interface SessionState { openingEntry: string; status: string; user: string; posProfile: string; company: string; postingDate: string; periodStart: string; lastChecked: number; lastError: string; valid: boolean; reason: string; failedClosing: string; failedClosingError: string; }
+let sessionState: SessionState = { openingEntry: "", status: "", user: "", posProfile: "", company: "", postingDate: "", periodStart: "", lastChecked: 0, lastError: "", valid: false, reason: "Not checked", failedClosing: "", failedClosingError: "" };
 let authenticatedUser = "";
 let sessionHasEntry = false;        // an opening entry was returned (even if invalid) — distinguishes "closed/mismatch" from "no shift"
 let pendingSwitchEntry = "";        // a different active opening entry awaiting explicit confirmation to switch
@@ -462,7 +463,13 @@ function isEditableElement(element: Element | null): boolean {
   return element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement || Boolean(element?.closest("[contenteditable='true']"));
 }
 function isScannerTextKey(event: KeyboardEvent): boolean {
-  return !event.ctrlKey && !event.altKey && !event.metaKey && /^[a-zA-Z0-9\-_.]$/.test(event.key);
+  // Accept any printable ASCII character a USB wedge scanner can emit.
+  // Restricting to [A-Za-z0-9\-_.] dropped parentheses/date suffixes common in
+  // shelf barcodes (e.g. 1024(09-27)), so the captured value never matched ERP.
+  return !event.ctrlKey && !event.altKey && !event.metaKey
+    && event.key.length === 1
+    && event.key >= " "
+    && event.key <= "~";
 }
 function captureScannerTextKey(event: KeyboardEvent): boolean {
   if (!isScannerTextKey(event) || !shouldFocusScanner() || isEditableElement(document.activeElement)) return false;
@@ -804,6 +811,7 @@ let closeShiftSummary: ShiftSummary | null = null;
 // Cleared after every close attempt and whenever leaving the screen so a
 // stale token from an earlier shift can never be reused for a later one.
 let closeShiftSupervisorToken: string | null = null;
+let refundSupervisorToken: string | null = null;
 function shiftNumber(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string" && value.trim() && !Number.isNaN(Number(value))) return Number(value);
@@ -995,7 +1003,7 @@ async function submitCloseShift(): Promise<void> {
     // Shift closed: mark closed locally, drop the cached entry, clear held drafts, preserve Sales History, block F6/F9, go to Start Shift.
     shiftClosed = true;
     closeShiftSummary = null;
-    sessionState = { openingEntry: "", status: "Closed", user: "", posProfile: sessionState.posProfile, company: sessionState.company, postingDate: "", periodStart: "", lastChecked: Date.now(), lastError: "", valid: false, reason: "Shift closed" };
+    sessionState = { openingEntry: "", status: "Closed", user: "", posProfile: sessionState.posProfile, company: sessionState.company, postingDate: "", periodStart: "", lastChecked: Date.now(), lastError: "", valid: false, reason: "Shift closed", failedClosing: "", failedClosingError: "" };
     showPosSessionSummary({ sessionStatus: "Not Open", openingEntry: "", user: "", startDateTime: "", openingBalanceRowsCount: 0, lastSynced: new Date().toISOString() });
     applySessionToHeader(); renderSessionInfo(); updateCompleteSaleState();
     if (message) message.textContent = `Shift closed${result.closingEntry ? ` — ${result.closingEntry}` : ""}.`;
@@ -1207,6 +1215,12 @@ async function runCartPreview(version: number): Promise<void> {
     // Failure: retain the local FBR totals and surface the actual error.
     previewStatus = "error";
     previewError = result.error ?? "Offline Estimate — Not Server Validated";
+    if (/shift close failed/i.test(previewError)) {
+      sessionState.failedClosing = sessionState.failedClosing || "Failed";
+      sessionState.failedClosingError = previewError;
+      showSessionInvalid(previewError);
+      updateCompleteSaleState();
+    }
     showPreviewStatus(previewError);
     renderCart();
     return;
@@ -1403,6 +1417,7 @@ function blockedSaleReason():string|null{
   const giftVoucherError=fbrTotalsView().giftVoucherError;
   const creditReady=isFoodPandaCreditPrepared();
   return (online&&shiftClosed)?"Shift is closed — start a new shift"
+    :(online&&sessionState.failedClosing)?(sessionState.failedClosingError || "Shift close failed — fix the error, then retry Close Shift. New sales and refunds are blocked.")
     :(online&&!sessionState.valid)?(sessionState.reason||"POS session is no longer active")
     :(online&&(!opening||opening==="No active POS Opening Entry"))?"No active POS Opening Entry"
     :(online&&isPreviousDateSession())?"Shift was opened on a previous date. Close shift before new sales"
@@ -1910,8 +1925,8 @@ function buildHistoryRow(row:SalesHistoryRow,refundStatus:RefundHistoryStatus|un
   const dup=document.createElement("button");dup.type="button";dup.textContent="Print Duplicate";dup.disabled=!row.posInvoice;dup.onclick=()=>void printDuplicate(row);
   const refund=document.createElement("button");refund.type="button";refund.className="secondary-button";refund.textContent=refundStatus==="complete"?"Refunded":"Refund";
   const canRefund=Boolean(cashierSession?.canRefund);
-  refund.disabled=!row.posInvoice||row.status!=="Submitted"||refundStatus==="complete"||!canRefund;
-  refund.title=canRefund?"":"This cashier is not allowed to refund.";
+  refund.disabled=!row.posInvoice||row.status!=="Submitted"||refundStatus==="complete";
+  refund.title=canRefund?"":"Requires supervisor authorization.";
   refund.onclick=()=>void openRefund(row.posInvoice??"");
   actions.append(view,dup,refund);
   card.append(main,actions);return card;
@@ -2005,7 +2020,6 @@ function refundHasRemaining(data:Record<string,unknown>|null=refundData):boolean
 async function openRefund(posInvoice:string):Promise<void>{
   if(!posInvoice){cartMessage("No invoice selected");return;}
   if(!cashierSession){const hm=document.querySelector<HTMLElement>("#history-message");if(hm)hm.textContent="Cashier login required.";await showCashierLogin("Cashier login required.");return;}
-  if(!cashierSession.canRefund){const hm=document.querySelector<HTMLElement>("#history-message");if(hm)hm.textContent="This cashier is not allowed to refund.";return;}
   if(cashierSession?.offlineLogin){const hm=document.querySelector<HTMLElement>("#history-message");if(hm)hm.textContent="Refund requires online cashier login.";return;}
   if(!isOnline()){const hm=document.querySelector<HTMLElement>("#history-message");if(hm)hm.textContent="Online connection required for refunds.";return;}
   const hm=document.querySelector<HTMLElement>("#history-message");if(hm)hm.textContent="Loading invoice…";
@@ -2014,6 +2028,7 @@ async function openRefund(posInvoice:string):Promise<void>{
   if(hm)hm.textContent="";
   refundData=result.data;
   refundTerminalId=crypto.randomUUID();  // one persistent id per refund operation (kept across retries)
+  refundSupervisorToken=null;
   await renderRefundScreen();
   showScreen("refund");
 }
@@ -2144,9 +2159,9 @@ async function submitRefund():Promise<void>{
   if(refundSubmitting||!refundData)return;
   const msg=document.querySelector<HTMLElement>("#refund-message");
   if(!cashierSession){if(msg)msg.textContent="Cashier login required.";return;}
-  if(!cashierSession.canRefund){if(msg)msg.textContent="This cashier is not allowed to refund.";return;}
   if(!isOnline()){if(msg)msg.textContent="Online connection required to submit a refund.";return;}
   if(!(await validateSession("refund"))){if(msg)msg.textContent=sessionState.reason||"POS session is not active.";return;}
+  if(sessionState.failedClosing){if(msg)msg.textContent=sessionState.failedClosingError||"Shift close failed — fix the error, then retry Close Shift. Refunds are blocked until then.";return;}
   // Clamp any value typed but not yet blurred, then collect selected rows (qty>0) by original row id.
   document.querySelectorAll<HTMLInputElement>(".refund-qty-input").forEach((input)=>clampRefundInput(input));
   const items:{original_row_name:string;qty:number}[]=[];
@@ -2157,6 +2172,14 @@ async function submitRefund():Promise<void>{
   const reason=document.querySelector<HTMLInputElement>("#refund-reason")?.value??"";
   const totalQty=items.reduce((sum,it)=>sum+it.qty,0);
   if(!(await appConfirm(`Refund ${totalQty} item(s) from ${String(refundData.original_invoice??"")}?`)))return;
+  refundSupervisorToken=null;
+  if(!cashierSession.canRefund){
+    // Same dialog as void/clear_cart; consume happens inside submit_pos_refund
+    // (close_shift pattern) so a failed refund does not burn the token.
+    const auth=await requestSupervisorActionAuthorization("refund");
+    if(!auth.ok){if(msg)msg.textContent="Supervisor authorization is required to refund.";return;}
+    refundSupervisorToken=auth.token;
+  }
   await verifyAndSubmitRefund(items,mode,reason,false);
 }
 
@@ -2172,7 +2195,7 @@ async function verifyAndSubmitRefund(items:{original_row_name:string;qty:number}
   // Deliberately NOT the cached getInvoiceForRefundCached — this is a race guard and must be fresh.
   if(msg)msg.textContent="Verifying available quantities…";
   const fresh=await window.posAPI.getInvoiceForRefund(String(refundData.original_invoice??""));
-  if(!fresh.data){if(msg)msg.textContent=`Unable to verify quantities: ${fresh.error??"Unknown error"}`;if(btn)btn.disabled=false;return;}
+  if(!fresh.data){refundSupervisorToken=null;if(msg)msg.textContent=`Unable to verify quantities: ${fresh.error??"Unknown error"}`;if(btn)btn.disabled=false;return;}
   const freshRemaining=new Map<string,number>();
   for(const raw of (Array.isArray(fresh.data.items)?fresh.data.items:[])){const r=asTotalsRecord(raw);if(r)freshRemaining.set(String(r.row_name??""),Math.max(0,previewNumber(r,"remaining_qty")??0));}
   const conflict=items.find((it)=>it.qty>(freshRemaining.get(it.original_row_name)??0)+1e-9);
@@ -2180,6 +2203,7 @@ async function verifyAndSubmitRefund(items:{original_row_name:string;qty:number}
     refundData=fresh.data;
     await renderRefundScreen();
     if(!refundHasRemaining(fresh.data)){
+      refundSupervisorToken=null;
       if(msg)msg.textContent="This invoice is now fully refunded. Returning to Sales History.";
       window.setTimeout(()=>void openSalesHistory(),900);
       return;
@@ -2190,22 +2214,28 @@ async function verifyAndSubmitRefund(items:{original_row_name:string;qty:number}
       const correctedItems=items
         .map((it)=>({original_row_name:it.original_row_name,qty:Math.min(it.qty,freshRemaining.get(it.original_row_name)??0)}))
         .filter((it)=>it.qty>0.0001);
-      if(!correctedItems.length){if(msg)msg.textContent="Available quantity changed — nothing left to refund on the requested rows.";if(btn)btn.disabled=false;return;}
+      if(!correctedItems.length){refundSupervisorToken=null;if(msg)msg.textContent="Available quantity changed — nothing left to refund on the requested rows.";if(btn)btn.disabled=false;return;}
       if(msg)msg.textContent="Available quantity changed — retrying with corrected quantities…";
       await verifyAndSubmitRefund(correctedItems,mode,reason,true);
       return;
     }
+    refundSupervisorToken=null;
     if(msg)msg.textContent="Available quantity changed again — please review and submit manually.";
     if(btn)btn.disabled=false;
     return;
   }
   refundSubmitting=true;if(msg)msg.textContent="Submitting Refund…";
   // terminal_refund_id is NOT regenerated on retry — idempotency is server-enforced.
-  const payload={terminal_refund_id:refundTerminalId,original_invoice:refundData.original_invoice,pos_opening_entry:sessionState.openingEntry,cashier_user:cashierSession.user,cashier_full_name:cashierSession.fullName||cashierSession.user,offline_authenticated:false,offline_auth_method:"",local_offline_session_id:"",reason,items,payments:[{mode_of_payment:mode,amount:0}]};
+  const payload={terminal_refund_id:refundTerminalId,original_invoice:refundData.original_invoice,pos_opening_entry:sessionState.openingEntry,cashier_user:cashierSession.user,cashier_full_name:cashierSession.fullName||cashierSession.user,offline_authenticated:false,offline_auth_method:"",local_offline_session_id:"",reason,items,payments:[{mode_of_payment:mode,amount:0}],supervisor_token:refundSupervisorToken??""};
   const result=await window.posAPI.submitPosRefund(payload);
   refundSubmitting=false;if(btn)btn.disabled=false;
   const res=result.result;
-  if(!res||res.success!==true){if(msg)msg.textContent=`Refund failed: ${result.error??"Unknown error"}`;return;}
+  if(!res||res.success!==true){
+    refundSupervisorToken=null;
+    if(msg)msg.textContent=`Refund failed: ${result.error??"Unknown error"}`;
+    return;
+  }
+  refundSupervisorToken=null;
   if(msg)msg.textContent=res.duplicate?"Refund already existed (idempotent) — showing existing return.":"Refund submitted.";
   await showRefundReceipt(res);
 }
@@ -2668,9 +2698,16 @@ async function runSessionValidation(_trigger: string): Promise<boolean> {
     if (cartLines.length) return failSession(`A different shift (${name}) is active. Confirm to switch.`, name);
     if (!(await appConfirm(`A different shift (${name}) is active. Switch to it?`))) return failSession(`A different shift (${name}) is active`, name);
   }
-  sessionState = { openingEntry: name, status, user, posProfile: profile || selectedProfile, company: company || selectedCompany, postingDate, periodStart, lastChecked: Date.now(), lastError: "", valid: true, reason: "" };
+  sessionState = { openingEntry: name, status, user, posProfile: profile || selectedProfile, company: company || selectedCompany, postingDate, periodStart, lastChecked: Date.now(), lastError: "", valid: true, reason: "", failedClosing: sessionStr(session, "failed_closing"), failedClosingError: sessionStr(session, "failed_closing_error") || (sessionStr(session, "failed_closing") ? String(session.reason ?? "Shift close failed — retry Close Shift after fixing the error") : "") };
   pendingSwitchEntry = "";
-  clearSessionInvalid(); applySessionToHeader(); renderSessionInfo(); updateCompleteSaleState();
+  if (sessionState.failedClosing) {
+    // Keep the session usable for Close Shift retry, but freeze checkout loudly.
+    cartMessage(sessionState.failedClosingError);
+    showSessionInvalid(sessionState.failedClosingError);
+  } else {
+    clearSessionInvalid();
+  }
+  applySessionToHeader(); renderSessionInfo(); updateCompleteSaleState();
   return true;
 }
 // Used by background triggers (interval/focus/reconnect): show the overlay only while the cashier is on the POS screen.
@@ -3379,7 +3416,8 @@ async function requestSupervisorPinSetup(action: "reset_pin", cashierUser: strin
   }
   if (title) title.textContent = `Reset ${label} for ${cashierUser}`;
   if (note) note.textContent = `A supervisor verifies their own ERP credentials to reset ${cashierUser}'s Offline Cashier PIN - ${cashierUser}'s own password is not needed.`;
-  ["#admin-supervisor-user","#admin-supervisor-password","#admin-new-pin","#admin-confirm-pin"].forEach((id)=>{const input=document.querySelector<HTMLInputElement>(id);if(input)input.value="";});
+  ["#admin-new-pin","#admin-confirm-pin"].forEach((id)=>{const input=document.querySelector<HTMLInputElement>(id);if(input)input.value="";});
+  prepareSupervisorCredentialFields("#admin-supervisor-user", "#admin-supervisor-password");
   adminMessage("#admin-supervisor-message", "");
   return new Promise((resolve) => {
     const cleanup = () => { form.onsubmit = null; resolve(false); };
@@ -3401,12 +3439,12 @@ async function requestSupervisorPinSetup(action: "reset_pin", cashierUser: strin
       if (pinInput) pinInput.value = "";
       if (confirmInput) confirmInput.value = "";
       if (!saved.ok) { adminMessage("#admin-supervisor-message", saved.error ?? `Unable to save ${label}.`); return; }
+      saveLastSupervisorUser(username);
       dialog.close();
       form.onsubmit = null;
       resolve(true);
     };
     dialog.showModal();
-    window.setTimeout(()=>document.querySelector<HTMLInputElement>("#admin-supervisor-user")?.focus(),0);
   });
 }
 
@@ -3421,7 +3459,7 @@ async function requestSettingsAuthorization(): Promise<boolean> {
   const form = document.querySelector<HTMLFormElement>("#settings-auth-form");
   if (!dialog || !form) return false;
   if (!navigator.onLine) { await appAlert("Settings requires an online connection to verify your ERP account."); return false; }
-  ["#settings-auth-user","#settings-auth-password"].forEach((id)=>{const input=document.querySelector<HTMLInputElement>(id);if(input)input.value="";});
+  prepareSupervisorCredentialFields("#settings-auth-user", "#settings-auth-password");
   adminMessage("#settings-auth-message", "");
   return new Promise((resolve) => {
     const cleanup = () => { form.onsubmit = null; resolve(false); };
@@ -3435,12 +3473,12 @@ async function requestSettingsAuthorization(): Promise<boolean> {
       const auth = await window.posAPI.authorizeAdminAction({ username, password, action: "change_credentials" });
       if (passwordInput) passwordInput.value = "";
       if (!auth.ok) { adminMessage("#settings-auth-message", auth.error ?? "Settings authorization failed."); return; }
+      saveLastSupervisorUser(username);
       dialog.close();
       form.onsubmit = null;
       resolve(true);
     };
     dialog.showModal();
-    window.setTimeout(()=>document.querySelector<HTMLInputElement>("#settings-auth-user")?.focus(),0);
   });
 }
 
@@ -3452,18 +3490,39 @@ async function openSettingsIfAuthorized(): Promise<void> {
   if (await requestSettingsAuthorization()) showScreen("settings");
 }
 
-// Generic "a POS Supervisor must authorize this" gate for close_shift and
-// void_item - same dialog-driven pattern as requestSettingsAuthorization
-// above, generalized to a parameterized action and returning the raw token
-// (Settings has nothing further to do with it; these two do). Deliberately
-// still prompts fresh credentials every time rather than trusting anything
-// cached client-side, for the same reason requestSettingsAuthorization does.
-const SUPERVISOR_ACTION_COPY: Record<"close_shift" | "void_item" | "clear_cart", { title: string; note: string }> = {
+// Remembers the last successful supervisor username across auth dialogs so
+// repeated step-ups only require retyping the password. Password is never stored.
+const LAST_SUPERVISOR_USER_KEY = "pos.lastSupervisorUsername";
+function loadLastSupervisorUser(): string {
+  try { return localStorage.getItem(LAST_SUPERVISOR_USER_KEY)?.trim() ?? ""; } catch { return ""; }
+}
+function saveLastSupervisorUser(username: string): void {
+  try { if (username) localStorage.setItem(LAST_SUPERVISOR_USER_KEY, username); } catch { /* ignore */ }
+}
+function prepareSupervisorCredentialFields(userSelector: string, passwordSelector: string): void {
+  const userInput = document.querySelector<HTMLInputElement>(userSelector);
+  const passwordInput = document.querySelector<HTMLInputElement>(passwordSelector);
+  const lastUser = loadLastSupervisorUser();
+  if (userInput) userInput.value = lastUser;
+  if (passwordInput) passwordInput.value = "";
+  window.setTimeout(() => {
+    if (lastUser) passwordInput?.focus();
+    else userInput?.focus();
+  }, 0);
+}
+
+// Generic "a POS Supervisor must authorize this" gate for close_shift,
+// void_item, clear_cart, and refund - same dialog-driven pattern as
+// requestSettingsAuthorization above, generalized to a parameterized action
+// and returning the raw token. Password is always fresh; username may be
+// prefilled from the last successful supervisor login on this terminal.
+const SUPERVISOR_ACTION_COPY: Record<"close_shift" | "void_item" | "clear_cart" | "refund", { title: string; note: string }> = {
   close_shift: { title: "Supervisor Authorization — Close Shift", note: "This cashier is not permitted to close the shift. A POS Supervisor must enter their ERP credentials to authorize it." },
   void_item: { title: "Supervisor Authorization — Void Item", note: "This cashier is not permitted to void items. A POS Supervisor must enter their ERP credentials to authorize removing this item." },
   clear_cart: { title: "Supervisor Authorization — Clear Cart", note: "This cashier is not permitted to clear the full cart. A POS Supervisor must enter their ERP credentials to authorize abandoning this bill." },
+  refund: { title: "Supervisor Authorization — Refund", note: "This cashier is not permitted to refund. A POS Supervisor must enter their ERP credentials to authorize this return." },
 };
-async function requestSupervisorActionAuthorization(action: "close_shift" | "void_item" | "clear_cart"): Promise<{ ok: boolean; token: string }> {
+async function requestSupervisorActionAuthorization(action: "close_shift" | "void_item" | "clear_cart" | "refund"): Promise<{ ok: boolean; token: string }> {
   const dialog = document.querySelector<HTMLDialogElement>("#supervisor-action-dialog");
   const form = document.querySelector<HTMLFormElement>("#supervisor-action-form");
   if (!dialog || !form) return { ok: false, token: "" };
@@ -3471,7 +3530,7 @@ async function requestSupervisorActionAuthorization(action: "close_shift" | "voi
   const copy = SUPERVISOR_ACTION_COPY[action];
   setText("#supervisor-action-title", copy.title);
   setText("#supervisor-action-note", copy.note);
-  ["#supervisor-action-user","#supervisor-action-password"].forEach((id)=>{const input=document.querySelector<HTMLInputElement>(id);if(input)input.value="";});
+  prepareSupervisorCredentialFields("#supervisor-action-user", "#supervisor-action-password");
   adminMessage("#supervisor-action-message", "");
   return new Promise((resolve) => {
     const cleanup = () => { form.onsubmit = null; resolve({ ok: false, token: "" }); };
@@ -3485,12 +3544,12 @@ async function requestSupervisorActionAuthorization(action: "close_shift" | "voi
       const auth = await window.posAPI.authorizeAdminAction({ username, password, action });
       if (passwordInput) passwordInput.value = "";
       if (!auth.ok) { adminMessage("#supervisor-action-message", auth.error ?? "Supervisor authorization failed."); return; }
+      saveLastSupervisorUser(username);
       dialog.close();
       form.onsubmit = null;
       resolve({ ok: true, token: auth.token });
     };
     dialog.showModal();
-    window.setTimeout(()=>document.querySelector<HTMLInputElement>("#supervisor-action-user")?.focus(),0);
   });
 }
 
