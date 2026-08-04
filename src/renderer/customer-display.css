@@ -119,10 +119,26 @@ body {
 .cd-line-name { overflow-wrap: anywhere; font-weight: 600; }
 .cd-line-qty { color: var(--color-text-muted); font-size: 1.15rem; white-space: nowrap; }
 .cd-line-amount { font-weight: 800; text-align: right; white-space: nowrap; }
-.cd-line-latest { animation: cd-line-highlight 1.6s ease-out; }
+.cd-line-latest { animation: cd-line-highlight 2s ease-out; }
 @keyframes cd-line-highlight {
-  0% { background: var(--color-accent-soft); }
-  100% { background: transparent; }
+  0% {
+    background: var(--color-accent);
+    color: var(--color-accent-contrast);
+    box-shadow: inset 0 0 0 2px var(--color-accent-strong);
+    transform: scale(1.01);
+  }
+  35% {
+    background: color-mix(in srgb, var(--color-accent) 55%, var(--color-accent-soft));
+    color: var(--color-text);
+    box-shadow: inset 0 0 0 2px var(--color-accent);
+    transform: scale(1);
+  }
+  100% {
+    background: transparent;
+    color: inherit;
+    box-shadow: none;
+    transform: none;
+  }
 }
 .cd-active-foot {
   padding: 20px 32px 28px;
