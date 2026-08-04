@@ -340,8 +340,8 @@ async function seedSessionFromCache(): Promise<boolean> {
   return true;
 }
 // Offline cold start: seed the POS Profile's default customer (online bootstrap normally does this) so checkout isn't blocked.
-async function seedDefaultCustomerFromConfig(cfg: PosConfigurationSummary): Promise<void> {
-  if (selectedCustomer || !cfg.defaultCustomer) return;
+async function seedDefaultCustomerFromConfig(cfg: PosConfigurationSummary, force = false): Promise<void> {
+  if ((!force && selectedCustomer) || !cfg.defaultCustomer) return;
   const base = { name: cfg.defaultCustomer, customer_name: cfg.defaultCustomer, customer_group: "", mobile_no: "", email_id: "", tax_id: "" };
   selectedCustomer = base;
   try {
@@ -349,6 +349,15 @@ async function seedDefaultCustomerFromConfig(cfg: PosConfigurationSummary): Prom
     if (c.customer) selectedCustomer = { ...base, customer_name: String(c.customer.customer_name ?? base.customer_name), customer_group: String(c.customer.customer_group ?? ""), mobile_no: String(c.customer.mobile_no ?? ""), email_id: String(c.customer.email_id ?? ""), tax_id: String(c.customer.tax_id ?? "") };
   } catch { /* offline: keep the cached default-customer base */ }
   showCustomer();
+}
+
+async function resetCustomerToProfileDefault(): Promise<void> {
+  const cfg = await window.posAPI.getCachedPosConfiguration().catch(() => null);
+  selectedCustomer = null;
+  customerBenefits = { loyaltyProgram: "", availablePoints: 0, conversionFactor: 1 };
+  benefitsOutdated = true;
+  if (cfg?.defaultCustomer) await seedDefaultCustomerFromConfig(cfg, true);
+  else showCustomer();
 }
 
 function showCatalogTotals(totals: CatalogTotals): void {
@@ -1704,6 +1713,7 @@ async function clearActiveSale(message:string):Promise<void>{
   validatedCartVersion=-1;paymentPreparedVersion=-1;previewStatus="idle";previewError="";
   lastSaleResponse=null;lastReceiptHtml=null;receiptInvoice="";resumedHeldId=null;
   terminalInvoiceId=await window.posAPI.getTerminalInvoiceId();
+  await resetCustomerToProfileDefault();
   renderServerTaxRows();renderCart();cartMessage(message);focusCart();
 }
 async function startNewSaleAfterReceipt():Promise<void>{
@@ -2515,6 +2525,17 @@ async function voidCartRow(index: number): Promise<void> {
   }
   cartLines.splice(index, 1);
   await afterCartMutation("Item voided");
+}
+
+async function clearFullCart(): Promise<void> {
+  if (!cartLines.length || !(await appConfirm("Clear the full cart?"))) return;
+  if (!cashierSession?.canVoidItems) {
+    const auth = await requestSupervisorActionAuthorization("clear_cart");
+    if (!auth.ok) return;
+    const consumed = await window.posAPI.consumeAdminAction({ token: auth.token, action: "clear_cart" });
+    if (!consumed.ok) { cartMessage(consumed.error ?? "Supervisor authorization could not be verified."); return; }
+  }
+  await clearActiveSale("Cart cleared");
 }
 
 async function changeCartQuantity(delta: number): Promise<void> {
@@ -3437,11 +3458,12 @@ async function openSettingsIfAuthorized(): Promise<void> {
 // (Settings has nothing further to do with it; these two do). Deliberately
 // still prompts fresh credentials every time rather than trusting anything
 // cached client-side, for the same reason requestSettingsAuthorization does.
-const SUPERVISOR_ACTION_COPY: Record<"close_shift" | "void_item", { title: string; note: string }> = {
+const SUPERVISOR_ACTION_COPY: Record<"close_shift" | "void_item" | "clear_cart", { title: string; note: string }> = {
   close_shift: { title: "Supervisor Authorization — Close Shift", note: "This cashier is not permitted to close the shift. A POS Supervisor must enter their ERP credentials to authorize it." },
   void_item: { title: "Supervisor Authorization — Void Item", note: "This cashier is not permitted to void items. A POS Supervisor must enter their ERP credentials to authorize removing this item." },
+  clear_cart: { title: "Supervisor Authorization — Clear Cart", note: "This cashier is not permitted to clear the full cart. A POS Supervisor must enter their ERP credentials to authorize abandoning this bill." },
 };
-async function requestSupervisorActionAuthorization(action: "close_shift" | "void_item"): Promise<{ ok: boolean; token: string }> {
+async function requestSupervisorActionAuthorization(action: "close_shift" | "void_item" | "clear_cart"): Promise<{ ok: boolean; token: string }> {
   const dialog = document.querySelector<HTMLDialogElement>("#supervisor-action-dialog");
   const form = document.querySelector<HTMLFormElement>("#supervisor-action-form");
   if (!dialog || !form) return { ok: false, token: "" };
@@ -3824,7 +3846,7 @@ function initializeRenderer(): void {
   document.querySelector("#cart-increase")?.addEventListener("click", () => void changeCartQuantity(1));
   document.querySelector("#cart-remove")?.addEventListener("click", () => void removeSelectedCartRow());
   document.querySelector("#mobile-select-customer")?.addEventListener("click", () => openCustomerSearch());
-  document.querySelector("#cart-clear")?.addEventListener("click", async () => { if (!cartLines.length || !(await appConfirm("Clear the full cart?"))) return; cartLines=[]; selectedCartIndex=-1; await afterCartMutation("Cart cleared"); });
+  document.querySelector("#cart-clear")?.addEventListener("click", () => void clearFullCart());
   document.querySelector<HTMLFormElement>("#quantity-form")?.addEventListener("submit", (event) => { event.preventDefault(); const submitter = event.submitter as HTMLButtonElement | null; if (submitter?.value === "cancel") { document.querySelector<HTMLDialogElement>("#quantity-dialog")?.close(); focusCart(); } else void saveDialogQuantity(); });
   document.querySelector<HTMLDialogElement>("#quantity-dialog")?.addEventListener("cancel", () => focusCart());
   // Payment dialog controls
