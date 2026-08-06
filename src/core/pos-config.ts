@@ -17,6 +17,12 @@ function summarizePosConfiguration(configuration: Record<string, unknown>): PosC
     return null;
   }
 
+  // Legacy bootstrap caches (pre custom_allow_item_search) keep slash-search on.
+  // Once the POS Profile field is present, 0/false disables name/code search.
+  const allowItemSearch = !Object.prototype.hasOwnProperty.call(profile, "custom_allow_item_search")
+    ? true
+    : Boolean(Number(profile.custom_allow_item_search));
+
   return {
     posProfile: textValue(profile, "name"),
     company: textValue(profile, "company"),
@@ -28,6 +34,7 @@ function summarizePosConfiguration(configuration: Record<string, unknown>): PosC
     taxTemplate: taxTemplate ? textValue(taxTemplate, "name") || textValue(profile, "taxes_and_charges") : null,
     taxRowsCount: taxRows.length,
     paymentMethodsCount: paymentModes.length,
+    allowItemSearch,
     lastSynced: syncedAt,
     cacheStatus: "Ready"
   };

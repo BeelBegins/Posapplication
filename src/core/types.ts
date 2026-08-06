@@ -46,6 +46,8 @@ export interface PosConfigurationSummary {
   taxTemplate: string | null;
   taxRowsCount: number;
   paymentMethodsCount: number;
+  /** From POS Profile.custom_allow_item_search; missing/legacy cache defaults to true. */
+  allowItemSearch: boolean;
   lastSynced: string;
   cacheStatus: "Ready";
 }

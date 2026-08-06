@@ -155,6 +155,7 @@ interface PosConfigurationSummary {
   taxTemplate: string | null;
   taxRowsCount: number;
   paymentMethodsCount: number;
+  allowItemSearch: boolean;
   lastSynced: string;
   cacheStatus: "Ready";
 }
@@ -264,6 +265,8 @@ function showPosConfigurationSummary(summary: PosConfigurationSummary | null): v
     section.hidden = true;
     return;
   }
+  allowItemSearch = summary.allowItemSearch !== false;
+  updateCartSearchUi();
 
   const fields: Record<string, string> = {
     "#config-pos-profile": summary.posProfile,
@@ -450,10 +453,18 @@ function normalizeBenefits(value: AppliedBenefits | Record<string, unknown> | nu
 let appliedBenefits: AppliedBenefits = emptyBenefits();
 let customerBenefits = { loyaltyProgram: "", availablePoints: 0, conversionFactor: 1 };
 let benefitsOutdated = false;
-const slashSearchEnabled = true;
+// POS Profile.custom_allow_item_search (missing/legacy bootstrap => true).
+let allowItemSearch = true;
+// Ignore overlapping wedge scans while a lookup runs and briefly after a hit.
+const SCAN_SETTLE_MS = 120;
+let scanBusy = false;
+let scanReadyAt = 0;
 let scannerFocusUntil = 0;
 let scannerFocusTimer: number | undefined;
 function cartInput(): HTMLInputElement | null { return document.querySelector<HTMLInputElement>("#cart-search"); }
+function isScanInputBlocked(): boolean {
+  return scanBusy || Date.now() < scanReadyAt;
+}
 function shouldFocusScanner(): boolean {
   const input = cartInput();
   const posScreen = document.querySelector<HTMLElement>("#pos-screen");
@@ -473,6 +484,13 @@ function isScannerTextKey(event: KeyboardEvent): boolean {
 }
 function captureScannerTextKey(event: KeyboardEvent): boolean {
   if (!isScannerTextKey(event) || !shouldFocusScanner() || isEditableElement(document.activeElement)) return false;
+  // Swallow wedge characters during lookup/settle so a second scan cannot
+  // concatenate onto the previous barcode and resolve the wrong item.
+  if (isScanInputBlocked()) {
+    event.preventDefault();
+    event.stopPropagation();
+    return true;
+  }
   const input = cartInput();
   if (!input) return false;
   event.preventDefault();
@@ -485,6 +503,38 @@ function captureScannerTextKey(event: KeyboardEvent): boolean {
   input.setSelectionRange(next, next);
   input.dispatchEvent(new Event("input", { bubbles: true }));
   return true;
+}
+function playBarcodeFailBeep(): void {
+  try {
+    const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!Ctx) return;
+    const ctx = new Ctx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = "square";
+    osc.frequency.value = 380;
+    gain.gain.value = 0.09;
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    window.setTimeout(() => { try { osc.stop(); void ctx.close(); } catch { /* ignore */ } }, 220);
+  } catch { /* audio is optional */ }
+}
+function updateCartSearchUi(): void {
+  const input = cartInput();
+  if (!input) return;
+  if (allowItemSearch) {
+    input.placeholder = "Scan barcode or type / to search items";
+    input.setAttribute("aria-label", "Scan barcode or search products");
+  } else {
+    input.placeholder = "Scan barcode (item search disabled)";
+    input.setAttribute("aria-label", "Scan barcode");
+  }
+}
+async function refreshItemSearchSetting(): Promise<void> {
+  const cfg = await window.posAPI.getCachedPosConfiguration().catch(() => null);
+  allowItemSearch = cfg?.allowItemSearch !== false;
+  updateCartSearchUi();
 }
 function applyScannerFocus(): boolean {
   const input = cartInput();
@@ -514,7 +564,7 @@ function focusCart(sticky = false, nativeFocus = false): void {
 // can surrender the Windows foreground window and fail to return it, which is
 // especially disruptive after Clear Cart because scanner input then appears
 // dead until Alt+Tab. This modal never creates another OS window.
-function showAppMessage(message: string, mode: "confirm" | "alert"): Promise<boolean> {
+function showAppMessage(message: string, mode: "confirm" | "alert", titleText?: string): Promise<boolean> {
   const dialog = document.querySelector<HTMLDialogElement>("#app-message-dialog");
   const title = document.querySelector<HTMLElement>("#app-message-title");
   const text = document.querySelector<HTMLElement>("#app-message-text");
@@ -522,7 +572,7 @@ function showAppMessage(message: string, mode: "confirm" | "alert"): Promise<boo
   const cancelButton = document.querySelector<HTMLButtonElement>("#app-message-cancel");
   if (!dialog || !title || !text || !confirmButton || !cancelButton) return Promise.resolve(mode === "alert");
   const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-  title.textContent = mode === "confirm" ? "Confirm action" : "Notice";
+  title.textContent = titleText ?? (mode === "confirm" ? "Confirm action" : "Notice");
   text.textContent = message;
   confirmButton.textContent = mode === "confirm" ? "Continue" : "OK";
   cancelButton.hidden = mode === "alert";
@@ -552,8 +602,8 @@ function showAppMessage(message: string, mode: "confirm" | "alert"): Promise<boo
 function appConfirm(message: string): Promise<boolean> {
   return showAppMessage(message, "confirm");
 }
-async function appAlert(message: string): Promise<void> {
-  await showAppMessage(message, "alert");
+async function appAlert(message: string, titleText = "Notice"): Promise<void> {
+  await showAppMessage(message, "alert", titleText);
 }
 
 function updateWindowMaximizeButton(state: MainWindowState): void {
@@ -2590,8 +2640,53 @@ async function saveDialogQuantity(): Promise<void> {
 }
 
 function showCartSearchResults(results: CatalogSearchResult[], preserveSelection = false): void { cartSearchResults = results.slice(0, 7); if (!preserveSelection) selectedSearchIndex = 0; selectedSearchIndex = Math.min(selectedSearchIndex, Math.max(0, cartSearchResults.length - 1)); const container = document.querySelector<HTMLElement>("#cart-search-results"); if (!container) return; container.replaceChildren(...cartSearchResults.map((item, index) => { const button = document.createElement("button"); button.type="button"; button.className=`secondary-button search-result${index === selectedSearchIndex ? " selected" : ""}`; const price = item.sellingPrice === null ? "—" : `${item.sellingPrice.toFixed(2)} ${item.currency ?? ""}`; const stock = item.actualStock === null ? "—" : String(item.actualStock); button.innerHTML=`<span class="search-code">${item.itemCode}</span><span class="search-name">${item.itemName}</span><span class="search-meta">${item.uom} x${item.conversionFactor ?? 1} · ${price} · Stock ${stock}</span>`; button.onclick=()=>void addToCart(item); return button; })); container.querySelector<HTMLElement>(".selected")?.scrollIntoView({ block: "nearest" }); }
-async function runSlashSearch(): Promise<void> { const query = (cartInput()?.value ?? "").slice(1).trim(); if (!query) { showCartSearchResults([]); return; } const lookup = await window.posAPI.lookupCatalog(query); showCartSearchResults(lookup.exact ? [lookup.exact] : lookup.results); cartMessage(cartSearchResults.length ? "Search results" : "No active sales item found"); }
-async function scanCartInput(): Promise<void> { const input = cartInput(); const query = input?.value.trim() ?? ""; if (!query) return; if (slashSearchEnabled && query.startsWith("/")) { if (cartSearchResults.length) await addToCart(cartSearchResults[selectedSearchIndex] ?? cartSearchResults[0]); else await runSlashSearch(); return; } const lookup = await window.posAPI.lookupCatalog(query); if (lookup.exact) { await addToCart(lookup.exact); return; } showCartSearchResults(lookup.results); cartMessage(lookup.results.length ? "Select an item" : "No active sales item found"); }
+async function runSlashSearch(): Promise<void> {
+  if (!allowItemSearch) { showCartSearchResults([]); cartMessage("Item search is disabled for this POS Profile"); return; }
+  const query = (cartInput()?.value ?? "").slice(1).trim();
+  if (!query) { showCartSearchResults([]); return; }
+  const lookup = await window.posAPI.lookupCatalog(query);
+  showCartSearchResults(lookup.exact ? [lookup.exact] : lookup.results);
+  cartMessage(cartSearchResults.length ? "Search results" : "No active sales item found");
+}
+async function reportBarcodeFailed(query: string): Promise<void> {
+  playBarcodeFailBeep();
+  clearCartSearch();
+  cartMessage("Barcode failed — press Enter / OK to continue");
+  await appAlert(`Barcode not found:\n${query}\n\nPress Enter or OK, then scan again.`, "Barcode Failed");
+  focusCart(true);
+}
+async function scanCartInput(): Promise<void> {
+  if (isScanInputBlocked()) return;
+  const input = cartInput();
+  const query = input?.value.trim() ?? "";
+  if (!query) return;
+  if (query.startsWith("/")) {
+    if (!allowItemSearch) {
+      clearCartSearch();
+      cartMessage("Item search is disabled for this POS Profile");
+      await appAlert("Item search is disabled on this POS Profile. Scan a barcode or enter an exact item code.", "Search Disabled");
+      focusCart(true);
+      return;
+    }
+    if (cartSearchResults.length) await addToCart(cartSearchResults[selectedSearchIndex] ?? cartSearchResults[0]);
+    else await runSlashSearch();
+    return;
+  }
+  scanBusy = true;
+  try {
+    const lookup = await window.posAPI.lookupCatalog(query);
+    if (lookup.exact) {
+      await addToCart(lookup.exact);
+      scanReadyAt = Date.now() + SCAN_SETTLE_MS;
+      return;
+    }
+    // Scanner Enter is exact barcode/item-code only — never auto-pick fuzzy hits.
+    await reportBarcodeFailed(query);
+    scanReadyAt = Date.now() + SCAN_SETTLE_MS;
+  } finally {
+    scanBusy = false;
+  }
+}
 
 function sessionStr(record: Record<string, unknown> | null, ...keys: string[]): string {
   for (const key of keys) { const value = record?.[key]; if (typeof value === "string" && value) return value; if (typeof value === "number") return String(value); }
@@ -3559,6 +3654,7 @@ function initializeRenderer(): void {
   void loadPosProfileCacheStatus();
   void loadSettingsIntoForm();
   void loadCachedPosConfiguration();
+  void refreshItemSearchSetting();
   void loadCachedPosSession();
   void window.posAPI.getCatalogTotals().then(showCatalogTotals);
   window.posAPI.onCatalogProgress(showCatalogProgress);
@@ -3895,8 +3991,17 @@ function initializeRenderer(): void {
     showCatalogResults(query ? await window.posAPI.searchCatalog(query) : []);
   });
 
-  cartInput()?.addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); void scanCartInput(); } });
-  cartInput()?.addEventListener("input", () => { if (slashSearchEnabled && cartInput()?.value.startsWith("/")) void runSlashSearch(); else if (!cartInput()?.value) clearCartSearch(); });
+  cartInput()?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      if (isScanInputBlocked()) return;
+      void scanCartInput();
+    }
+  });
+  cartInput()?.addEventListener("input", () => {
+    if (allowItemSearch && cartInput()?.value.startsWith("/")) void runSlashSearch();
+    else if (!cartInput()?.value) clearCartSearch();
+  });
   document.querySelector<HTMLElement>("#pos-screen")?.addEventListener("pointerup", (event) => {
     if (!isEditableElement(event.target as Element | null)) focusCart(true);
   });
@@ -4016,7 +4121,7 @@ function initializeRenderer(): void {
     else if (customerDialog?.open && event.key === "ArrowUp") { event.preventDefault(); event.stopPropagation(); selectedCustomerIndex=Math.max(0,selectedCustomerIndex-1); void searchCustomer(true); }
     else if (customerDialog?.open && event.key === "ArrowDown") { event.preventDefault(); event.stopPropagation(); selectedCustomerIndex=Math.min(customerResults.length-1,selectedCustomerIndex+1); void searchCustomer(true); }
     else if (customerDialog?.open && event.key === "Enter") { event.preventDefault(); event.stopPropagation(); if(customerResults[selectedCustomerIndex]) void selectCustomer(customerResults[selectedCustomerIndex]); }
-    else if (event.key === "/" && slashSearchEnabled && !quantityDialog?.open) { event.preventDefault(); event.stopPropagation(); const input = cartInput(); if (input) { input.value = "/"; input.focus(); } clearCartSearch(); if (input) input.value = "/"; }
+    else if (event.key === "/" && allowItemSearch && !quantityDialog?.open) { event.preventDefault(); event.stopPropagation(); const input = cartInput(); if (input) { input.value = "/"; input.focus(); } clearCartSearch(); if (input) input.value = "/"; }
     else if (event.key === "Enter" && cartSearchResults.length && scannerActive) { event.preventDefault(); event.stopPropagation(); void addToCart(cartSearchResults[selectedSearchIndex] ?? cartSearchResults[0]); }
     else if (event.key === "ArrowUp") { event.preventDefault(); event.stopPropagation(); if (cartSearchResults.length && scannerActive) { selectedSearchIndex = Math.max(0, selectedSearchIndex - 1); showCartSearchResults(cartSearchResults, true); } else if (cartLines.length) { selectedCartIndex = Math.max(0, selectedCartIndex - 1); renderCart(); } }
     else if (event.key === "ArrowDown") { event.preventDefault(); event.stopPropagation(); if (cartSearchResults.length && scannerActive) { selectedSearchIndex = Math.min(cartSearchResults.length - 1, selectedSearchIndex + 1); showCartSearchResults(cartSearchResults, true); } else if (cartLines.length) { selectedCartIndex = Math.min(cartLines.length - 1, selectedCartIndex + 1); renderCart(); } }
