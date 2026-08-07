@@ -909,7 +909,8 @@ function updateCloseDifferences(): void {
   const totalEl = document.querySelector<HTMLElement>("#close-total-difference");
   if (totalEl) { totalEl.textContent = fmtMoney(totalDiff); totalEl.className = Math.abs(totalDiff) < 0.005 ? "balanced" : "warn"; }
 }
-// Thermal-receipt-width shift summary: opening, sales, refunds, actual, difference (+ per-mode difference).
+// Thermal-receipt-width shift summary: opening, sales, refunds, actual, difference
+// (+ amount received by mode, like Sales Dashboard payment mix, and per-mode difference).
 function buildShiftSummaryHtml(): string {
   const s = closeShiftSummary;
   const rows = reconRows();
@@ -924,6 +925,16 @@ function buildShiftSummaryHtml(): string {
   const cashier = s?.user || (document.querySelector<HTMLElement>("#pos-cashier")?.textContent ?? "—");
   const opened = s?.periodStart ? new Date(s.periodStart).toLocaleString() : "—";
   const line = (label: string, value: number, bold = false) => `<div style="display:flex;justify-content:space-between;font-weight:${bold ? 900 : 700}">${bold ? "<strong>" : ""}<span>${esc(label)}</span><span>${value.toFixed(2)}</span>${bold ? "</strong>" : ""}</div>`;
+  // Payment mix by mode (Cash / Credit Card / …) — same split Sales Dashboard shows.
+  const receivedByMode = (s?.payments ?? [])
+    .map((p) => ({
+      mode: p.mode_of_payment,
+      amount: money2(p.net_movement ?? p.collected_amount)
+    }))
+    .filter((p) => p.mode);
+  const receivedSection = receivedByMode.length
+    ? `<hr/><div style="text-align:center;font-size:11px;font-weight:800">Amount Received by Mode</div>${receivedByMode.map((p) => line(p.mode, p.amount)).join("")}`
+    : "";
   const perMode = rows.map((r) => `<div style="display:flex;justify-content:space-between;font-weight:700"><span>${esc(r.mode)}</span><span>${money2(r.actual - r.expected).toFixed(2)}</span></div>`).join("");
   // @page + print-color-adjust mirror receiptPrintCss() above: without them,
   // this print job never registers as an 80mm receipt (wrong printer-driver
@@ -952,6 +963,7 @@ function buildShiftSummaryHtml(): string {
     ${line("Expected", expected)}
     ${line("Actual (counted)", actual)}
     ${line("Difference", difference, true)}
+    ${receivedSection}
     <hr/>
     <div style="text-align:center;font-size:11px;font-weight:800">Difference by mode</div>
     ${perMode}
@@ -1101,8 +1113,13 @@ function shiftReportText(r: ShiftHistoryRow): string {
     `Shift Report`, `Opening Entry: ${r.openingEntry}`, `Closing Entry: ${r.closingEntry ?? "—"}`,
     `Cashier: ${r.cashier || "—"}`, `POS Profile: ${r.posProfile || "—"}`, `Company: ${r.company || "—"}`,
     `Opened: ${r.openedAt ? new Date(r.openedAt).toLocaleString() : "—"}`, `Closed: ${r.closedAt ? new Date(r.closedAt).toLocaleString() : "—"}`,
-    `Status: ${r.status}`, ``, `Mode               Opening   Expected   Actual   Difference`
+    `Status: ${r.status}`, ``, `Amount Received by Mode`
   ];
+  for (const p of summary?.payments ?? []) {
+    const received = money2(p.net_movement ?? p.collected_amount);
+    lines.push(`${p.mode_of_payment.padEnd(18)} ${fmtMoney(received).padStart(10)}`);
+  }
+  lines.push(``, `Mode               Opening   Expected   Actual   Difference`);
   const closing = Array.isArray(r.summary?.closing_balances) ? r.summary!.closing_balances as Record<string, unknown>[] : [];
   const byMode = new Map(closing.map((c) => [String(c.mode_of_payment ?? ""), c]));
   for (const p of summary?.payments ?? []) {
