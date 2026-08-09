@@ -21,6 +21,9 @@ interface CustomerDisplayPayload {
   companyName: string;
   /** Cashier cart selection (scan / click / arrow keys). Falls back to last row. */
   highlightedIndex?: number;
+  /** Enrolled loyalty only — omit/blank for Walk-in / not enrolled. */
+  loyaltyProgram?: string;
+  availableLoyaltyPoints?: number;
 }
 
 // Persisted across renders (and across the idle <-> active toggle) since the
@@ -58,6 +61,19 @@ function renderCustomerDisplay(payload: CustomerDisplayPayload): void {
   if (companyEl) companyEl.textContent = lastCompanyName;
   const customerEl = document.querySelector<HTMLElement>("#cd-customer");
   if (customerEl) customerEl.textContent = payload.customerName || "";
+
+  const loyaltyEl = document.querySelector<HTMLElement>("#cd-loyalty");
+  if (loyaltyEl) {
+    const program = String(payload.loyaltyProgram || "").trim();
+    const points = Number(payload.availableLoyaltyPoints);
+    if (program && Number.isFinite(points)) {
+      loyaltyEl.hidden = false;
+      loyaltyEl.textContent = `Loyalty ${Math.max(0, Math.trunc(points))} pts`;
+    } else {
+      loyaltyEl.hidden = true;
+      loyaltyEl.textContent = "";
+    }
+  }
 
   const linesEl = document.querySelector<HTMLElement>("#cd-lines");
   if (linesEl) {

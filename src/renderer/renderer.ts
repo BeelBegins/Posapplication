@@ -2419,11 +2419,12 @@ async function showRefundReceipt(res:Record<string,unknown>):Promise<void>{
 
 async function loadCustomerBenefits():Promise<void>{
   if(!selectedCustomer)return;
-  if(!isOnline()){customerBenefits={loyaltyProgram:"",availablePoints:0,conversionFactor:1};return;}
+  if(!isOnline()){customerBenefits={loyaltyProgram:"",availablePoints:0,conversionFactor:1};pushCustomerDisplayUpdate(fbrTotalsView());return;}
   try{
     const result=await window.posAPI.getCustomerBenefits(selectedCustomer.name);
     customerBenefits={loyaltyProgram:result.loyaltyProgram??"",availablePoints:result.availablePoints,conversionFactor:result.conversionFactor||1};
   }catch{customerBenefits={loyaltyProgram:"",availablePoints:0,conversionFactor:1};}
+  pushCustomerDisplayUpdate(fbrTotalsView());
 }
 
 function updateBenefitsLoyaltyStatus(online: boolean, loading = false): void {
@@ -2661,6 +2662,9 @@ function pushCustomerDisplayUpdate(totals: FbrTotalsView): void {
     customerName: selectedCustomer?.customer_name || selectedCustomer?.name || "",
     companyName: sessionState.company || "",
     highlightedIndex: selectedCartIndex,
+    // Walk-in / not enrolled → blank program → customer display hides the row.
+    loyaltyProgram: customerBenefits.loyaltyProgram || "",
+    availableLoyaltyPoints: customerBenefits.loyaltyProgram ? customerBenefits.availablePoints : undefined,
   });
 }
 async function afterCartMutation(message: string): Promise<void> {
