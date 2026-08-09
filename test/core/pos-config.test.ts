@@ -35,7 +35,7 @@ test("summarizePosConfiguration maps a synced configuration bundle", () => {
   assert.deepEqual(summary, {
     posProfile: "Main", company: "Test Co", branch: "Branch A", warehouse: "WH-A", defaultCustomer: "Walk-in",
     sellingPriceList: "Standard", currency: "PKR", taxTemplate: "Std Tax", taxRowsCount: 1, paymentMethodsCount: 2,
-    allowItemSearch: true, lastSynced: "2026-01-01T00:00:00.000Z", cacheStatus: "Ready"
+    allowItemSearch: true, allowClearCart: true, lastSynced: "2026-01-01T00:00:00.000Z", cacheStatus: "Ready"
   });
 });
 
@@ -56,6 +56,26 @@ test("summarizePosConfiguration respects custom_allow_item_search when present",
     synced_at: "2026-01-01T00:00:00.000Z"
   });
   assert.equal(enabled?.allowItemSearch, true);
+});
+
+test("summarizePosConfiguration respects custom_allow_clear_cart when present", () => {
+  const deps = fakeDeps();
+  const core = createPosConfigCore(deps, createHttpCore(deps));
+  const disabled = core.summarizePosConfiguration({
+    pos_profile: { name: "Main", company: "Test Co", warehouse: "WH-A", customer: "Walk-in", selling_price_list: "Standard", currency: "PKR", custom_allow_clear_cart: 0 },
+    tax_template: null,
+    payment_modes: [],
+    synced_at: "2026-01-01T00:00:00.000Z"
+  });
+  assert.equal(disabled?.allowClearCart, false);
+  assert.equal(disabled?.allowItemSearch, true);
+  const enabled = core.summarizePosConfiguration({
+    pos_profile: { name: "Main", company: "Test Co", warehouse: "WH-A", customer: "Walk-in", selling_price_list: "Standard", currency: "PKR", custom_allow_clear_cart: 1 },
+    tax_template: null,
+    payment_modes: [],
+    synced_at: "2026-01-01T00:00:00.000Z"
+  });
+  assert.equal(enabled?.allowClearCart, true);
 });
 
 test("previewCart sends the human cashier identity to the server", async () => {

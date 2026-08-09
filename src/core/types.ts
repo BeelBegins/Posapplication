@@ -48,6 +48,8 @@ export interface PosConfigurationSummary {
   paymentMethodsCount: number;
   /** From POS Profile.custom_allow_item_search; missing/legacy cache defaults to true. */
   allowItemSearch: boolean;
+  /** From POS Profile.custom_allow_clear_cart; missing/legacy cache defaults to true. */
+  allowClearCart: boolean;
   lastSynced: string;
   cacheStatus: "Ready";
 }

@@ -53,6 +53,8 @@ contextBridge.exposeInMainWorld("posAPI", {
   syncPosSession: (input?: Record<string, unknown>) => ipcRenderer.invoke("pos-session:sync", input),
   getCachedPosSession: () => ipcRenderer.invoke("pos-session:get-cached")
   ,syncItemCatalog: (mode?: string) => ipcRenderer.invoke("catalog:sync", mode)
+  ,syncBarcodesOnly: (mode?: string) => ipcRenderer.invoke("catalog:sync-barcodes", mode)
+  ,resolveCatalogItem: (query: string) => ipcRenderer.invoke("catalog:resolve", query)
   ,getCatalogTotals: () => ipcRenderer.invoke("catalog:get-totals")
   ,syncFbrConfig: (mode?: string) => ipcRenderer.invoke("fbr:sync", mode)
   ,getFbrSyncState: () => ipcRenderer.invoke("fbr:state")

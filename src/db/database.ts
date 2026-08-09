@@ -2,6 +2,7 @@ import { app } from "electron";
 import Database from "better-sqlite3";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { barcodeVariants } from "../core/barcode-variants";
 
 export interface DatabaseStatus {
   isReady: boolean;
@@ -671,8 +672,12 @@ export function lookupCatalog(query: string, warehouse: string, priceList: strin
       (SELECT p.currency FROM pos_item_prices p WHERE p.item_code=i.item_code AND p.price_list=@priceList AND COALESCE(p.uom,'')=COALESCE(i.stock_uom,'') ORDER BY p.modified DESC LIMIT 1)
     ) currency,
     s.actual_qty actualStock,s.warehouse warehouse,f.custom_mrp mrp FROM pos_items i LEFT JOIN pos_item_stock s ON s.item_code=i.item_code AND s.warehouse=@warehouse LEFT JOIN pos_item_barcodes b ON b.parent=i.item_code AND b.barcode=@query COLLATE NOCASE LEFT JOIN pos_item_uom_conversions c ON c.parent=i.item_code AND c.uom=COALESCE(b.uom,i.stock_uom) LEFT JOIN pos_fbr_item_config f ON f.item_code=i.item_code WHERE i.is_sales_item=1 AND i.disabled=0`;
-  const barcode = database.prepare(`${base} AND b.barcode=@query COLLATE NOCASE LIMIT 1`).get({ query, warehouse, priceList }) as CatalogSearchResult | undefined;
-  if (barcode) return { exact: barcode, results: [] };
+  const barcodeStmt = database.prepare(`${base} AND b.barcode=@query COLLATE NOCASE LIMIT 1`);
+  // Prefer the raw scan first, then GTIN padding variants (EAN-13 leading 0 vs UPC-A).
+  for (const variant of barcodeVariants(query)) {
+    const barcode = barcodeStmt.get({ query: variant, warehouse, priceList }) as CatalogSearchResult | undefined;
+    if (barcode) return { exact: barcode, results: [] };
+  }
   const code = database.prepare(`${base} AND i.item_code=@query COLLATE NOCASE LIMIT 1`).get({ query, warehouse, priceList }) as CatalogSearchResult | undefined;
   return code ? { exact: code, results: [] } : { exact: null, results: searchCatalog(query, warehouse, priceList) };
 }
