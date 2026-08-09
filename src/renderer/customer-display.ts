@@ -19,6 +19,8 @@ interface CustomerDisplayPayload {
   totalSavings: number;
   customerName: string;
   companyName: string;
+  /** Cashier cart selection (scan / click / arrow keys). Falls back to last row. */
+  highlightedIndex?: number;
 }
 
 // Persisted across renders (and across the idle <-> active toggle) since the
@@ -59,10 +61,17 @@ function renderCustomerDisplay(payload: CustomerDisplayPayload): void {
 
   const linesEl = document.querySelector<HTMLElement>("#cd-lines");
   if (linesEl) {
+    const last = payload.lines.length - 1;
+    const highlight =
+      typeof payload.highlightedIndex === "number" &&
+      payload.highlightedIndex >= 0 &&
+      payload.highlightedIndex <= last
+        ? payload.highlightedIndex
+        : last;
     linesEl.replaceChildren(
       ...payload.lines.map((line, index) => {
         const row = document.createElement("div");
-        row.className = index === payload.lines.length - 1 ? "cd-line cd-line-latest" : "cd-line";
+        row.className = index === highlight ? "cd-line cd-line-latest" : "cd-line";
         const name = document.createElement("span");
         name.className = "cd-line-name";
         name.textContent = line.itemName;
@@ -76,9 +85,15 @@ function renderCustomerDisplay(payload: CustomerDisplayPayload): void {
         return row;
       })
     );
-    // Always stay pinned to the most recently scanned item rather than
-    // requiring the customer to scroll — the newest line is appended last.
-    linesEl.scrollTop = linesEl.scrollHeight;
+    // Follow cashier selection (scan / qty change / arrow keys), not always the last row.
+    const highlightedRow = linesEl.children[highlight] as HTMLElement | undefined;
+    if (highlightedRow) {
+      // Restart blink when the same index is re-pushed (e.g. qty++ on selected row).
+      highlightedRow.classList.remove("cd-line-latest");
+      void highlightedRow.offsetWidth;
+      highlightedRow.classList.add("cd-line-latest");
+      highlightedRow.scrollIntoView({ block: "nearest" });
+    }
   }
 
   const messageEl = document.querySelector<HTMLElement>("#cd-message");

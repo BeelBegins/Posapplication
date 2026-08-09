@@ -22,6 +22,10 @@ function summarizePosConfiguration(configuration: Record<string, unknown>): PosC
   const allowItemSearch = !Object.prototype.hasOwnProperty.call(profile, "custom_allow_item_search")
     ? true
     : Boolean(Number(profile.custom_allow_item_search));
+  // Legacy bootstrap caches (pre custom_allow_clear_cart) keep Clear Cart on.
+  const allowClearCart = !Object.prototype.hasOwnProperty.call(profile, "custom_allow_clear_cart")
+    ? true
+    : Boolean(Number(profile.custom_allow_clear_cart));
 
   return {
     posProfile: textValue(profile, "name"),
@@ -35,6 +39,7 @@ function summarizePosConfiguration(configuration: Record<string, unknown>): PosC
     taxRowsCount: taxRows.length,
     paymentMethodsCount: paymentModes.length,
     allowItemSearch,
+    allowClearCart,
     lastSynced: syncedAt,
     cacheStatus: "Ready"
   };

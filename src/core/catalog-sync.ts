@@ -204,6 +204,111 @@ export function createCatalogSyncCore(deps: PosCoreDeps, http: ReturnType<typeof
     }
   }
 
+  // Full barcode table replace only — items/prices/stock untouched. Used by the 30m idle
+  // reconcile and Settings "Force Barcode Sync" so short codes like SZ039 land without a
+  // heavy Force Full catalogue during rush.
+  async function syncBarcodesOnly(sendProgress: (message: string) => void, mode: "auto" | "full" = "full"): Promise<{ success: boolean; totals: ReturnType<typeof deps.db.getCatalogTotals>; barcodeError: string | null; error: string | null; skipped?: boolean }> {
+    const settings = deps.db.loadSettings();
+    const bootstrap = deps.db.getPosBootstrap(settings.posProfile);
+    const profile = asRecord(bootstrap?.pos_profile);
+    const priceList = textValue(profile, "selling_price_list");
+    if (!hasUsableCredentials(deps, settings) || !settings.erpnextUrl || !priceList) {
+      return { success: false, totals: deps.db.getCatalogTotals(), barcodeError: null, error: "Cached POS Profile configuration is required." };
+    }
+    if (mode === "auto") {
+      const last = deps.db.getMeta("barcodes_last_full_sync");
+      if (last) {
+        const t = new Date(last).getTime();
+        if (!Number.isNaN(t) && (Date.now() - t) < 30 * 60 * 1000) {
+          return { success: true, totals: deps.db.getCatalogTotals(), barcodeError: null, error: null, skipped: true };
+        }
+      }
+    }
+    try {
+      const baseUrl = new URL(settings.erpnextUrl).toString().replace(/\/+$/, "");
+      sendProgress("Full barcode sync...");
+      const barcodes = await fetchItemBarcodePages(baseUrl, sendProgress);
+      const existing = deps.db.getCatalogTotals();
+      deps.db.upsertCatalog({
+        items: [],
+        prices: [],
+        stock: [],
+        barcodes,
+        conversions: [],
+        totals: {
+          items: existing.items,
+          prices: existing.prices,
+          barcodes: barcodes.length,
+          stockRows: existing.stockRows,
+          lastSynced: existing.lastSynced
+        },
+        replaceBarcodes: true,
+        replaceConversions: false,
+        priceList
+      });
+      const bw = maxModified(barcodes);
+      if (bw) deps.db.setMeta("barcodes_last_sync", bw);
+      deps.db.setMeta("barcodes_last_full_sync", new Date().toISOString());
+      sendProgress("Barcode sync complete.");
+      return { success: true, totals: deps.db.getCatalogTotals(), barcodeError: null, error: null };
+    } catch (error) {
+      return { success: false, totals: deps.db.getCatalogTotals(), barcodeError: error instanceof Error ? error.message : "Unable to sync Item Barcode.", error: error instanceof Error ? error.message : "Barcode sync failed." };
+    }
+  }
+
+  // One-shot ERP resolve for a local catalog miss (new item/barcode). Upserts into SQLite
+  // then returns a fresh local lookup so the cashier can continue without re-login.
+  async function resolveCatalogItem(query: string): Promise<{ exact: ReturnType<typeof deps.db.lookupCatalog>["exact"]; error: string | null }> {
+    const settings = deps.db.loadSettings();
+    const bootstrap = deps.db.getPosBootstrap(settings.posProfile);
+    const profile = asRecord(bootstrap?.pos_profile);
+    const priceList = textValue(profile, "selling_price_list");
+    const warehouse = textValue(profile, "warehouse");
+    const q = query.trim();
+    if (!hasUsableCredentials(deps, settings) || !settings.erpnextUrl || !settings.posProfile || !priceList || !warehouse || !q) {
+      return { exact: null, error: "Online POS configuration is required to resolve items." };
+    }
+    try {
+      const baseUrl = new URL(settings.erpnextUrl).toString().replace(/\/+$/, "");
+      const response = await authFetch(deps, `${baseUrl}/api/method/aimatic.offline_pos.api.resolve_pos_catalog_item`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ barcode_or_item_code: q, pos_profile: settings.posProfile })
+      });
+      if (!response.ok) return { exact: null, error: await getResponseError(response) };
+      const body = await response.json() as { message?: unknown };
+      const payload = asRecord(body.message);
+      const item = asRecord(payload?.item);
+      if (!item) return { exact: null, error: "ERP returned no item for this barcode." };
+      const existing = deps.db.getCatalogTotals();
+      const barcodes = Array.isArray(payload?.barcodes) ? payload.barcodes.map(asRecord).filter((row): row is Record<string, unknown> => Boolean(row)) : [];
+      const prices = Array.isArray(payload?.prices) ? payload.prices.map(asRecord).filter((row): row is Record<string, unknown> => Boolean(row)) : [];
+      const stock = Array.isArray(payload?.stock) ? payload.stock.map(asRecord).filter((row): row is Record<string, unknown> => Boolean(row)) : [];
+      const conversions = Array.isArray(payload?.conversions) ? payload.conversions.map(asRecord).filter((row): row is Record<string, unknown> => Boolean(row)) : [];
+      deps.db.upsertCatalog({
+        items: [item],
+        prices,
+        stock,
+        barcodes,
+        conversions,
+        totals: {
+          items: existing.items,
+          prices: existing.prices,
+          barcodes: existing.barcodes,
+          stockRows: existing.stockRows,
+          lastSynced: existing.lastSynced
+        },
+        replaceBarcodes: false,
+        replaceConversions: false,
+        priceList: textValue(payload, "price_list") || priceList
+      });
+      const lookup = deps.db.lookupCatalog(q, warehouse, priceList);
+      return { exact: lookup.exact, error: lookup.exact ? null : "Item resolved from ERP but is not sellable on this price list." };
+    } catch (error) {
+      return { exact: null, error: error instanceof Error ? error.message : "Unable to resolve item from ERP." };
+    }
+  }
+
   async function syncFbrConfig(mode: "auto" | "full" = "auto"): Promise<{ success: boolean; state: ReturnType<typeof deps.db.getFbrSyncState>; error: string | null }> {
     const settings = deps.db.loadSettings();
     if (!hasUsableCredentials(deps, settings) || !settings.erpnextUrl) return { success: false, state: deps.db.getFbrSyncState(), error: "Online connection required for FBR configuration sync." };
@@ -265,5 +370,5 @@ export function createCatalogSyncCore(deps: PosCoreDeps, http: ReturnType<typeof
     return { success: true, rows, totals, errors: errorRows.map((row) => row.error) };
   }
 
-  return { syncCustomers, loadCustomer, getCustomerCreationOptions, createCustomer, syncItemCatalog, syncFbrConfig, calculateFbrCart };
+  return { syncCustomers, loadCustomer, getCustomerCreationOptions, createCustomer, syncItemCatalog, syncBarcodesOnly, resolveCatalogItem, syncFbrConfig, calculateFbrCart };
 }

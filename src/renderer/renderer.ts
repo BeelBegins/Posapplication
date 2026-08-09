@@ -31,6 +31,8 @@ interface PosAPI {
   syncPosSession: (input?: Record<string, unknown>) => Promise<{ success: boolean; summary: PosSessionSummary; error: string | null }>;
   getCachedPosSession: () => Promise<PosSessionSummary>;
   syncItemCatalog: (mode?: "auto" | "full") => Promise<{ success: boolean; totals: CatalogTotals; barcodeError: string | null; error: string | null }>;
+  syncBarcodesOnly: (mode?: "auto" | "full") => Promise<{ success: boolean; totals: CatalogTotals; barcodeError: string | null; error: string | null; skipped?: boolean }>;
+  resolveCatalogItem: (query: string) => Promise<{ exact: CatalogSearchResult | null; error: string | null }>;
   syncFbrConfig: (mode?: "auto" | "full") => Promise<{ success: boolean; state: { serviceFee: number }; error: string | null }>;
   getFbrSyncState: () => Promise<{ itemCount: number; serviceFee: number; lastSynced: string | null; ready: boolean }>;
   getCatalogTotals: () => Promise<CatalogTotals>;
@@ -156,6 +158,7 @@ interface PosConfigurationSummary {
   taxRowsCount: number;
   paymentMethodsCount: number;
   allowItemSearch: boolean;
+  allowClearCart: boolean;
   lastSynced: string;
   cacheStatus: "Ready";
 }
@@ -266,7 +269,9 @@ function showPosConfigurationSummary(summary: PosConfigurationSummary | null): v
     return;
   }
   allowItemSearch = summary.allowItemSearch !== false;
+  allowClearCart = summary.allowClearCart !== false;
   updateCartSearchUi();
+  updateClearCartUi();
 
   const fields: Record<string, string> = {
     "#config-pos-profile": summary.posProfile,
@@ -455,6 +460,9 @@ let customerBenefits = { loyaltyProgram: "", availablePoints: 0, conversionFacto
 let benefitsOutdated = false;
 // POS Profile.custom_allow_item_search (missing/legacy bootstrap => true).
 let allowItemSearch = true;
+// POS Profile.custom_allow_clear_cart (missing/legacy bootstrap => true).
+let allowClearCart = true;
+let customerSearchTimer: number | undefined;
 // Ignore overlapping wedge scans while a lookup runs and briefly after a hit.
 const SCAN_SETTLE_MS = 120;
 let scanBusy = false;
@@ -531,10 +539,22 @@ function updateCartSearchUi(): void {
     input.setAttribute("aria-label", "Scan barcode");
   }
 }
+function updateClearCartUi(): void {
+  const button = document.querySelector<HTMLButtonElement>("#cart-clear");
+  if (button) button.hidden = !allowClearCart;
+  const bar = document.querySelector<HTMLElement>("#pos-shortcut-bar");
+  if (bar) {
+    bar.textContent = allowClearCart
+      ? "F2 Search · F3 Customer · F4 Change Qty · F6 Pay · F7 Benefits · F8 Void Item · F10 Clear Cart · F11 Fullscreen · ↑/↓ Select Row · +/- Change Qty · Esc Return to Scanner"
+      : "F2 Search · F3 Customer · F4 Change Qty · F6 Pay · F7 Benefits · F8 Void Item · F11 Fullscreen · ↑/↓ Select Row · +/- Change Qty · Esc Return to Scanner";
+  }
+}
 async function refreshItemSearchSetting(): Promise<void> {
   const cfg = await window.posAPI.getCachedPosConfiguration().catch(() => null);
   allowItemSearch = cfg?.allowItemSearch !== false;
+  allowClearCart = cfg?.allowClearCart !== false;
   updateCartSearchUi();
+  updateClearCartUi();
 }
 function applyScannerFocus(): boolean {
   const input = cartInput();
@@ -682,14 +702,62 @@ function refreshHeaderStatusBadges(): void {
 function updatePosHeader(): void { const set = (id: string, value: string) => { const e = document.querySelector<HTMLElement>(id); if (e) e.textContent = value || "—"; }; set("#pos-branch", (document.querySelector<HTMLInputElement>("#branch")?.value ?? "")); set("#pos-profile-name", document.querySelector<HTMLSelectElement>("#pos-profile")?.value ?? ""); set("#pos-terminal", document.querySelector<HTMLInputElement>("#terminal-id")?.value ?? ""); set("#pos-cashier", cashierDisplay()); set("#pos-opening-entry", document.querySelector<HTMLElement>("#session-opening-entry")?.textContent ?? ""); refreshHeaderStatusBadges(); }
 function showCustomer(): void { const e=document.querySelector<HTMLElement>("#pos-customer"); if(e)e.textContent=selectedCustomer?`${selectedCustomer.customer_name || selectedCustomer.name}${navigator.onLine?"":" (Cached)"}`:"—"; }
 function customerInput(): HTMLInputElement | null { return document.querySelector<HTMLInputElement>("#customer-search"); }
-async function selectCustomer(customer: CustomerResult): Promise<void> { const result=await window.posAPI.loadCustomer(customer.name); selectedCustomer=customer; showCustomer(); // mark payment and benefits allocation outdated when customer changes
+async function selectCustomer(customer: CustomerResult): Promise<void> {
+  const result = await window.posAPI.loadCustomer(customer.name);
+  selectedCustomer = customer;
+  showCustomer();
+  // mark payment and benefits allocation outdated when customer changes
   if (paymentRows.length) paymentsOutdated = true;
-  appliedBenefits=emptyBenefits(); benefitsOutdated=true;
-  customerBenefits={loyaltyProgram:"",availablePoints:0,conversionFactor:1};
-  void loadCustomerBenefits();
-  scheduleCartPreview(); const data=result.customer; const detail=document.querySelector<HTMLElement>("#customer-detail"); if(detail)detail.textContent=data?`${String(data.customer_name??customer.customer_name)} | ${String(data.mobile_no??"")} | ${String(data.customer_group??"")} | ${String(data.loyalty_program??"")}${result.cached?" (Cached)":""}`:result.error??"Customer unavailable"; document.querySelector<HTMLDialogElement>("#customer-dialog")?.close(); focusCart(); }
-
-async function searchCustomer(preserveSelection = false): Promise<void> { const query=customerInput()?.value.trim()??""; customerResults=await window.posAPI.searchCustomers(query); if(!preserveSelection) selectedCustomerIndex=0; selectedCustomerIndex=Math.min(selectedCustomerIndex,Math.max(0,customerResults.length-1)); const box=document.querySelector<HTMLElement>("#customer-results"); if(!box)return; box.replaceChildren(...customerResults.map((c,i)=>{const b=document.createElement("button");b.type="button";b.className=`secondary-button search-result${i===selectedCustomerIndex?" selected":""}`;b.textContent=`${c.name} — ${c.customer_name} | ${c.mobile_no||c.email_id||c.tax_id||""}`;b.onclick=()=>void selectCustomer(c);return b;})); box.querySelector<HTMLElement>(".selected")?.scrollIntoView({block:"nearest"}); }
+  appliedBenefits = emptyBenefits();
+  benefitsOutdated = true;
+  customerBenefits = { loyaltyProgram: "", availablePoints: 0, conversionFactor: 1 };
+  void loadCustomerBenefits().then(() => {
+    const detail = document.querySelector<HTMLElement>("#customer-detail");
+    if (!detail) return;
+    const data = result.customer;
+    const name = data ? String(data.customer_name ?? customer.customer_name) : customer.customer_name;
+    const mobile = data ? String(data.mobile_no ?? customer.mobile_no ?? "") : (customer.mobile_no || "");
+    const program = customerBenefits.loyaltyProgram || (data ? String(data.loyalty_program ?? "") : "");
+    const pointsPart = !isOnline()
+      ? "Points unavailable offline"
+      : program
+        ? `${program} · ${customerBenefits.availablePoints} pts`
+        : "Not enrolled in loyalty";
+    detail.textContent = `${name} · ${mobile || "—"} · ${pointsPart}${result.cached ? " (Cached)" : ""}`;
+  });
+  scheduleCartPreview();
+  const detail = document.querySelector<HTMLElement>("#customer-detail");
+  if (detail) {
+    const data = result.customer;
+    detail.textContent = data
+      ? `${String(data.customer_name ?? customer.customer_name)} · ${String(data.mobile_no ?? customer.mobile_no ?? "—")} · Loading points…`
+      : (result.error ?? "Customer unavailable");
+  }
+  document.querySelector<HTMLDialogElement>("#customer-dialog")?.close();
+  focusCart();
+}
+async function searchCustomer(preserveSelection = false): Promise<void> {
+  const query = customerInput()?.value.trim() ?? "";
+  customerResults = await window.posAPI.searchCustomers(query);
+  if (!preserveSelection) selectedCustomerIndex = 0;
+  selectedCustomerIndex = Math.min(selectedCustomerIndex, Math.max(0, customerResults.length - 1));
+  const box = document.querySelector<HTMLElement>("#customer-results");
+  if (!box) return;
+  box.replaceChildren(...customerResults.map((c, i) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = `secondary-button search-result${i === selectedCustomerIndex ? " selected" : ""}`;
+    const mobile = c.mobile_no || "—";
+    b.innerHTML = `<span class="search-name">${c.customer_name}</span><span class="search-meta">${mobile}</span><span class="search-code">${c.name}</span>`;
+    b.onclick = () => void selectCustomer(c);
+    return b;
+  }));
+  box.querySelector<HTMLElement>(".selected")?.scrollIntoView({ block: "nearest" });
+}
+function scheduleCustomerSearch(): void {
+  if (customerSearchTimer) window.clearTimeout(customerSearchTimer);
+  customerSearchTimer = window.setTimeout(() => { void searchCustomer(); }, 200);
+}
 function openCustomerSearch(): void { const dialog=document.querySelector<HTMLDialogElement>("#customer-dialog"); if(!dialog)return; dialog.showModal(); const createButton=document.querySelector<HTMLButtonElement>("#new-customer"); if(createButton)createButton.disabled=!isOnline(); const detail=document.querySelector<HTMLElement>("#customer-detail"); if(detail)detail.textContent=isOnline()?"":"Online connection required to create a customer."; const input=customerInput(); if(input){input.value="";input.focus();} void searchCustomer(); }
 function isOnline(): boolean { return document.querySelector<HTMLElement>("#pos-server-status")?.textContent === "Online"; }
 function fmtMoney(value: number): string { return money2(value).toFixed(2); }
@@ -2354,8 +2422,20 @@ async function loadCustomerBenefits():Promise<void>{
   if(!isOnline()){customerBenefits={loyaltyProgram:"",availablePoints:0,conversionFactor:1};return;}
   try{
     const result=await window.posAPI.getCustomerBenefits(selectedCustomer.name);
-    customerBenefits={loyaltyProgram:result.loyaltyProgram??"",availablePoints:result.availablePoints,conversionFactor:result.conversionFactor};
+    customerBenefits={loyaltyProgram:result.loyaltyProgram??"",availablePoints:result.availablePoints,conversionFactor:result.conversionFactor||1};
   }catch{customerBenefits={loyaltyProgram:"",availablePoints:0,conversionFactor:1};}
+}
+
+function updateBenefitsLoyaltyStatus(online: boolean, loading = false): void {
+  const status = document.querySelector<HTMLElement>("#benefits-loyalty-status");
+  const loadingMsg = document.querySelector<HTMLElement>("#benefits-loading-message");
+  if (loadingMsg) loadingMsg.hidden = !loading;
+  if (!status) return;
+  if (loading) { status.textContent = ""; return; }
+  if (!online) { status.textContent = "Loyalty points require an online connection."; return; }
+  if (!customerBenefits.loyaltyProgram) { status.textContent = "Customer is not enrolled in a loyalty program."; return; }
+  if (customerBenefits.availablePoints <= 0) { status.textContent = "Enrolled — 0 points available to redeem."; return; }
+  status.textContent = `${customerBenefits.availablePoints} points available.`;
 }
 
 // Deliberately does not fetch or list a customer's gift vouchers here for the
@@ -2386,17 +2466,19 @@ async function openBenefits():Promise<void>{await loadCustomerBenefits();applied
 async function renderBenefitsModern():Promise<void>{
   const dialog=document.querySelector<HTMLDialogElement>("#benefits-dialog");if(!dialog)return;
   const online=isOnline();
-  const customerNameElem=document.querySelector<HTMLElement>("#benefits-customer");if(customerNameElem)customerNameElem.textContent=selectedCustomer?.customer_name??"â€”";
+  updateBenefitsLoyaltyStatus(online, false);
+  const customerNameElem=document.querySelector<HTMLElement>("#benefits-customer");if(customerNameElem)customerNameElem.textContent=selectedCustomer?.customer_name??"—";
   const offlineMsg=document.querySelector<HTMLElement>("#benefits-offline-message");if(offlineMsg)offlineMsg.hidden=online;
   const loyaltySection=document.querySelector<HTMLElement>("#benefits-loyalty-section");const voucherSection=document.querySelector<HTMLElement>("#benefits-voucher-section");
   if(loyaltySection)loyaltySection.style.pointerEvents=online?"auto":"none";if(voucherSection)voucherSection.style.pointerEvents=online?"auto":"none";
-  const programElem=document.querySelector<HTMLElement>("#benefits-loyalty-program");if(programElem)programElem.textContent=customerBenefits.loyaltyProgram||"â€”";
+  const programElem=document.querySelector<HTMLElement>("#benefits-loyalty-program");if(programElem)programElem.textContent=customerBenefits.loyaltyProgram||"Not enrolled";
   const pointsElem=document.querySelector<HTMLElement>("#benefits-available-points");if(pointsElem)pointsElem.textContent=String(customerBenefits.availablePoints);
   const conversionElem=document.querySelector<HTMLElement>("#benefits-conversion-factor");if(conversionElem)conversionElem.textContent=String(customerBenefits.conversionFactor);
   const redeemInput=document.querySelector<HTMLInputElement>("#benefits-redeem-points");const maxBtn=document.querySelector<HTMLButtonElement>("#benefits-max-points");
   const couponInput=document.querySelector<HTMLInputElement>("#benefits-coupon-code");const giftInput=document.querySelector<HTMLInputElement>("#benefits-gift-voucher-code");
   const applyBtn=document.querySelector<HTMLButtonElement>("#benefits-apply");const removeBtn=document.querySelector<HTMLButtonElement>("#benefits-remove");
-  if(redeemInput){redeemInput.disabled=!online||!customerBenefits.loyaltyProgram;}if(maxBtn){maxBtn.disabled=!online||!customerBenefits.loyaltyProgram;}
+  const canRedeem=online&&Boolean(customerBenefits.loyaltyProgram)&&customerBenefits.availablePoints>0;
+  if(redeemInput){redeemInput.disabled=!canRedeem;}if(maxBtn){maxBtn.disabled=!canRedeem;}
   if(couponInput){couponInput.disabled=!online;}if(giftInput){giftInput.disabled=!online;}if(applyBtn){applyBtn.disabled=!online;}
   if(removeBtn){removeBtn.disabled=appliedBenefits.loyaltyPoints===0&&!appliedBenefits.couponCode&&!appliedBenefits.giftVoucherCode;}
   const loyaltyValue=customerBenefits.conversionFactor>0?customerBenefits.availablePoints/customerBenefits.conversionFactor:0;const loyaltyElem=document.querySelector<HTMLElement>("#benefits-loyalty-value");if(loyaltyElem)loyaltyElem.textContent=loyaltyValue.toFixed(2);
@@ -2410,7 +2492,11 @@ async function renderBenefitsModern():Promise<void>{
   const giftStatus=document.querySelector<HTMLElement>("#benefits-gift-voucher-status");if(giftStatus)giftStatus.textContent=appliedBenefits.giftVoucherCode?(totals.giftVoucherError||`Gift voucher amount: ${totals.giftVoucherAmount.toFixed(2)}`):"";
   const appliedElem=document.querySelector<HTMLElement>("#benefits-applied");
   if(appliedElem){const parts:string[]=[];if(appliedBenefits.loyaltyPoints>0)parts.push(`Loyalty: ${appliedBenefits.loyaltyPoints} pts`);if(appliedBenefits.couponCode)parts.push(`Coupon: ${appliedBenefits.couponCode}`);if(appliedBenefits.giftVoucherCode)parts.push(`Gift Voucher: ${appliedBenefits.giftVoucherCode}`);appliedElem.textContent=parts.length?`Applied: ${parts.join(" + ")}`:"";}
-  dialog.showModal();window.setTimeout(()=>document.querySelector<HTMLInputElement>("#benefits-redeem-points")?.focus(),0);
+  dialog.showModal();
+  window.setTimeout(()=>{
+    if(canRedeem) document.querySelector<HTMLInputElement>("#benefits-redeem-points")?.focus();
+    else document.querySelector<HTMLInputElement>("#benefits-coupon-code")?.focus();
+  },0);
 }
 
 async function applyBenefitsModern():Promise<void>{
@@ -2429,6 +2515,10 @@ async function applyBenefitsModern():Promise<void>{
 async function removeBenefitsModern():Promise<void>{appliedBenefits=emptyBenefits();await saveBenefitsDraft();const msg=document.querySelector<HTMLElement>("#benefits-message");if(msg)msg.textContent="Benefits removed.";if(paymentRows.length)paymentsOutdated=true;scheduleCartPreview();await renderBenefitsModern();}
 
 async function openBenefitsModern():Promise<void>{
+  const dialog=document.querySelector<HTMLDialogElement>("#benefits-dialog");
+  if(dialog&&!dialog.open)dialog.showModal();
+  updateBenefitsLoyaltyStatus(isOnline(), true);
+  const customerNameElem=document.querySelector<HTMLElement>("#benefits-customer");if(customerNameElem)customerNameElem.textContent=selectedCustomer?.customer_name??"—";
   await loadCustomerBenefits();
   appliedBenefits=normalizeBenefits(await window.posAPI.loadBenefitsDraft());
   const redeemInput=document.querySelector<HTMLInputElement>("#benefits-redeem-points");if(redeemInput)redeemInput.value=String(appliedBenefits.loyaltyPoints);
@@ -2569,7 +2659,8 @@ function pushCustomerDisplayUpdate(totals: FbrTotalsView): void {
     grandTotal: totals.grandTotal,
     totalSavings,
     customerName: selectedCustomer?.customer_name || selectedCustomer?.name || "",
-    companyName: sessionState.company || ""
+    companyName: sessionState.company || "",
+    highlightedIndex: selectedCartIndex,
   });
 }
 async function afterCartMutation(message: string): Promise<void> {
@@ -2625,6 +2716,7 @@ async function voidCartRow(index: number): Promise<void> {
 }
 
 async function clearFullCart(): Promise<void> {
+  if (!allowClearCart) { cartMessage("Clear Cart is disabled for this POS Profile"); return; }
   if (!cartLines.length || !(await appConfirm("Clear the full cart?"))) return;
   if (!cashierSession?.canVoidItems) {
     const auth = await requestSupervisorActionAuthorization("clear_cart");
@@ -2696,6 +2788,14 @@ async function scanCartInput(): Promise<void> {
       await addToCart(lookup.exact);
       scanReadyAt = Date.now() + SCAN_SETTLE_MS;
       return;
+    }
+    if (isOnline()) {
+      const resolved = await window.posAPI.resolveCatalogItem(query);
+      if (resolved.exact) {
+        await addToCart(resolved.exact);
+        scanReadyAt = Date.now() + SCAN_SETTLE_MS;
+        return;
+      }
     }
     // Scanner Enter is exact barcode/item-code only — never auto-pick fuzzy hits.
     await reportBarcodeFailed(query);
@@ -2857,9 +2957,9 @@ let setupCompleted = false;             // becomes true after the first successf
 let bootstrapPromise: Promise<void> | null = null;
 
 // Freshness windows (ms) — drive both startup refresh and the background scheduler.
-const SYNC_FRESH = { items: 15 * 60_000, customers: 30 * 60_000, fbr: 12 * 3_600_000, config: 12 * 3_600_000 } as const;
-type SyncKey = "items" | "customers" | "fbr" | "config";
-const syncLocks: Record<SyncKey, boolean> = { items: false, customers: false, fbr: false, config: false };
+const SYNC_FRESH = { items: 15 * 60_000, barcodes: 30 * 60_000, customers: 30 * 60_000, fbr: 12 * 3_600_000, config: 12 * 3_600_000 } as const;
+type SyncKey = "items" | "barcodes" | "customers" | "fbr" | "config";
+const syncLocks: Record<SyncKey, boolean> = { items: false, barcodes: false, customers: false, fbr: false, config: false };
 let backgroundSyncStarted = false;
 
 function setStep(step: SetupStep, state: SetupStepState): void { const li = document.querySelector<HTMLElement>(`#setup-progress li[data-step="${step}"]`); if (li) li.dataset.state = state; }
@@ -2882,6 +2982,13 @@ async function syncConfigNow(): Promise<void> { await runGuardedSync("config", a
 // mode "auto" (default, used by the background scheduler) = delta when a watermark exists, full every 24h.
 // mode "full" (manual "Force Full" buttons) = full DELETE+INSERT reconciliation. Decision lives in main.ts (it owns app_meta).
 async function syncItemsNow(mode: "auto" | "full" = "auto"): Promise<void> { await runGuardedSync("items", async () => { const r = await window.posAPI.syncItemCatalog(mode); showCatalogTotals(r.totals); }); }
+async function syncBarcodesNow(mode: "auto" | "full" = "full"): Promise<void> {
+  // Share the items lock so barcode replace cannot race catalog upserts.
+  await runGuardedSync("items", async () => {
+    const r = await window.posAPI.syncBarcodesOnly(mode);
+    showCatalogTotals(r.totals);
+  });
+}
 async function syncCustomersNow(mode: "auto" | "full" = "auto"): Promise<void> { await runGuardedSync("customers", async () => { await window.posAPI.syncCustomers(mode); }); }
 async function syncFbrNow(mode: "auto" | "full" = "auto"): Promise<void> { await runGuardedSync("fbr", async () => { await window.posAPI.syncFbrConfig(mode); }); }
 
@@ -2892,6 +2999,8 @@ async function backgroundSyncTick(): Promise<void> {
   try {
     void syncQueueNow();
     const totals = await window.posAPI.getCatalogTotals(); if (ageMs(totals.lastSynced) > SYNC_FRESH.items) void syncItemsNow("auto");
+    // Barcode-only full reconcile every 30m when idle (staleness checked inside syncBarcodesOnly auto).
+    void syncBarcodesNow("auto");
     const cust = await window.posAPI.getCustomerSyncState(); if (ageMs(cust.lastSynced) > SYNC_FRESH.customers) void syncCustomersNow("auto");
     const fbr = await window.posAPI.getFbrSyncState(); if (ageMs(fbr.lastSynced) > SYNC_FRESH.fbr) void syncFbrNow("auto");
     const cfg = await window.posAPI.getCachedPosConfiguration(); if (!cfg || ageMs(cfg.lastSynced) > SYNC_FRESH.config) void syncConfigNow();
@@ -3980,6 +4089,14 @@ function initializeRenderer(): void {
     finally { if (button) { button.disabled = false; button.textContent = "Force Full Item Catalogue Sync"; } }
   });
 
+  document.querySelector<HTMLButtonElement>("#sync-barcodes")?.addEventListener("click", async () => {
+    const button = document.querySelector<HTMLButtonElement>("#sync-barcodes");
+    if (button) { button.disabled = true; button.textContent = "Syncing…"; }
+    try { showCatalogProgress("Barcode sync started…"); await syncBarcodesNow("full"); showCatalogProgress("Barcode sync complete."); showSettingsMessage("Barcodes synced"); }
+    catch { showCatalogProgress("Barcode sync failed."); showSettingsMessage("Barcode sync failed"); }
+    finally { if (button) { button.disabled = false; button.textContent = "Force Barcode Sync"; } }
+  });
+
   document.querySelector<HTMLButtonElement>("#sync-customers")?.addEventListener("click", async () => { await syncCustomersNow("full"); const state = await window.posAPI.getCustomerSyncState(); showSettingsMessage(`Customers synced: ${state.count}`); });
   document.querySelector<HTMLButtonElement>("#sync-fbr-config")?.addEventListener("click", async () => { const button=document.querySelector<HTMLButtonElement>("#sync-fbr-config"); if(button){button.disabled=true;button.textContent="Syncing...";} try { await syncFbrNow("full"); showSettingsMessage("FBR configuration synced"); } catch { showSettingsMessage("FBR sync failed"); } finally { if(button){button.disabled=false;button.textContent="Force Full FBR Configuration Sync";} } });
   document.querySelector<HTMLButtonElement>("#preview-customer-display")?.addEventListener("click", async () => {
@@ -3998,7 +4115,7 @@ function initializeRenderer(): void {
   // No gate here: reaching this point already means Settings itself was
   // reached (fresh install, ungated, or an already-authorized admin), so a
   // further per-<details> gate on top would be redundant.
-  customerInput()?.addEventListener("input", () => void searchCustomer());
+  customerInput()?.addEventListener("input", () => scheduleCustomerSearch());
   document.querySelector<HTMLButtonElement>("#new-customer")?.addEventListener("click", () => void openNewCustomer());
   document.querySelector<HTMLButtonElement>("#cancel-new-customer")?.addEventListener("click", () => { document.querySelector<HTMLDialogElement>("#new-customer-dialog")?.close(); focusCart(); });
   document.querySelector<HTMLFormElement>("#new-customer-form")?.addEventListener("submit", async (event) => { event.preventDefault(); if(!isOnline()){const e=document.querySelector<HTMLElement>("#new-customer-error");if(e)e.textContent="Online connection required to create a customer.";return;} const input=(id:string)=>document.querySelector<HTMLInputElement|HTMLSelectElement>(id)?.value??""; const result=await window.posAPI.createCustomer({customer_name:input("#new-customer-name"),mobile_no:input("#new-customer-mobile"),email_id:input("#new-customer-email"),tax_id:input("#new-customer-tax"),customer_group:input("#new-customer-group"),territory:input("#new-customer-territory")}); const error=document.querySelector<HTMLElement>("#new-customer-error"); if(!result.customer){if(error)error.textContent=result.error??"Customer creation failed.";return;} const c=result.customer; selectedCustomer={name:String(c.name??""),customer_name:String(c.customer_name??""),customer_group:String(c.customer_group??""),mobile_no:String(c.mobile_no??""),email_id:String(c.email_id??""),tax_id:String(c.tax_id??"")}; showCustomer(); document.querySelector<HTMLDialogElement>("#new-customer-dialog")?.close(); document.querySelector<HTMLDialogElement>("#customer-dialog")?.close(); focusCart(); });
@@ -4146,7 +4263,12 @@ function initializeRenderer(): void {
     else if (event.key === "-" && !isEditableElement(document.activeElement)) { event.preventDefault(); event.stopPropagation(); void changeCartQuantity(-1); }
     else if (event.key === "F4") { event.preventDefault(); event.stopPropagation(); clearCartSearch(); void editSelectedQuantity(); }
     else if (event.key === "Delete" || event.key === "F8") { event.preventDefault(); event.stopPropagation(); clearCartSearch(); void removeSelectedCartRow(); }
-    else if (event.key === "F10") { event.preventDefault(); event.stopPropagation(); (document.querySelector<HTMLButtonElement>("#cart-clear"))?.click(); }
+    else if (event.key === "F10") {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!allowClearCart) { cartMessage("Clear Cart is disabled for this POS Profile"); return; }
+      (document.querySelector<HTMLButtonElement>("#cart-clear"))?.click();
+    }
     else if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); if (quantityDialog?.open) quantityDialog.close(); if(newCustomerDialog?.open) newCustomerDialog.close(); if(customerDialog?.open) customerDialog.close(); clearCartSearch(); focusCart(); }
   }, true);
 }

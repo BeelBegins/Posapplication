@@ -871,6 +871,8 @@ app.whenReady().then(() => {
   ipcMain.handle("pos-session:active", (_event, input) => core.getActivePosSession(asRecord(input) ?? {}));
   ipcMain.handle("pos-session:start", (_event,input) => core.startPosSession(asRecord(input)??{}));
   ipcMain.handle("catalog:sync", (event, mode) => core.syncItemCatalog((message) => event.sender.send("catalog:progress", message), mode === "full" ? "full" : "auto"));
+  ipcMain.handle("catalog:sync-barcodes", (event, mode) => core.syncBarcodesOnly((message) => event.sender.send("catalog:progress", message), mode === "auto" ? "auto" : "full"));
+  ipcMain.handle("catalog:resolve", (_event, query) => core.resolveCatalogItem(String(query ?? "")));
   ipcMain.handle("catalog:get-totals", () => getCatalogTotals());
   ipcMain.handle("fbr:sync", (_event, mode) => core.syncFbrConfig(mode === "full" ? "full" : "auto"));
   ipcMain.handle("fbr:state", () => getFbrSyncState());
