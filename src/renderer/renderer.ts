@@ -159,6 +159,7 @@ interface PosConfigurationSummary {
   paymentMethodsCount: number;
   allowItemSearch: boolean;
   allowClearCart: boolean;
+  allowHeldSales: boolean;
   lastSynced: string;
   cacheStatus: "Ready";
 }
@@ -270,8 +271,10 @@ function showPosConfigurationSummary(summary: PosConfigurationSummary | null): v
   }
   allowItemSearch = summary.allowItemSearch !== false;
   allowClearCart = summary.allowClearCart !== false;
+  allowHeldSales = summary.allowHeldSales === true;
   updateCartSearchUi();
   updateClearCartUi();
+  updateHeldSalesUi();
 
   const fields: Record<string, string> = {
     "#config-pos-profile": summary.posProfile,
@@ -462,6 +465,8 @@ let benefitsOutdated = false;
 let allowItemSearch = true;
 // POS Profile.custom_allow_clear_cart (missing/legacy bootstrap => true).
 let allowClearCart = true;
+// POS Profile.custom_allow_held_sales (missing/legacy bootstrap => false; opt-in).
+let allowHeldSales = false;
 let customerSearchTimer: number | undefined;
 // Ignore overlapping wedge scans while a lookup runs and briefly after a hit.
 const SCAN_SETTLE_MS = 120;
@@ -549,12 +554,23 @@ function updateClearCartUi(): void {
       : "F2 Search · F3 Customer · F4 Change Qty · F6 Pay · F7 Benefits · F8 Void Item · F11 Fullscreen · ↑/↓ Select Row · +/- Change Qty · Esc Return to Scanner";
   }
 }
+// Hides the entry points that CREATE a new hold when disabled. Resume/Rename/Delete
+// (Held Sales screen) stay reachable regardless, so drafts held before an admin
+// disabled this never get stranded.
+function updateHeldSalesUi(): void {
+  for (const id of ["hold-sale", "session-hold", "close-shift-hold"]) {
+    const button = document.querySelector<HTMLButtonElement>(`#${id}`);
+    if (button) button.hidden = !allowHeldSales;
+  }
+}
 async function refreshItemSearchSetting(): Promise<void> {
   const cfg = await window.posAPI.getCachedPosConfiguration().catch(() => null);
   allowItemSearch = cfg?.allowItemSearch !== false;
   allowClearCart = cfg?.allowClearCart !== false;
+  allowHeldSales = cfg?.allowHeldSales === true;
   updateCartSearchUi();
   updateClearCartUi();
+  updateHeldSalesUi();
 }
 function applyScannerFocus(): boolean {
   const input = cartInput();
@@ -1059,7 +1075,14 @@ async function showCloseShift(): Promise<void> {
   }
   // Validate there is an active shift before opening the form.
   if (!(await validateSession("close-shift"))) { showScreen("pos"); showSessionInvalid(sessionState.reason); return; }
-  if (txnInProgress()) { showScreen("pos"); if (message) message.textContent = ""; cartMessage("Finish or hold the current sale/payment before closing the shift."); return; }
+  if (txnInProgress()) {
+    showScreen("pos");
+    if (message) message.textContent = "";
+    cartMessage(allowHeldSales
+      ? "Finish or hold the current sale/payment before closing the shift."
+      : "Finish the current sale/payment before closing the shift.");
+    return;
+  }
   // Drain any queued offline sales first so expected totals (server POS Invoices) include them.
   await syncQueueNow();
   const queue = await window.posAPI.getQueueStatus().catch(() => ({ queued: 0, failed: 0 }));
@@ -1899,6 +1922,7 @@ function promptName(title:string,label:string,defaultValue:string):Promise<strin
 
 // ---------------- Phase 3: Hold / Resume ----------------
 async function holdCurrentSale():Promise<void>{
+  if(!allowHeldSales){cartMessage("Hold Sale is disabled for this POS Profile");return;}
   if(!cartLines.length){cartMessage("Cart is empty — nothing to hold");return;}
   const totals=fbrTotalsView();
   const time=new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});
@@ -4252,7 +4276,7 @@ function initializeRenderer(): void {
       }
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closePaymentDialog(); return; }
     }
-    if (event.ctrlKey && event.key.toLowerCase() === "h") { event.preventDefault(); event.stopPropagation(); void holdCurrentSale(); }
+    if (event.ctrlKey && event.key.toLowerCase() === "h") { event.preventDefault(); event.stopPropagation(); if (!allowHeldSales) { cartMessage("Hold Sale is disabled for this POS Profile"); return; } void holdCurrentSale(); }
     else if (event.key === "F2") { event.preventDefault(); event.stopPropagation(); focusCart(); }
     else if (event.key === "F3") { event.preventDefault(); event.stopPropagation(); openCustomerSearch(); }
     else if (customerDialog?.open && event.ctrlKey && event.key.toLowerCase() === "n") { event.preventDefault(); event.stopPropagation(); void openNewCustomer(); }

@@ -305,7 +305,11 @@ export function createSaleRefundCore(
     if (!hasUsableCredentials(deps, s) || !s.erpnextUrl) return { result: null, error: "Online connection required to submit a refund." };
     try {
       const base = new URL(s.erpnextUrl).toString().replace(/\/+$/, "");
-      const payload = { ...input, hardware_id: input.hardware_id ?? posSession.getCartIdentity().hardwareId };
+      const payload = {
+        ...input,
+        hardware_id: input.hardware_id ?? posSession.getCartIdentity().hardwareId,
+        pos_profile: input.pos_profile ?? s.posProfile
+      };
       const response = await authFetch(deps, `${base}/api/method/aimatic.offline_pos.api.submit_pos_refund`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
