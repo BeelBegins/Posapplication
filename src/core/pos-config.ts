@@ -26,6 +26,10 @@ function summarizePosConfiguration(configuration: Record<string, unknown>): PosC
   const allowClearCart = !Object.prototype.hasOwnProperty.call(profile, "custom_allow_clear_cart")
     ? true
     : Boolean(Number(profile.custom_allow_clear_cart));
+  // Legacy bootstrap caches (pre custom_allow_held_sales) keep Held Sales OFF — opt-in, not opt-out.
+  const allowHeldSales = !Object.prototype.hasOwnProperty.call(profile, "custom_allow_held_sales")
+    ? false
+    : Boolean(Number(profile.custom_allow_held_sales));
 
   return {
     posProfile: textValue(profile, "name"),
@@ -40,6 +44,7 @@ function summarizePosConfiguration(configuration: Record<string, unknown>): PosC
     paymentMethodsCount: paymentModes.length,
     allowItemSearch,
     allowClearCart,
+    allowHeldSales,
     lastSynced: syncedAt,
     cacheStatus: "Ready"
   };

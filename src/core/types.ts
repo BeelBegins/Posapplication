@@ -50,6 +50,8 @@ export interface PosConfigurationSummary {
   allowItemSearch: boolean;
   /** From POS Profile.custom_allow_clear_cart; missing/legacy cache defaults to true. */
   allowClearCart: boolean;
+  /** From POS Profile.custom_allow_held_sales; missing/legacy cache defaults to FALSE (opt-in). */
+  allowHeldSales: boolean;
   lastSynced: string;
   cacheStatus: "Ready";
 }
