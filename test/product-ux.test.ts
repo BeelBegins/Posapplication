@@ -45,6 +45,15 @@ test("new bills reselect the POS Profile default customer", () => {
   assert.match(renderer, /async function clearFullCart\(\): Promise<void> \{[^]*?await clearActiveSale\("Cart cleared"\)/);
 });
 
+test("sold cart is released when receipt preview opens, and Clear Cart recovers stale DOM", () => {
+  const renderer = source("src/renderer/renderer.ts");
+  assert.match(renderer, /async function releaseSoldCartWorkspace\(\): Promise<void> \{/);
+  assert.match(renderer, /getTerminalInvoiceId\(\)/);
+  assert.match(renderer, /showModal\(\);\s*\/\/ F6 Complete Payment[\s\S]*?await releaseSoldCartWorkspace\(\);/);
+  assert.match(renderer, /async function clearActiveSale\(message:string\):Promise<void>\{[\s\S]*?renderCart\(\);cartMessage\(message\);[\s\S]*?finally\{/);
+  assert.match(renderer, /async function clearFullCart\(\): Promise<void> \{[\s\S]*?staleRows[\s\S]*?clearActiveSale\("Cart cleared"\)/);
+});
+
 test("Clear Cart uses action-bound supervisor authorization", () => {
   const main = source("src/main.ts");
   const renderer = source("src/renderer/renderer.ts");
