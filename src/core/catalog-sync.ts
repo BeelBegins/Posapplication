@@ -76,7 +76,7 @@ export function createCatalogSyncCore(deps: PosCoreDeps, http: ReturnType<typeof
       const cursor = deps.db.getMeta("customers_last_sync") ?? "";
       const doFull = mode === "full" || !cursor || isFullDue("customers_last_full_sync");
       const filters = doFull ? [["disabled", "=", 0]] : [["disabled", "=", 0], ["modified", ">", cursor]];
-      const customers = await http.fetchPagedList(base, "Customer", ["name", "customer_name", "customer_group", "territory", "mobile_no", "email_id", "tax_id", "disabled", "modified"], filters);
+      const customers = await http.fetchPagedList(base, "Customer", ["name", "customer_name", "customer_group", "territory", "mobile_no", "email_id", "tax_id", "custom_legacy_customer_code", "disabled", "modified"], filters);
       deps.db.upsertCustomers(customers);
       const wm = maxModified(customers); if (wm) deps.db.setMeta("customers_last_sync", wm);
       if (doFull) deps.db.setMeta("customers_last_full_sync", new Date().toISOString());

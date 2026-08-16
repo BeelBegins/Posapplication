@@ -28,7 +28,7 @@ after(() => {
 test("initDatabase runs the schema baseline and every migration to the latest version", () => {
   const status = db.getDatabaseStatus();
   assert.equal(status.isReady, true);
-  assert.equal(status.schemaVersion, "4");
+  assert.equal(status.schemaVersion, "5");
 });
 
 test("initDatabase is idempotent — calling it again does not throw or reset state", () => {
@@ -207,4 +207,29 @@ test("cart state and payment/benefits drafts round-trip per cart key", () => {
 
   db.saveBenefitsDraft(cartKey, { loyaltyPoints: 10 });
   assert.deepEqual(db.loadBenefitsDraft(cartKey), { loyaltyPoints: 10 });
+});
+
+test("searchCustomers matches mobile_no and custom_legacy_customer_code", () => {
+  db.upsertCustomers([
+    {
+      name: "CUST-LEGACY-1",
+      customer_name: "Legacy Lookup",
+      customer_group: "Individual",
+      territory: "Pakistan",
+      mobile_no: "+923335522339",
+      email_id: "",
+      tax_id: "",
+      custom_legacy_customer_code: "F055001529",
+      disabled: 0,
+      modified: "2026-08-16 12:00:00"
+    }
+  ]);
+
+  const byLegacy = db.searchCustomers("F055001529");
+  assert.equal(byLegacy.length, 1);
+  assert.equal(byLegacy[0]?.name, "CUST-LEGACY-1");
+  assert.equal(byLegacy[0]?.custom_legacy_customer_code, "F055001529");
+
+  const byMobile = db.searchCustomers("3335522339");
+  assert.equal(byMobile.some((row) => row.name === "CUST-LEGACY-1"), true);
 });

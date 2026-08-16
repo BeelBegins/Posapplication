@@ -119,6 +119,16 @@ const MIGRATIONS: Migration[] = [
     sql: [
       "ALTER TABLE pos_item_prices ADD COLUMN price_list TEXT"
     ]
+  },
+  {
+    // v5 — cache Customer.custom_legacy_customer_code so POS customer lookup can match
+    // legacy iPOS codes (e.g. F055001529) as well as mobile_no. Clears customer sync
+    // watermarks so the next auto sync is a full pull and fills the new column.
+    version: 5,
+    sql: [
+      "ALTER TABLE pos_customers ADD COLUMN custom_legacy_customer_code TEXT",
+      "DELETE FROM app_meta WHERE key IN ('customers_last_sync', 'customers_last_full_sync')"
+    ]
   }
 ];
 
@@ -543,9 +553,35 @@ export function savePaymentDraft(cartKey: string, payments: unknown[]): void { i
 export function upsertCustomers(customers: Record<string, unknown>[]): void {
   if (!database) throw new Error("Database is not initialized.");
   const text = (row: Record<string, unknown>, key: string): string => typeof row[key] === "string" ? row[key] : "";
-  const statement = database.prepare(`INSERT INTO pos_customers VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(name) DO UPDATE SET customer_name=excluded.customer_name,customer_group=excluded.customer_group,territory=excluded.territory,mobile_no=excluded.mobile_no,email_id=excluded.email_id,tax_id=excluded.tax_id,disabled=excluded.disabled,modified=excluded.modified`);
-  database.transaction(() => { for (const row of customers) statement.run(text(row,"name"),text(row,"customer_name"),text(row,"customer_group"),text(row,"territory"),text(row,"mobile_no"),text(row,"email_id"),text(row,"tax_id"),row.disabled ? 1 : 0,text(row,"modified")); })();
+  const statement = database.prepare(`INSERT INTO pos_customers (
+      name, customer_name, customer_group, territory, mobile_no, email_id, tax_id, disabled, modified, custom_legacy_customer_code
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(name) DO UPDATE SET
+      customer_name=excluded.customer_name,
+      customer_group=excluded.customer_group,
+      territory=excluded.territory,
+      mobile_no=excluded.mobile_no,
+      email_id=excluded.email_id,
+      tax_id=excluded.tax_id,
+      disabled=excluded.disabled,
+      modified=excluded.modified,
+      custom_legacy_customer_code=excluded.custom_legacy_customer_code`);
+  database.transaction(() => {
+    for (const row of customers) {
+      statement.run(
+        text(row, "name"),
+        text(row, "customer_name"),
+        text(row, "customer_group"),
+        text(row, "territory"),
+        text(row, "mobile_no"),
+        text(row, "email_id"),
+        text(row, "tax_id"),
+        row.disabled ? 1 : 0,
+        text(row, "modified"),
+        text(row, "custom_legacy_customer_code")
+      );
+    }
+  })();
   // Live COUNT(*) so a delta sync reports the true cached total, not just the changed-row count.
   const customerCount = (database.prepare("SELECT COUNT(*) n FROM pos_customers").get() as { n: number }).n;
   database.prepare("INSERT INTO customer_sync_state VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run("count", String(customerCount));
@@ -553,7 +589,18 @@ export function upsertCustomers(customers: Record<string, unknown>[]): void {
 }
 
 export function getCustomerSyncState(): { count: number; lastSynced: string | null } { if (!database) return {count:0,lastSynced:null}; const value=(key:string)=>(database!.prepare("SELECT value FROM customer_sync_state WHERE key=?").get(key) as {value:string}|undefined)?.value??""; return { count:Number(value("count"))||0,lastSynced:value("last_synced")||null }; }
-export function searchCustomers(query: string): Record<string, unknown>[] { if (!database || !query.trim()) return []; const q=`%${query}%`; return database.prepare("SELECT * FROM pos_customers WHERE disabled=0 AND (name LIKE ? OR customer_name LIKE ? OR mobile_no LIKE ? OR email_id LIKE ? OR tax_id LIKE ?) ORDER BY customer_name LIMIT 8").all(q,q,q,q,q) as Record<string,unknown>[]; }
+export function searchCustomers(query: string): Record<string, unknown>[] {
+  if (!database || !query.trim()) return [];
+  const q = `%${query}%`;
+  return database.prepare(
+    `SELECT * FROM pos_customers
+     WHERE disabled=0 AND (
+       name LIKE ? OR customer_name LIKE ? OR mobile_no LIKE ?
+       OR email_id LIKE ? OR tax_id LIKE ? OR custom_legacy_customer_code LIKE ?
+     )
+     ORDER BY customer_name LIMIT 8`
+  ).all(q, q, q, q, q, q) as Record<string, unknown>[];
+}
 export function findCustomerByNormalizedMobile(normalizedMobile: string): Record<string, unknown> | null { if(!database||!normalizedMobile)return null; const normalize=(value:string)=>{const digits=value.replace(/\D/g,"");if(digits.startsWith("92"))return `+${digits}`;if(digits.startsWith("0"))return `+92${digits.slice(1)}`;if(digits.length===10&&digits.startsWith("3"))return `+92${digits}`;return value.startsWith("+")?`+${digits}`:"";}; const rows=database.prepare("SELECT * FROM pos_customers WHERE mobile_no IS NOT NULL AND mobile_no <> ''").all() as Record<string,unknown>[]; return rows.find((row)=>normalize(String(row.mobile_no??""))===normalizedMobile)??null; }
 export function cacheCustomer(name: string, data: Record<string, unknown>): void { if (!database) throw new Error("Database is not initialized."); database.prepare("INSERT INTO pos_customer_cache VALUES (?, ?, ?) ON CONFLICT(name) DO UPDATE SET json_data=excluded.json_data,synced_at=excluded.synced_at").run(name,JSON.stringify(data),new Date().toISOString()); }
 export function getCachedCustomer(name: string): Record<string, unknown> | null { if (!database||!name)return null; const row=database.prepare("SELECT json_data FROM pos_customer_cache WHERE name=?").get(name) as {json_data:string}|undefined; try { const data=row?JSON.parse(row.json_data):null; return typeof data==="object"&&data&&!Array.isArray(data)?data as Record<string,unknown>:null; } catch{return null;} }

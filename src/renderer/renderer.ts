@@ -176,7 +176,7 @@ interface PosSessionSummary {
 interface CatalogTotals { items: number; prices: number; barcodes: number; stockRows: number; lastSynced: string | null; }
 interface CatalogSearchResult { itemCode: string; itemName: string; barcode: string | null; uom: string; conversionFactor: number; sellingPrice: number | null; currency: string | null; actualStock: number | null; warehouse: string | null; mrp: number | null; }
 interface CartLine extends CatalogSearchResult { quantity: number; }
-interface CustomerResult { name:string; customer_name:string; customer_group:string; mobile_no:string; email_id:string; tax_id:string; }
+interface CustomerResult { name:string; customer_name:string; customer_group:string; mobile_no:string; email_id:string; tax_id:string; custom_legacy_customer_code?:string; }
 interface PaymentRow { method:string; amount:number; }
 
 interface AppSettings {
@@ -764,7 +764,9 @@ async function searchCustomer(preserveSelection = false): Promise<void> {
     b.type = "button";
     b.className = `secondary-button search-result${i === selectedCustomerIndex ? " selected" : ""}`;
     const mobile = c.mobile_no || "—";
-    b.innerHTML = `<span class="search-name">${c.customer_name}</span><span class="search-meta">${mobile}</span><span class="search-code">${c.name}</span>`;
+    const legacy = (c.custom_legacy_customer_code || "").trim();
+    const code = legacy || c.name;
+    b.innerHTML = `<span class="search-name">${c.customer_name}</span><span class="search-meta">${mobile}</span><span class="search-code">${code}</span>`;
     b.onclick = () => void selectCustomer(c);
     return b;
   }));
