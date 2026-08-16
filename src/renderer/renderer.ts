@@ -1656,7 +1656,9 @@ async function submitCurrentSale():Promise<void>{
     updateCompleteSaleState();
     return;
   }
-  // Success: store authoritative (or provisional) response first, keep the cart, then open the receipt preview.
+  // Success: store authoritative (or provisional) response first, then open the
+  // receipt preview (which copies cart rows into the dialog and releases the
+  // sold workspace so lines cannot linger as the next bill).
   lastSaleResponse=result.response;
   // For an online sale, render exactly what ERP persisted rather than the
   // renderer's provisional payment/change calculation. This prevents receipt
@@ -1745,6 +1747,10 @@ async function openReceiptPreview(response:Record<string,unknown>,provisional=fa
   const frame=document.querySelector<HTMLIFrameElement>("#receipt-frame");if(frame){frame.removeAttribute("srcdoc");frame.hidden=true;}
   const structured=document.querySelector<HTMLElement>("#receipt-structured");if(structured)structured.hidden=false;
   document.querySelector<HTMLDialogElement>("#receipt-dialog")?.showModal();
+  // F6 Complete Payment (and F9) already submitted successfully before this runs.
+  // Receipt dialog has copied cart/payment rows into its own DOM — release the sold
+  // workspace now (not on receipt close) so the next bill cannot inherit sold lines.
+  await releaseSoldCartWorkspace();
   if(provisional){
     // No server invoice yet — print the same structured receipt with offline FBR status text.
     const msg=document.querySelector<HTMLElement>("#receipt-message");
@@ -1872,7 +1878,44 @@ async function autoPrintReceiptOnce():Promise<void>{
   await printReceiptNow();
 }
 
-// The ONLY place the cart, payments and benefits are cleared and a new terminal_invoice_id is generated.
+// Clears cart/payments/benefits UI state without touching receipt fields.
+// Called only after a successful F6 / Complete Payment → submit (or F9 submit):
+// once the receipt dialog has copied cart rows into its own DOM. Also mints the
+// next terminal_invoice_id immediately (sale history is already Submitted/Queued,
+// so getTerminalInvoiceId issues a fresh Open id) — closes the residual risk of
+// looking "ready" while still holding the sold id if receipt-close reset fails.
+async function releaseSoldCartWorkspace(): Promise<void> {
+  cartLines = [];
+  selectedCartIndex = -1;
+  paymentRows = [];
+  appliedBenefits = emptyBenefits();
+  changeDue = 0;
+  serverTotals = null;
+  localFbrTotals = null;
+  serverTaxRows = null;
+  validatedCartVersion = -1;
+  paymentPreparedVersion = -1;
+  previewStatus = "idle";
+  previewError = "";
+  paymentsOutdated = false;
+  benefitsOutdated = false;
+  currentCartVersion += 1;
+  renderServerTaxRows();
+  renderCart();
+  try {
+    await persistCart();
+    await persistPayments();
+    await saveBenefitsDraft();
+    terminalInvoiceId = await window.posAPI.getTerminalInvoiceId();
+  } catch (error) {
+    cartMessage(
+      error instanceof Error
+        ? `Sale complete — next bill id pending: ${error.message}`
+        : "Sale complete — next bill id pending"
+    );
+  }
+}
+
 async function printReceiptNow():Promise<void>{
   const msg=document.querySelector<HTMLElement>("#receipt-message");
   if(!lastReceiptHtml){if(msg)msg.textContent="No receipt available. Use Reprint Receipt.";return;}
@@ -1881,15 +1924,26 @@ async function printReceiptNow():Promise<void>{
 }
 
 // Clears the active sale UI/state and issues a fresh terminal_invoice_id for the next sale.
+// Paint the empty cart synchronously before any await — if getTerminalInvoiceId /
+// resetCustomerToProfileDefault throws, a stale cart DOM previously left Clear Cart
+// no-op'ing (cartLines already []) while sold items still appeared on screen.
 async function clearActiveSale(message:string):Promise<void>{
   cartLines=[];selectedCartIndex=-1;paymentRows=[];appliedBenefits=emptyBenefits();changeDue=0;
-  await persistCart();await persistPayments();await saveBenefitsDraft();
   serverTotals=null;localFbrTotals=null;serverTaxRows=null;
   validatedCartVersion=-1;paymentPreparedVersion=-1;previewStatus="idle";previewError="";
+  paymentsOutdated=false;benefitsOutdated=false;
   lastSaleResponse=null;lastReceiptHtml=null;receiptInvoice="";resumedHeldId=null;
-  terminalInvoiceId=await window.posAPI.getTerminalInvoiceId();
-  await resetCustomerToProfileDefault();
-  renderServerTaxRows();renderCart();cartMessage(message);focusCart();
+  currentCartVersion+=1;
+  renderServerTaxRows();renderCart();cartMessage(message);
+  try{
+    await persistCart();await persistPayments();await saveBenefitsDraft();
+    terminalInvoiceId=await window.posAPI.getTerminalInvoiceId();
+    await resetCustomerToProfileDefault();
+  }catch(error){
+    cartMessage(error instanceof Error?`${message} — ${error.message}`:message);
+  }finally{
+    renderServerTaxRows();renderCart();focusCart();
+  }
 }
 async function startNewSaleAfterReceipt():Promise<void>{
   document.querySelector<HTMLDialogElement>("#receipt-dialog")?.close();
@@ -2747,7 +2801,15 @@ async function voidCartRow(index: number): Promise<void> {
 
 async function clearFullCart(): Promise<void> {
   if (!allowClearCart) { cartMessage("Clear Cart is disabled for this POS Profile"); return; }
-  if (!cartLines.length || !(await appConfirm("Clear the full cart?"))) return;
+  // Memory already empty but DOM still showing sold rows (failed post-sale reset):
+  // re-run clearActiveSale to repaint and persist — do not early-return.
+  if (!cartLines.length) {
+    const staleRows = document.querySelectorAll("#cart-rows .cart-row").length;
+    if (!staleRows) { cartMessage("Cart is empty"); return; }
+    await clearActiveSale("Cart cleared");
+    return;
+  }
+  if (!(await appConfirm("Clear the full cart?"))) return;
   if (!cashierSession?.canVoidItems) {
     const auth = await requestSupervisorActionAuthorization("clear_cart");
     if (!auth.ok) return;
