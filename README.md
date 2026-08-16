@@ -10,7 +10,7 @@ Frappe/ERPNext app.
 | **Shopping** | Android, web PWA | Customer catalogue / COD / store pickup |
 | **Restaurant** | Android | Waiter shell (published APK; demo paths must not go to Play production) |
 
-Current package version is in [`package.json`](package.json) (today **3.0.19**).
+Current package version is in [`package.json`](package.json) (today **3.0.21**).
 Every push to `main` builds and publishes all products to a GitHub Release
 `v<version>` — bump that version before release pushes.
 

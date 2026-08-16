@@ -169,7 +169,7 @@ export const mobileDatabase: IDatabaseService = {
   saveBenefitsDraft(key,benefits) { state.benefits[key]=benefits;persist(); },
   upsertCustomers(customers) { for(const row of customers){const name=rowText(row,"name");if(name)state.customers[name]={...state.customers[name],...row};}state.customerSyncedAt=now();persistCatalog(); },
   getCustomerSyncState() { return{count:Object.keys(state.customers).length,lastSynced:state.customerSyncedAt}; },
-  searchCustomers(query) { const q=query.trim().toLowerCase();if(!q)return[];return Object.values(state.customers).filter(x=>!x.disabled&&["name","customer_name","mobile_no","email_id","tax_id"].some(k=>String(x[k]??"").toLowerCase().includes(q))).sort((a,b)=>rowText(a,"customer_name").localeCompare(rowText(b,"customer_name"))).slice(0,8); },
+  searchCustomers(query) { const q=query.trim().toLowerCase();if(!q)return[];return Object.values(state.customers).filter(x=>!x.disabled&&["name","customer_name","mobile_no","email_id","tax_id","custom_legacy_customer_code"].some(k=>String(x[k]??"").toLowerCase().includes(q))).sort((a,b)=>rowText(a,"customer_name").localeCompare(rowText(b,"customer_name"))).slice(0,8); },
   findCustomerByNormalizedMobile(mobile) { return Object.values(state.customers).find(x=>normalizeMobile(String(x.mobile_no??""))===mobile)??null; },
   cacheCustomer(name,data) { state.customerCache[name]=data;persist(); },
   getCachedCustomer(name) { return state.customerCache[name]??null; },
