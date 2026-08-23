@@ -810,6 +810,29 @@ export function cachePosProfile(name: string, profileData: Record<string, unknow
   return syncedAt;
 }
 
+export function getCachedPosProfile(name: string): Record<string, unknown> | null {
+  if (!database || !name) {
+    return null;
+  }
+
+  const row = database.prepare(
+    "SELECT json_data FROM pos_profile_cache WHERE name = ?"
+  ).get(name) as { json_data: string } | undefined;
+
+  if (!row) {
+    return null;
+  }
+
+  try {
+    const data = JSON.parse(row.json_data);
+    return typeof data === "object" && data !== null && !Array.isArray(data)
+      ? data as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 export function getPosProfileCacheStatus(): PosProfileCacheStatus {
   if (!database) {
     return { isReady: false, lastSynced: null };
