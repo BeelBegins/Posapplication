@@ -132,7 +132,15 @@ export function createPosConfigCore(deps: PosCoreDeps, http: ReturnType<typeof c
   function getCachedPosConfiguration(): PosConfigurationSummary | null {
     const { posProfile } = deps.db.loadSettings();
     const configuration = deps.db.getPosBootstrap(posProfile);
-    return configuration ? summarizePosConfiguration(configuration) : null;
+    const summary = configuration ? summarizePosConfiguration(configuration) : null;
+    if (!summary) return null;
+    if (summary.defaultCustomer) return summary;
+    // Bootstrap can lag behind a fresh loadPosProfile (or predate the profile's
+    // default customer). Fall back to the dedicated profile cache so new bills
+    // and offline checkout still pick the POS Profile customer.
+    const cachedProfile = deps.db.getCachedPosProfile(posProfile);
+    const customer = textValue(cachedProfile, "customer");
+    return customer ? { ...summary, defaultCustomer: customer } : summary;
   }
 
   async function loadAvailablePosProfiles(): Promise<{ success: boolean; profiles: PosProfileOption[]; error: string | null }> {
@@ -199,6 +207,20 @@ export function createPosConfigCore(deps: PosCoreDeps, http: ReturnType<typeof c
 
       deps.db.saveSettings({ ...settings, branch, terminalId });
       const syncedAt = deps.db.cachePosProfile(value("name") || posProfile, profileData);
+      // Keep bootstrap's default customer in sync so offline sell / bill reset
+      // (which read getCachedPosConfiguration) see the same customer as Desk.
+      const customer = value("customer");
+      if (customer) {
+        const bootstrap = deps.db.getPosBootstrap(posProfile.trim());
+        const bootstrapProfile = asRecord(bootstrap?.pos_profile);
+        if (bootstrap && bootstrapProfile && textValue(bootstrapProfile, "customer") !== customer) {
+          deps.db.cachePosBootstrap(
+            posProfile.trim(),
+            { ...bootstrap, pos_profile: { ...bootstrapProfile, customer } },
+            textValue(bootstrap, "synced_at") || syncedAt
+          );
+        }
+      }
 
       return {
         success: true,
@@ -209,7 +231,7 @@ export function createPosConfigCore(deps: PosCoreDeps, http: ReturnType<typeof c
           warehouse: value("warehouse"),
           branch,
           terminalId,
-          customer: value("customer"),
+          customer,
           priceList: value("selling_price_list"),
           currency: value("currency"),
           paymentMethodsCount: paymentMethods.length

@@ -352,12 +352,17 @@ async function seedSessionFromCache(): Promise<boolean> {
   return true;
 }
 // Offline cold start: seed the POS Profile's default customer (online bootstrap normally does this) so checkout isn't blocked.
-async function seedDefaultCustomerFromConfig(cfg: PosConfigurationSummary, force = false): Promise<void> {
-  if ((!force && selectedCustomer) || !cfg.defaultCustomer) return;
-  const base = { name: cfg.defaultCustomer, customer_name: cfg.defaultCustomer, customer_group: "", mobile_no: "", email_id: "", tax_id: "" };
+async function seedDefaultCustomerFromConfig(cfg: PosConfigurationSummary | null | undefined, force = false): Promise<void> {
+  let defaultName = cfg?.defaultCustomer?.trim() || "";
+  if (!defaultName) {
+    const fromProfileUi = document.querySelector<HTMLElement>("#profile-customer")?.textContent?.trim() || "";
+    if (fromProfileUi && fromProfileUi !== "—") defaultName = fromProfileUi;
+  }
+  if ((!force && selectedCustomer) || !defaultName) return;
+  const base = { name: defaultName, customer_name: defaultName, customer_group: "", mobile_no: "", email_id: "", tax_id: "" };
   selectedCustomer = base;
   try {
-    const c = await window.posAPI.loadCustomer(cfg.defaultCustomer);
+    const c = await window.posAPI.loadCustomer(defaultName);
     if (c.customer) selectedCustomer = { ...base, customer_name: String(c.customer.customer_name ?? base.customer_name), customer_group: String(c.customer.customer_group ?? ""), mobile_no: String(c.customer.mobile_no ?? ""), email_id: String(c.customer.email_id ?? ""), tax_id: String(c.customer.tax_id ?? "") };
   } catch { /* offline: keep the cached default-customer base */ }
   showCustomer();
@@ -368,8 +373,8 @@ async function resetCustomerToProfileDefault(): Promise<void> {
   selectedCustomer = null;
   customerBenefits = { loyaltyProgram: "", availablePoints: 0, conversionFactor: 1 };
   benefitsOutdated = true;
-  if (cfg?.defaultCustomer) await seedDefaultCustomerFromConfig(cfg, true);
-  else showCustomer();
+  await seedDefaultCustomerFromConfig(cfg, true);
+  if (!selectedCustomer) showCustomer();
 }
 
 function showCatalogTotals(totals: CatalogTotals): void {
@@ -1621,12 +1626,10 @@ async function submitCurrentSale():Promise<void>{
     }
   }
   if(!online){
-    if(!cashierSession.offlineLogin){
-      cartMessage("Offline sale requires cashier PIN login.");
-      await showCashierLogin("Enter cashier username and offline PIN before selling offline.");
-      updateCompleteSaleState();
-      return;
-    }
+    // Mid-shift ERP drop: an already-authenticated online session may keep selling
+    // when canOfflineSale is set (offline-pos-rules.md). Cold start still uses PIN
+    // login, which sets offlineLogin + canOfflineSale from the PIN cache.
+    if(!cashierSession.canOfflineSale){cartMessage("Cashier is not allowed to sell offline.");updateCompleteSaleState();return;}
     const offlineBlocker=await offlineLocalBlocker(true);
     if(offlineBlocker){cartMessage(offlineBlocker);updateCompleteSaleState();return;}
   }
@@ -2663,11 +2666,9 @@ async function openPayment():Promise<void>{
     if(pending){showPreviewStatus("Validating…");await pending;}
     if(validatedCartVersion!==currentCartVersion){cartMessage(previewError?`Cannot open payment — ${previewError}`:"Cart is not server validated yet");return;}
   }else{
-    if(!cashierSession.offlineLogin){
-      cartMessage("Offline sale requires cashier PIN login.");
-      await showCashierLogin("Enter cashier username and offline PIN before selling offline.");
-      return;
-    }
+    // Same mid-shift rule as F9: online-authenticated cashiers with canOfflineSale
+    // continue when ERP drops; do not force a PIN re-login mid-shift.
+    if(!cashierSession.canOfflineSale){cartMessage("Cashier is not allowed to sell offline.");return;}
     if(validatedCartVersion!==currentCartVersion&&!activePreviewPromise)scheduleCartPreview();
     if(activePreviewPromise)await activePreviewPromise;
     const blocker=await offlineLocalBlocker(false);
@@ -3239,7 +3240,7 @@ async function runStartup(reason: string = "startup"): Promise<void> {
         ["config", "catalogue", "customers", "fbr", "session"].forEach((s) => setStep(s as SetupStep, "warning"));
         if (cashierSession) {
           await seedSessionFromCache();
-          await seedDefaultCustomerFromConfig(cachedCfg);
+          await seedDefaultCustomerFromConfig(cachedCfg, true);
           setOverallBadge("Ready Using Cached Data", "warn"); if (progress) progress.textContent = "Offline — using cached data";
           setupCompleted = true; void renderSyncStatus(); void updateOfflineUi(); showScreen("pos"); return;
         }
@@ -3543,7 +3544,7 @@ async function continueAfterCashierLogin(): Promise<void> {
     showPosConfigurationSummary(cachedCfg);
     await loadCachedPosSession();
     await seedSessionFromCache();
-    await seedDefaultCustomerFromConfig(cachedCfg);
+    await seedDefaultCustomerFromConfig(cachedCfg, true);
     updatePosHeader(); setupCompleted = true;
     await markDataAvailabilityFromCache(); startBackgroundSync(); void renderSyncStatus(); void updateOfflineUi();
     setOverallBadge("Ready Using Cached Data", "warn");
@@ -3552,6 +3553,16 @@ async function continueAfterCashierLogin(): Promise<void> {
     return;
   }
   if (isCapacitorRuntime()) { await runPosBootstrap("oauth-cashier-login"); return; }
+  // Online desktop path skips re-running profile load; still force-seed the POS
+  // Profile default customer so the bill is never left without one after login.
+  const cfg = await window.posAPI.getCachedPosConfiguration().catch(() => null);
+  if (cfg?.defaultCustomer) await seedDefaultCustomerFromConfig(cfg, !selectedCustomer);
+  else if (!selectedCustomer) {
+    const profileCustomer = document.querySelector<HTMLElement>("#profile-customer")?.textContent?.trim() || "";
+    if (profileCustomer && profileCustomer !== "—") {
+      await seedDefaultCustomerFromConfig({ defaultCustomer: profileCustomer } as PosConfigurationSummary, true);
+    }
+  }
   const ok = await validateSession("cashier-login");
   updatePosHeader(); setupCompleted = true;
   void markDataAvailabilityFromCache(); startBackgroundSync(); void renderSyncStatus(); void updateOfflineUi();

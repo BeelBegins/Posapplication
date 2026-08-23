@@ -45,6 +45,20 @@ test("new bills reselect the POS Profile default customer", () => {
   assert.match(renderer, /async function clearFullCart\(\): Promise<void> \{[^]*?await clearActiveSale\("Cart cleared"\)/);
 });
 
+test("offline sell continues from online cashier session without forcing PIN re-login", () => {
+  const renderer = source("src/renderer/renderer.ts");
+  assert.match(renderer, /Mid-shift ERP drop[\s\S]*?canOfflineSale/);
+  assert.doesNotMatch(renderer, /Offline sale requires cashier PIN login/);
+});
+
+test("cached POS configuration falls back to profile-cache default customer", () => {
+  const posConfig = source("src/core/pos-config.ts");
+  const database = source("src/db/database.ts");
+  assert.match(database, /export function getCachedPosProfile\(name: string\)/);
+  assert.match(posConfig, /getCachedPosProfile\(posProfile\)/);
+  assert.match(posConfig, /defaultCustomer: customer/);
+});
+
 test("sold cart is released when receipt preview opens, and Clear Cart recovers stale DOM", () => {
   const renderer = source("src/renderer/renderer.ts");
   assert.match(renderer, /async function releaseSoldCartWorkspace\(\): Promise<void> \{/);

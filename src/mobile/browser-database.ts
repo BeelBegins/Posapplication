@@ -187,6 +187,7 @@ export const mobileDatabase: IDatabaseService = {
   cachePosBootstrap(posProfile,configuration,syncedAt) { state.bootstraps[posProfile]={data:configuration,syncedAt};persist(); },
   getPosBootstrap(posProfile) { return state.bootstraps[posProfile]?.data??null; },
   cachePosProfile(name,data) { const stamp=now();state.profiles[name]={data,syncedAt:stamp};persist();return stamp; },
+  getCachedPosProfile(name) { return state.profiles[name]?.data??null; },
   getPosProfileCacheStatus() { const values=Object.values(state.profiles);return{isReady:values.length>0,lastSynced:values.sort((a,b)=>b.syncedAt.localeCompare(a.syncedAt))[0]?.syncedAt??null}; }
 };
 

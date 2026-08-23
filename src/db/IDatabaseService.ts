@@ -93,6 +93,7 @@ export interface IDatabaseService {
   cachePosBootstrap(posProfile: string, configuration: Record<string, unknown>, syncedAt: string): void;
   getPosBootstrap(posProfile: string): Record<string, unknown> | null;
   cachePosProfile(name: string, profileData: Record<string, unknown>): string;
+  getCachedPosProfile(name: string): Record<string, unknown> | null;
   getPosProfileCacheStatus(): PosProfileCacheStatus;
 }
 
