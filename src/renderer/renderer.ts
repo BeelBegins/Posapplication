@@ -1450,7 +1450,7 @@ interface FbrTotalsView { merchandise: number; saleBeforeTax: number; salesTax: 
 function fbrTotalsView(): FbrTotalsView {
   const linesSum = money2(cartLines.reduce((sum, line) => sum + (line.sellingPrice ?? 0) * line.quantity, 0));
   // Tax-inclusive goods: prefer FBR merchandise (server, then local), then line sum.
-  // ERPNext preview doc.grand_total / rounded_total often stay 0 after inclusive-tax + FBR rows.
+  // ERP preview doc.grand_total / rounded_total often stay 0 after inclusive-tax + FBR rows.
   const serverMerch = previewNumber(serverTotals, "merchandise_total");
   const localMerch = previewNumber(localFbrTotals, "merchandise_total");
   const merchandise = (serverMerch !== null && serverMerch > 0)
