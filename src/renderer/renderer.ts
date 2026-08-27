@@ -1449,21 +1449,37 @@ function taxRowAmount(pattern: RegExp): number | null {
 interface FbrTotalsView { merchandise: number; saleBeforeTax: number; salesTax: number; serviceFee: number; loyaltyAmount: number; giftVoucherAmount: number; giftVoucherError: string; grandTotal: number; payable: number; }
 function fbrTotalsView(): FbrTotalsView {
   const linesSum = money2(cartLines.reduce((sum, line) => sum + (line.sellingPrice ?? 0) * line.quantity, 0));
-  // Goods are tax-inclusive: trust the line-total sum / local FBR engine — the preview's doc totals come back as 0.
+  // Tax-inclusive goods: prefer FBR merchandise (server, then local), then line sum.
+  // ERPNext preview doc.grand_total / rounded_total often stay 0 after inclusive-tax + FBR rows.
+  const serverMerch = previewNumber(serverTotals, "merchandise_total");
   const localMerch = previewNumber(localFbrTotals, "merchandise_total");
-  const merchandise = (localMerch !== null && localMerch > 0) ? localMerch : linesSum;
-  // Tax / fee come from the authoritative server tax rows first, then the local FBR engine.
-  const salesTax = taxRowAmount(/sales tax|gst/i) ?? previewNumber(localFbrTotals, "total_sales_tax") ?? 0;
-  const serviceFee = taxRowAmount(/service fee|pos fee/i) ?? previewNumber(localFbrTotals, "fbr_pos_service_fee") ?? 0;
-  const saleBeforeTax = previewNumber(localFbrTotals, "value_excluding_tax") ?? money2(merchandise - salesTax);
+  const merchandise = (serverMerch !== null && serverMerch > 0)
+    ? serverMerch
+    : (localMerch !== null && localMerch > 0) ? localMerch : linesSum;
+  // Tax / fee: server tax rows first, then FBR totals on server/local preview.
+  const salesTax = taxRowAmount(/sales tax|gst/i)
+    ?? previewNumber(serverTotals, "total_sales_tax")
+    ?? previewNumber(localFbrTotals, "total_sales_tax")
+    ?? 0;
+  const serviceFee = taxRowAmount(/service fee|pos fee/i)
+    ?? previewNumber(serverTotals, "fbr_pos_service_fee")
+    ?? previewNumber(localFbrTotals, "fbr_pos_service_fee")
+    ?? 0;
+  const saleBeforeTax = previewNumber(serverTotals, "value_excluding_tax")
+    ?? previewNumber(localFbrTotals, "value_excluding_tax")
+    ?? money2(merchandise - salesTax);
   const loyaltyAmount = previewNumber(serverTotals, "loyalty_amount", "loyalty_points_redeemed", "loyaltyAmount") ?? 0;
   const giftVoucherAmount = previewNumber(serverTotals, "gift_voucher_amount") ?? 0;
   const giftVoucherError = String(serverTotals?.gift_voucher_error ?? "");
-  const localGrandTotal = money2(merchandise + serviceFee); // FBR POS service fee is added on top of the tax-inclusive goods total
+  const fbrGrandTotal = money2(merchandise + serviceFee); // fee sits on top of tax-inclusive goods
   const serverGrandTotal = previewNumber(serverTotals, "rounded_total", "grand_total");
-  const grandTotal = Math.max(0, money2(serverGrandTotal !== null && serverGrandTotal > 0 ? serverGrandTotal : localGrandTotal));
+  const grandTotal = Math.max(0, money2(serverGrandTotal !== null && serverGrandTotal > 0 ? serverGrandTotal : fbrGrandTotal));
+  // amount_due is authoritative only when positive. Preview often sends 0 because it is
+  // derived from doc.grand_total (also 0) — treating that as payable left cashiers with
+  // Payable/Remaining 0 while line rates and the printed bill were correct.
   const amountDue = previewNumber(serverTotals, "amount_due");
-  const payable = Math.max(0, money2(amountDue ?? (grandTotal - loyaltyAmount - giftVoucherAmount)));
+  const fallbackPayable = Math.max(0, money2(grandTotal - loyaltyAmount - giftVoucherAmount));
+  const payable = Math.max(0, money2(amountDue !== null && amountDue > 0 ? amountDue : fallbackPayable));
   return { merchandise, saleBeforeTax, salesTax, serviceFee, loyaltyAmount, giftVoucherAmount, giftVoucherError, grandTotal, payable };
 }
 function payableAmount():number{ return fbrTotalsView().payable; }
