@@ -160,6 +160,8 @@ interface PosConfigurationSummary {
   allowItemSearch: boolean;
   allowClearCart: boolean;
   allowHeldSales: boolean;
+  isFoodpandaProfile: boolean;
+  foodpandaCreditMode: string;
   lastSynced: string;
   cacheStatus: "Ready";
 }
@@ -262,19 +264,24 @@ async function loadPosProfileCacheStatus(): Promise<void> {
 
 function showPosConfigurationSummary(summary: PosConfigurationSummary | null): void {
   const section = document.querySelector<HTMLElement>("#pos-configuration-summary");
-  if (!section) {
-    return;
-  }
   if (!summary) {
-    section.hidden = true;
+    isFoodpandaProfile = false;
+    foodpandaCreditCustomer = "";
+    foodpandaCreditMode = "";
+    if (section) section.hidden = true;
     return;
   }
   allowItemSearch = summary.allowItemSearch !== false;
   allowClearCart = summary.allowClearCart !== false;
   allowHeldSales = summary.allowHeldSales === true;
+  isFoodpandaProfile = summary.isFoodpandaProfile === true;
+  foodpandaCreditCustomer = summary.defaultCustomer.trim();
+  foodpandaCreditMode = summary.foodpandaCreditMode.trim();
   updateCartSearchUi();
   updateClearCartUi();
   updateHeldSalesUi();
+
+  if (!section) return;
 
   const fields: Record<string, string> = {
     "#config-pos-profile": summary.posProfile,
@@ -472,6 +479,10 @@ let allowItemSearch = true;
 let allowClearCart = true;
 // POS Profile.custom_allow_held_sales (missing/legacy bootstrap => false; opt-in).
 let allowHeldSales = false;
+// Foodpanda credit behavior comes entirely from the active cached POS Profile.
+let isFoodpandaProfile = false;
+let foodpandaCreditCustomer = "";
+let foodpandaCreditMode = "";
 let customerSearchTimer: number | undefined;
 // Ignore overlapping wedge scans while a lookup runs and briefly after a hit.
 const SCAN_SETTLE_MS = 120;
@@ -1541,7 +1552,7 @@ async function completePaymentAllocation():Promise<void>{
 async function finalizeFoodPandaCreditSale(): Promise<void> {
   const msg = document.querySelector<HTMLElement>("#payment-message");
   if (!isFoodPandaCreditProfile()) {
-    if (msg) msg.textContent = "Credit Sale is only available for the S1 Food Panda customer.";
+    if (msg) msg.textContent = "Credit Sale requires the configured customer and payment mode for this Foodpanda profile.";
     return;
   }
   if (!cartLines.length) {
@@ -1560,7 +1571,7 @@ async function finalizeFoodPandaCreditSale(): Promise<void> {
     appliedBenefits = emptyBenefits();
     await saveBenefitsDraft();
   }
-  paymentRows = [{ method: FOOD_PANDA_CREDIT_MODE, amount: 0 }];
+  paymentRows = [{ method: foodpandaCreditMode, amount: 0 }];
   changeDue = 0;
   await persistPayments();
   paymentsOutdated = false;
@@ -2642,17 +2653,16 @@ function sortPaymentMethodsCashFirst(methods: string[], types: Record<string, st
   return copy;
 }
 
-const FOOD_PANDA_PROFILE = "S1 Food Panda";
-const FOOD_PANDA_CUSTOMER = "Food Panda";
-const FOOD_PANDA_CREDIT_MODE = "Food Panda Credit";
 function isFoodPandaCreditProfile(): boolean {
-  const profile = document.querySelector<HTMLSelectElement>("#pos-profile")?.value ?? "";
-  return profile === FOOD_PANDA_PROFILE && selectedCustomer?.name === FOOD_PANDA_CUSTOMER;
+  return isFoodpandaProfile
+    && Boolean(foodpandaCreditCustomer)
+    && Boolean(foodpandaCreditMode)
+    && selectedCustomer?.name === foodpandaCreditCustomer;
 }
 function isFoodPandaCreditPrepared(): boolean {
   return isFoodPandaCreditProfile()
     && paymentRows.length === 1
-    && paymentRows[0].method === FOOD_PANDA_CREDIT_MODE
+    && paymentRows[0].method === foodpandaCreditMode
     && paymentRows[0].amount === 0;
 }
 
@@ -2690,7 +2700,7 @@ async function openPayment():Promise<void>{
     const blocker=await offlineLocalBlocker(false);
     if(blocker){cartMessage(blocker);return;}
   }
-  if(paymentsOutdated&&paymentRows.length){if(!(await appConfirm("Cart changed. Clear outdated payments?")))return;paymentRows=[];await persistPayments();paymentsOutdated=false;}paymentMethodTypes=await window.posAPI.getPaymentMethodTypes();paymentMethods=sortPaymentMethodsCashFirst((await window.posAPI.getPaymentMethods()).filter((mode)=>mode!==FOOD_PANDA_CREDIT_MODE),paymentMethodTypes);paymentRows=await window.posAPI.loadPaymentDraft();changeDue=0;selectedPaymentMethodIndex=0;
+  if(paymentsOutdated&&paymentRows.length){if(!(await appConfirm("Cart changed. Clear outdated payments?")))return;paymentRows=[];await persistPayments();paymentsOutdated=false;}paymentMethodTypes=await window.posAPI.getPaymentMethodTypes();paymentMethods=sortPaymentMethodsCashFirst((await window.posAPI.getPaymentMethods()).filter((mode)=>!foodpandaCreditMode||mode!==foodpandaCreditMode),paymentMethodTypes);paymentRows=await window.posAPI.loadPaymentDraft();changeDue=0;selectedPaymentMethodIndex=0;
   // A row left mid-"Edit" from a previous open of this dialog (e.g. the cashier
   // went back to add more items instead of finishing the edit) must not survive
   // into this fresh session — addPayment() would otherwise silently overwrite

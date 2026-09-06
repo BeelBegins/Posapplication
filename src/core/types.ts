@@ -52,6 +52,10 @@ export interface PosConfigurationSummary {
   allowClearCart: boolean;
   /** From POS Profile.custom_allow_held_sales; missing/legacy cache defaults to FALSE (opt-in). */
   allowHeldSales: boolean;
+  /** True only when POS Profile.custom_is_foodpanda_profile is explicitly enabled. */
+  isFoodpandaProfile: boolean;
+  /** The profile's single configured default payment mode, used as the zero-value credit marker. */
+  foodpandaCreditMode: string;
   lastSynced: string;
   cacheStatus: "Ready";
 }
