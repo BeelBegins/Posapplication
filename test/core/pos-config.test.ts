@@ -36,6 +36,7 @@ test("summarizePosConfiguration maps a synced configuration bundle", () => {
     posProfile: "Main", company: "Test Co", branch: "Branch A", warehouse: "WH-A", defaultCustomer: "Walk-in",
     sellingPriceList: "Standard", currency: "PKR", taxTemplate: "Std Tax", taxRowsCount: 1, paymentMethodsCount: 2,
     allowItemSearch: true, allowClearCart: true, allowHeldSales: false,
+    isFoodpandaProfile: false, foodpandaCreditMode: "",
     lastSynced: "2026-01-01T00:00:00.000Z", cacheStatus: "Ready"
   });
 });
@@ -96,6 +97,51 @@ test("summarizePosConfiguration defaults allowHeldSales to false and respects cu
     synced_at: "2026-01-01T00:00:00.000Z"
   });
   assert.equal(enabled?.allowHeldSales, true);
+});
+
+test("summarizePosConfiguration derives Foodpanda credit behavior from profile configuration", () => {
+  const deps = fakeDeps();
+  const core = createPosConfigCore(deps, createHttpCore(deps));
+  const summary = core.summarizePosConfiguration({
+    pos_profile: {
+      name: "S7 Food Panda",
+      company: "Test Co",
+      warehouse: "WH-S7",
+      customer: "S7 Food Panda",
+      selling_price_list: "S7 Foodpanda",
+      currency: "PKR",
+      custom_is_foodpanda_profile: 1,
+      payments: [
+        { mode_of_payment: "Cash", default: 0 },
+        { mode_of_payment: "Branch Delivery Receivable", default: 1 }
+      ]
+    },
+    tax_template: null,
+    payment_modes: [],
+    synced_at: "2026-01-01T00:00:00.000Z"
+  });
+  assert.equal(summary?.isFoodpandaProfile, true);
+  assert.equal(summary?.defaultCustomer, "S7 Food Panda");
+  assert.equal(summary?.foodpandaCreditMode, "Branch Delivery Receivable");
+});
+
+test("summarizePosConfiguration disables Foodpanda credit for ambiguous defaults", () => {
+  const deps = fakeDeps();
+  const core = createPosConfigCore(deps, createHttpCore(deps));
+  const summary = core.summarizePosConfiguration({
+    pos_profile: {
+      name: "Delivery",
+      customer: "Delivery Customer",
+      custom_is_foodpanda_profile: 1,
+      payments: [
+        { mode_of_payment: "Receivable A", default: 1 },
+        { mode_of_payment: "Receivable B", default: 1 }
+      ]
+    },
+    synced_at: "2026-01-01T00:00:00.000Z"
+  });
+  assert.equal(summary?.isFoodpandaProfile, true);
+  assert.equal(summary?.foodpandaCreditMode, "");
 });
 
 test("previewCart sends the human cashier identity to the server", async () => {

@@ -30,6 +30,16 @@ function summarizePosConfiguration(configuration: Record<string, unknown>): PosC
   const allowHeldSales = !Object.prototype.hasOwnProperty.call(profile, "custom_allow_held_sales")
     ? false
     : Boolean(Number(profile.custom_allow_held_sales));
+  const isFoodpandaProfile = Object.prototype.hasOwnProperty.call(profile, "custom_is_foodpanda_profile")
+    && Boolean(Number(profile.custom_is_foodpanda_profile));
+  const defaultPaymentModes = (Array.isArray(profile.payments) ? profile.payments : [])
+    .map(asRecord)
+    .filter((payment) => payment && Boolean(Number(payment.default)))
+    .map((payment) => textValue(payment, "mode_of_payment"))
+    .filter(Boolean);
+  const foodpandaCreditMode = isFoodpandaProfile && defaultPaymentModes.length === 1
+    ? defaultPaymentModes[0]
+    : "";
 
   return {
     posProfile: textValue(profile, "name"),
@@ -45,6 +55,8 @@ function summarizePosConfiguration(configuration: Record<string, unknown>): PosC
     allowItemSearch,
     allowClearCart,
     allowHeldSales,
+    isFoodpandaProfile,
+    foodpandaCreditMode,
     lastSynced: syncedAt,
     cacheStatus: "Ready"
   };
