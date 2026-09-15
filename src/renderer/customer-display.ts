@@ -24,6 +24,12 @@ interface CustomerDisplayPayload {
   /** Enrolled loyalty only — omit/blank for Walk-in / not enrolled. */
   loyaltyProgram?: string;
   availableLoyaltyPoints?: number;
+  /** Amount actually due after any loyalty/voucher redemption. Falls back to
+   * grandTotal when absent so this display is safe against an older sender. */
+  payableTotal?: number;
+  /** This transaction's redeemed-points discount, in currency, not points.
+   * 0/omitted whenever no redemption is applied to the current cart. */
+  loyaltyDiscountAmount?: number;
 }
 
 // Persisted across renders (and across the idle <-> active toggle) since the
@@ -117,8 +123,18 @@ function renderCustomerDisplay(payload: CustomerDisplayPayload): void {
 
   const countEl = document.querySelector<HTMLElement>("#cd-item-count");
   if (countEl) countEl.textContent = String(payload.itemCount);
+
+  // Total Due must reflect what's actually collected, not the pre-discount
+  // grand total — a customer redeeming points needs to see this go down,
+  // not just their points balance sitting unchanged in the header above.
+  const discount = Number(payload.loyaltyDiscountAmount) || 0;
+  const loyaltyRowEl = document.querySelector<HTMLElement>("#cd-foot-loyalty");
+  const loyaltyDiscountEl = document.querySelector<HTMLElement>("#cd-loyalty-discount");
+  if (loyaltyRowEl) loyaltyRowEl.hidden = discount <= 0.009;
+  if (loyaltyDiscountEl) loyaltyDiscountEl.textContent = `-${money(discount)}`;
+
   const totalEl = document.querySelector<HTMLElement>("#cd-total");
-  if (totalEl) totalEl.textContent = money(payload.grandTotal);
+  if (totalEl) totalEl.textContent = money(payload.payableTotal ?? payload.grandTotal);
 }
 
 type CustomerDisplayBridge = {

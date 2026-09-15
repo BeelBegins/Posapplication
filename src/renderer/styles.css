@@ -780,6 +780,7 @@ dialog input:focus-visible,dialog select:focus-visible,dialog textarea:focus-vis
 .payment-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 18px; margin: 8px 0 4px; }
 .payment-grid p { display: flex; justify-content: space-between; margin: 4px 0; }
 .payment-grid .payment-change-cell strong { color: var(--color-success); }
+.payment-grid .payment-loyalty-row strong { color: var(--color-success); }
 .payment-grid p:first-child strong, #payment-remaining { color: var(--color-accent-strong); }
 .payment-split { margin: 10px 0; font-size: 0.85rem; }
 .payment-split summary { cursor: pointer; color: var(--color-text-muted); font-weight: 600; }
