@@ -82,6 +82,14 @@ jobs:
           java-version: '21'
           cache: gradle
       - uses: android-actions/setup-android@v3
+        with:
+          # Google has fully removed the legacy standalone "tools" package
+          # from its SDK repository -- the action's own default (`tools
+          # platform-tools`) now fails outright. Gradle resolves the
+          # build-tools/platform versions it actually needs on its own;
+          # platform-tools (adb) is the only piece this workflow uses
+          # directly.
+          packages: platform-tools
       - run: npm ci
       - run: npm run android:sync
       - name: Restore Android release keystore
