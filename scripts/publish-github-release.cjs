@@ -134,6 +134,18 @@ function expectedAssets() {
     } else if (requireApk || requireProductApks) {
       throw new Error(`${apkPath} is missing. Build the signed Android release before publishing.`);
     }
+
+    // The android build job produces both assembleRelease (.apk) and
+    // bundleRelease (.aab) into the same dist-apk/ artifact -- only the .apk
+    // ever made it into the published release. Play Store submissions need
+    // the .aab, so publish it alongside the APK under the same requirement.
+    const aabName = `Aimatic-${product}-App-${pkg.version}.aab`;
+    const aabPath = path.join("dist-apk", aabName);
+    if (fs.existsSync(aabPath)) {
+      assets.push({ name: aabName, filePath: aabPath });
+    } else if (requireApk || requireProductApks) {
+      throw new Error(`${aabPath} is missing. Build the signed Android release before publishing.`);
+    }
   }
   const webName = `Aimatic-Shopping-Web-${pkg.version}.zip`;
   const webPath = path.join("dist-web", webName);
@@ -164,6 +176,9 @@ function contentType(name) {
   }
   if (name.endsWith(".apk")) {
     return "application/vnd.android.package-archive";
+  }
+  if (name.endsWith(".aab")) {
+    return "application/octet-stream";
   }
   if (name.endsWith(".zip")) return "application/zip";
   return "application/octet-stream";
