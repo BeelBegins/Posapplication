@@ -1498,7 +1498,16 @@ async function persistPayments():Promise<void>{await window.posAPI.savePaymentDr
 function paidAmount():number{return paymentRows.reduce((s,x)=>s+x.amount,0);}
 function remainingAmount():number{return Math.max(0,money2(payableAmount()-paidAmount()));}
 // Lightweight refresh of the Payable / Tendered / Paid / Remaining / Change figures (no row rebuild).
-function refreshPaymentSummary():void{const input=document.querySelector<HTMLInputElement>("#payment-amount");const tendered=Number(input?.value)||0;const payable=payableAmount(),paid=paidAmount(),remaining=Math.max(0,money2(payable-paid));setCartText("#payment-payable",payable.toFixed(2));setCartText("#payment-tendered",tendered.toFixed(2));setCartText("#payment-allocated",paid.toFixed(2));setCartText("#payment-remaining",remaining.toFixed(2));setCartText("#payment-change",changeDue.toFixed(2));const hint=document.querySelector<HTMLElement>("#payment-amount-hint");if(hint)hint.textContent=`Remaining: ${remaining.toFixed(2)}`;}
+function refreshPaymentSummary():void{const input=document.querySelector<HTMLInputElement>("#payment-amount");const tendered=Number(input?.value)||0;const payable=payableAmount(),paid=paidAmount(),remaining=Math.max(0,money2(payable-paid));setCartText("#payment-payable",payable.toFixed(2));setCartText("#payment-tendered",tendered.toFixed(2));setCartText("#payment-allocated",paid.toFixed(2));setCartText("#payment-remaining",remaining.toFixed(2));setCartText("#payment-change",changeDue.toFixed(2));const hint=document.querySelector<HTMLElement>("#payment-amount-hint");if(hint)hint.textContent=`Remaining: ${remaining.toFixed(2)}`;
+  // Payable already nets out the redemption — this row exists so that fact
+  // doesn't disappear the moment the payment dialog covers the cart screen's
+  // own "Loyalty Redeemed" note, which is exactly when cash actually changes hands.
+  const loyaltyAmount=fbrTotalsView().loyaltyAmount;
+  const loyaltyRow=document.querySelector<HTMLElement>("#payment-loyalty-row");
+  const showLoyaltyRow=appliedBenefits.loyaltyPoints>0&&loyaltyAmount>0.009;
+  if(loyaltyRow)loyaltyRow.hidden=!showLoyaltyRow;
+  if(showLoyaltyRow)setCartText("#payment-loyalty-amount",`-${loyaltyAmount.toFixed(2)}`);
+}
 function renderPayments():void{refreshPaymentSummary();const box=document.querySelector<HTMLElement>("#payment-rows");if(box){box.replaceChildren(); for(const [i,row] of paymentRows.entries()){const container=document.createElement("div");container.className="payment-row";const text=document.createElement("span");text.textContent=`${row.method}: ${row.amount.toFixed(2)}`;const edit=document.createElement("button");edit.type="button";edit.className="secondary-button";edit.textContent="Edit";edit.onclick=()=>{paymentEditIndex=i; const methodIndex=paymentMethods.findIndex(m=>m.toLowerCase()===row.method.toLowerCase()); if(methodIndex>=0)selectedPaymentMethodIndex=methodIndex; renderPaymentMethods(); const input=document.querySelector<HTMLInputElement>("#payment-amount"); if(input){input.value=String(row.amount); input.focus(); input.select();}};const remove=document.createElement("button");remove.type="button";remove.className="secondary-button";remove.textContent="Remove";remove.onclick=async()=>{paymentRows.splice(i,1);changeDue=0;await persistPayments();renderPayments();};container.append(text,edit,remove);box.append(container);} } }
 
 async function addPayment():Promise<void>{
@@ -2772,6 +2781,10 @@ function pushCustomerDisplayUpdate(totals: FbrTotalsView): void {
     // Walk-in / not enrolled → blank program → customer display hides the row.
     loyaltyProgram: customerBenefits.loyaltyProgram || "",
     availableLoyaltyPoints: customerBenefits.loyaltyProgram ? customerBenefits.availablePoints : undefined,
+    // Total Due on the customer's own screen must show what they'll actually
+    // pay, not the pre-discount grand total this payload used to send.
+    payableTotal: totals.payable,
+    loyaltyDiscountAmount: appliedBenefits.loyaltyPoints > 0 ? totals.loyaltyAmount : 0,
   });
 }
 async function afterCartMutation(message: string): Promise<void> {

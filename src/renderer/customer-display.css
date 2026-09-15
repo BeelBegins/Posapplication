@@ -193,3 +193,5 @@ body {
   font-weight: 800;
 }
 .cd-foot-total strong { color: var(--color-accent-strong); font-size: 2.6rem; }
+.cd-foot-loyalty strong { color: var(--color-success); }
+.cd-foot-loyalty[hidden] { display: none; }
