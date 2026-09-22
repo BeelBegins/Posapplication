@@ -1495,6 +1495,25 @@ function fbrTotalsView(): FbrTotalsView {
 }
 function payableAmount():number{ return fbrTotalsView().payable; }
 async function persistPayments():Promise<void>{await window.posAPI.savePaymentDraft(paymentRows);}
+const MAX_PKR_CASH_NOTE = 5000;
+function maxCashTender(payable:number):number{
+  const amount=Math.max(0,Number.isFinite(payable)?payable:0);
+  return amount>0?Math.ceil(amount/MAX_PKR_CASH_NOTE)*MAX_PKR_CASH_NOTE:0;
+}
+function cashTenderLimitMessage(payable:number, tendered:number):string{
+  return `Cash tender ${tendered.toFixed(2)} exceeds the maximum allowed ${maxCashTender(payable).toFixed(2)} for payable ${payable.toFixed(2)}.`;
+}
+function validateCashTenderRows():string|null{
+  const payable=payableAmount();
+  const cashTotal=paymentRows.filter((row)=>((paymentMethodTypes[row.method]??"").toLowerCase()==="cash")).reduce((sum,row)=>sum+row.amount,0);
+  return cashTotal>maxCashTender(payable)+0.0001?cashTenderLimitMessage(payable,cashTotal):null;
+}
+function refreshCashTenderHint():void{
+  const hint=document.querySelector<HTMLElement>("#payment-amount-hint");
+  if(!hint)return;
+  const payable=payableAmount(),remaining=remainingAmount(),method=paymentMethods[selectedPaymentMethodIndex]??"";
+  hint.textContent=((paymentMethodTypes[method]??"").toLowerCase()==="cash")?`Remaining: ${remaining.toFixed(2)} · Cash limit: ${maxCashTender(payable).toFixed(2)}`:`Remaining: ${remaining.toFixed(2)}`;
+}
 function paidAmount():number{return paymentRows.reduce((s,x)=>s+x.amount,0);}
 function remainingAmount():number{return Math.max(0,money2(payableAmount()-paidAmount()));}
 // Lightweight refresh of the Payable / Tendered / Paid / Remaining / Change figures (no row rebuild).
@@ -1526,11 +1545,12 @@ async function addPayment():Promise<void>{
   // ERP's own paid_amount semantics: gross tendered, change tracked separately), which
   // computes and returns the authoritative change_amount rather than this local estimate.
   if(!isCash && entered>remaining+0.0001){if(msg)msg.textContent="Amount exceeds the bill. No advance or extra payment allowed.";input?.focus();return;}
+  if(isCash && entered>maxCashTender(payableAmount())+0.0001){if(msg)msg.textContent=cashTenderLimitMessage(payableAmount(),entered);input?.focus();return;}
   const applied=entered;
   changeDue=isCash?money2(entered-Math.min(entered,remaining)):0;
   if(targetIndex>=0)paymentRows[targetIndex]={method,amount:applied};else paymentRows.push({method,amount:applied});
   paymentEditIndex=null;
-  await persistPayments();renderPayments();if(input)input.value="";refreshPaymentSummary();
+  await persistPayments();renderPayments();refreshCashTenderHint();if(input)input.value="";refreshPaymentSummary();
   // Once fully covered, stop short of auto-closing the dialog — leave it open on a
   // "Payment Ready" state and require one more explicit Complete Payment (F6 or
   // click) so a mistyped last split leg has a beat to be caught/edited before it
@@ -1549,6 +1569,8 @@ async function completePaymentAllocation():Promise<void>{
   const msg=document.querySelector<HTMLElement>("#payment-message");
   if(input?.value.trim()){if(msg)msg.textContent="Press Enter or Add to save this amount first, then Complete Payment.";input.focus();return;}
   if(remainingAmount()>0.0001){if(msg)msg.textContent="Remaining amount must be zero.";return;}
+  const cashError=validateCashTenderRows();
+  if(cashError){if(msg)msg.textContent=cashError;return;}
   await finalizePaymentReady();
 }
 

@@ -751,6 +751,32 @@ dialog input:focus-visible,dialog select:focus-visible,dialog textarea:focus-vis
 .customer-dialog { width: min(720px, 90vw); border: 0; border-radius: 12px; padding: 16px; box-shadow: var(--shadow-lg); background: var(--color-surface); color: var(--color-text); }
 .customer-dialog::backdrop { background: var(--overlay-bg); }
 .customer-dialog .search-result { font-size: 12px; padding: 6px 8px; }
+.benefits-dialog { width: min(900px, 94vw); }
+.benefits-dialog-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
+.benefits-dialog-head h3 { margin: 0 0 3px; }
+.benefits-dialog-head p { margin: 2px 0; }
+.benefits-customer-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 48px; min-height: 28px; border-radius: 999px; background: var(--color-header); color: var(--color-header-contrast); font-size: .72rem; font-weight: 800; letter-spacing: .08em; }
+.benefits-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 14px 0; }
+.benefit-card { min-width: 0; padding: 14px; border: 1px solid var(--color-border); border-radius: 14px; background: var(--color-surface-muted); box-shadow: 0 4px 14px rgba(15, 23, 42, .06); }
+.benefit-card:focus-within { border-color: var(--color-accent-strong); box-shadow: 0 0 0 3px var(--color-accent-soft); }
+.benefit-card-head { display: flex; align-items: flex-start; gap: 10px; min-height: 56px; margin-bottom: 12px; }
+.benefit-card-head h4 { margin: 0 0 3px; font-size: 1rem; }
+.benefit-card-head p { margin: 0; color: var(--color-text-muted); font-size: .78rem; line-height: 1.35; }
+.benefit-card-icon { display: inline-flex; flex: 0 0 38px; align-items: center; justify-content: center; width: 38px; height: 38px; border-radius: 11px; background: var(--color-header); color: var(--color-header-contrast); font-size: .72rem; font-weight: 900; letter-spacing: .04em; }
+.benefit-card-gift .benefit-card-icon { background: var(--color-success); }
+.benefit-card-coupon .benefit-card-icon { background: var(--color-accent-strong); }
+.benefit-card-loyalty .benefit-card-icon { background: var(--color-warning); color: #3b2500; }
+.benefit-card label { display: grid; gap: 5px; font-size: .78rem; font-weight: 700; }
+.benefit-card input { width: 100%; box-sizing: border-box; }
+.benefit-card .settings-message { min-height: 1.15em; margin: 8px 0 0; }
+.benefit-card .secondary-button { width: 100%; margin-top: 8px; }
+.benefit-stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; margin: 0 0 12px; }
+.benefit-stat-grid p { display: flex; flex-direction: column; gap: 2px; margin: 0; color: var(--color-text-muted); font-size: .72rem; }
+.benefit-stat-grid strong { color: var(--color-text); font-size: .86rem; overflow-wrap: anywhere; }
+@media (max-width: 760px) {
+  .benefits-grid { grid-template-columns: 1fr; }
+  .benefit-card-head { min-height: 0; }
+}
 .payment-dialog { width: min(620px, 92vw); }
 .payment-dialog h3 { margin-top: 0; }
 .payment-methods { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 10px 0; max-height: 220px; overflow-y: auto; }
