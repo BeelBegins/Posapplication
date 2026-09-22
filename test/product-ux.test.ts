@@ -305,3 +305,22 @@ test("mobile responsive rules retain large targets and reduced-motion support", 
     assert.match(styles, /min-height:\s*48px/);
   }
 });
+
+test("Benefits dialog exposes distinct voucher, coupon, and loyalty cards", () => {
+  const html = source("src/renderer/index.html");
+  const styles = source("src/renderer/styles.css");
+  for (const card of ["benefit-card-gift", "benefit-card-coupon", "benefit-card-loyalty"]) {
+    assert.match(html, new RegExp(card));
+    assert.match(styles, new RegExp(`\\.${card}`));
+  }
+  assert.match(html, /Gift Voucher/);
+  assert.match(html, /Coupon Code/);
+  assert.match(html, /Loyalty Points/);
+});
+
+test("cash tender guard is present in the POS payment path", () => {
+  const renderer = source("src/renderer/renderer.ts");
+  assert.match(renderer, /MAX_PKR_CASH_NOTE\s*=\s*5000/);
+  assert.match(renderer, /maxCashTender\(payableAmount\(\)\)/);
+  assert.match(renderer, /validateCashTenderRows\(\)/);
+});
