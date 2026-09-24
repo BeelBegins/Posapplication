@@ -50,13 +50,24 @@ async function cashierLogin(input:Record<string,unknown>) {
     if(pin&&!/^\d{4,8}$/.test(pin))return{...emptyLogin(),requirePinSetup:true,error:"Offline PIN must contain 4 to 8 digits."};
     if(pin)db.setMeta(cashierKey(user),JSON.stringify({result,pinHash:await pinHash(pin),expiresAt:result.offlineLoginExpiresAt}));
     else if(cached){/* renew permissions + server expiry on every online login, keeping the existing PIN hash */let prior:Record<string,unknown>|null=null;try{prior=asRecord(JSON.parse(cached));}catch{/* corrupted: next PIN setup replaces it */}const priorHash=textValue(prior??{},"pinHash");if(priorHash)db.setMeta(cashierKey(user),JSON.stringify({result,pinHash:priorHash,expiresAt:result.offlineLoginExpiresAt||textValue(prior??{},"expiresAt")}));}
+    db.setMeta(`${cashierKey(user)}_failed`,"0");db.setMeta(`${cashierKey(user)}_lock`,"0"); // verified online: clear any offline PIN lockout
     remember(user);return result;
   }catch(error){return{...emptyLogin(),error:`Cashier login failed: ${error instanceof Error?error.message:"network error"}`};}
 }
 
+// Same lockout as the desktop offline PIN (docs/offline-pos-rules.md): 5 wrong attempts lock that cashier
+// for 5 minutes. Without it a 4-digit PIN could be guessed by simply retrying on the device.
+const OFFLINE_PIN_MAX_ATTEMPTS=5,OFFLINE_PIN_LOCK_MS=5*60_000;
 async function cashierOfflineLogin(input:Record<string,unknown>) {
   const user=textValue(input,"username").trim().toLowerCase(),pin=textValue(input,"pin");let cached:Record<string,unknown>|null=null;try{cached=asRecord(JSON.parse(db.getMeta(cashierKey(user))||"null"));}catch{/* corrupted */}
-  if(!cached||await pinHash(pin)!==textValue(cached,"pinHash"))return{...emptyLogin(),error:"Offline cashier username or PIN is incorrect."};
+  const failKey=`${cashierKey(user)}_failed`,lockKey=`${cashierKey(user)}_lock`,lockUntil=Number(db.getMeta(lockKey)||0);
+  if(lockUntil>Date.now())return{...emptyLogin(),error:`Offline cashier PIN is locked. Try again in ${Math.ceil((lockUntil-Date.now())/1000)}s.`};
+  if(!cached||await pinHash(pin)!==textValue(cached,"pinHash")){
+    const failed=Number(db.getMeta(failKey)||0)+1;db.setMeta(failKey,String(failed));
+    if(failed>=OFFLINE_PIN_MAX_ATTEMPTS){db.setMeta(failKey,"0");db.setMeta(lockKey,String(Date.now()+OFFLINE_PIN_LOCK_MS));return{...emptyLogin(),error:"Too many wrong offline PIN attempts. Cashier login is locked for 5 minutes."};}
+    return{...emptyLogin(),error:`Offline cashier username or PIN is incorrect. ${OFFLINE_PIN_MAX_ATTEMPTS-failed} attempt(s) remaining.`};
+  }
+  db.setMeta(failKey,"0");db.setMeta(lockKey,"0");
   const result=asRecord(cached.result)??{};const expires=textValue(cached,"expiresAt");if(expires&&new Date(expires).getTime()<Date.now())return{...emptyLogin(),error:"Offline cashier access has expired. Sign in online again."};
   return{...emptyLogin(),...result,success:true,offlineLogin:true,error:null};
 }

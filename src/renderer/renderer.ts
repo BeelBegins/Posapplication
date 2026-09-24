@@ -736,6 +736,7 @@ function refreshHeaderStatusBadges(): void {
 }
 function updatePosHeader(): void { const set = (id: string, value: string) => { const e = document.querySelector<HTMLElement>(id); if (e) e.textContent = value || "—"; }; set("#pos-branch", (document.querySelector<HTMLInputElement>("#branch")?.value ?? "")); set("#pos-profile-name", document.querySelector<HTMLSelectElement>("#pos-profile")?.value ?? ""); set("#pos-terminal", document.querySelector<HTMLInputElement>("#terminal-id")?.value ?? ""); set("#pos-cashier", cashierDisplay()); set("#pos-opening-entry", document.querySelector<HTMLElement>("#session-opening-entry")?.textContent ?? ""); refreshHeaderStatusBadges(); }
 function showCustomer(): void { const e=document.querySelector<HTMLElement>("#pos-customer"); if(e)e.textContent=selectedCustomer?`${selectedCustomer.customer_name || selectedCustomer.name}${navigator.onLine?"":" (Cached)"}`:"—"; }
+function textSpan(className: string, text: unknown): HTMLSpanElement { const span = document.createElement("span"); span.className = className; span.textContent = String(text ?? ""); return span; }
 function customerInput(): HTMLInputElement | null { return document.querySelector<HTMLInputElement>("#customer-search"); }
 async function selectCustomer(customer: CustomerResult): Promise<void> {
   // Commit the selection before the detail fetch: offline, that fetch waits for its network timeout and
@@ -788,7 +789,8 @@ async function searchCustomer(preserveSelection = false): Promise<void> {
     const mobile = c.mobile_no || "—";
     const legacy = (c.custom_legacy_customer_code || "").trim();
     const code = legacy || c.name;
-    b.innerHTML = `<span class="search-name">${c.customer_name}</span><span class="search-meta">${mobile}</span><span class="search-code">${code}</span>`;
+    // Customer names can come from walk-in creation, Sales, or Shopping self-registration: never parse them as HTML.
+    b.append(textSpan("search-name", c.customer_name), textSpan("search-meta", mobile), textSpan("search-code", code));
     b.onclick = () => void selectCustomer(c);
     return b;
   }));
@@ -2908,7 +2910,7 @@ async function saveDialogQuantity(): Promise<void> {
   dialog?.close();
 }
 
-function showCartSearchResults(results: CatalogSearchResult[], preserveSelection = false): void { cartSearchResults = results.slice(0, 7); if (!preserveSelection) selectedSearchIndex = 0; selectedSearchIndex = Math.min(selectedSearchIndex, Math.max(0, cartSearchResults.length - 1)); const container = document.querySelector<HTMLElement>("#cart-search-results"); if (!container) return; container.replaceChildren(...cartSearchResults.map((item, index) => { const button = document.createElement("button"); button.type="button"; button.className=`secondary-button search-result${index === selectedSearchIndex ? " selected" : ""}`; const price = item.sellingPrice === null ? "—" : `${item.sellingPrice.toFixed(2)} ${item.currency ?? ""}`; const stock = item.actualStock === null ? "—" : String(item.actualStock); button.innerHTML=`<span class="search-code">${item.itemCode}</span><span class="search-name">${item.itemName}</span><span class="search-meta">${item.uom} x${item.conversionFactor ?? 1} · ${price} · Stock ${stock}</span>`; button.onclick=()=>void addToCart(item); return button; })); container.querySelector<HTMLElement>(".selected")?.scrollIntoView({ block: "nearest" }); }
+function showCartSearchResults(results: CatalogSearchResult[], preserveSelection = false): void { cartSearchResults = results.slice(0, 7); if (!preserveSelection) selectedSearchIndex = 0; selectedSearchIndex = Math.min(selectedSearchIndex, Math.max(0, cartSearchResults.length - 1)); const container = document.querySelector<HTMLElement>("#cart-search-results"); if (!container) return; container.replaceChildren(...cartSearchResults.map((item, index) => { const button = document.createElement("button"); button.type="button"; button.className=`secondary-button search-result${index === selectedSearchIndex ? " selected" : ""}`; const price = item.sellingPrice === null ? "—" : `${item.sellingPrice.toFixed(2)} ${item.currency ?? ""}`; const stock = item.actualStock === null ? "—" : String(item.actualStock); button.append(textSpan("search-code", item.itemCode), textSpan("search-name", item.itemName), textSpan("search-meta", `${item.uom} x${item.conversionFactor ?? 1} · ${price} · Stock ${stock}`)); button.onclick=()=>void addToCart(item); return button; })); container.querySelector<HTMLElement>(".selected")?.scrollIntoView({ block: "nearest" }); }
 async function runSlashSearch(): Promise<void> {
   if (!allowItemSearch) { showCartSearchResults([]); cartMessage("Item search is disabled for this POS Profile"); return; }
   const query = (cartInput()?.value ?? "").slice(1).trim();
@@ -3535,7 +3537,7 @@ function setCashierPinMode(mode: CashierPinMode, message = ""): void {
   const msg = document.querySelector<HTMLElement>("#cashier-login-message");
   const pinKeypad = document.querySelector<HTMLElement>("#cashier-pin-keypad");
   const needsPin = !online || mode !== "login";
-  if (passwordRow) passwordRow.hidden = !online;
+  if (passwordRow) passwordRow.hidden = !online || isCapacitorRuntime(); // Android signs in with ERP OAuth, never a typed password
   if (offlinePinRow) offlinePinRow.hidden = !needsPin;
   if (offlinePinConfirmRow) offlinePinConfirmRow.hidden = !online || mode === "login";
   // Keypad tracks the same visibility as the offline PIN row — it's an alternate
@@ -4297,7 +4299,7 @@ function initializeRenderer(): void {
     } finally {
       if (button) {
         button.disabled = false;
-        button.textContent = "Test Login";
+        button.textContent = "Test Authentication";
       }
     }
   });
