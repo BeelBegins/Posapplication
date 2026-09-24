@@ -3175,21 +3175,30 @@ function setupUpdateUi(): void {
   const checkBtn = document.querySelector<HTMLButtonElement>("#check-update");
   const dlBtn = document.querySelector<HTMLButtonElement>("#download-update");
   const installBtn = document.querySelector<HTMLButtonElement>("#install-update");
-  const setStatus = (msg: string) => { if (statusEl) statusEl.textContent = msg; };
-  window.posAPI.getAppVersion().then((v) => setText("#app-version", v)).catch(() => {/* ignore */});
+  // Login-screen mirror of the same updater state, so a cashier can install a pushed update without
+  // Settings access. Installing there is safe: no cashier is logged in, so no sale is in progress, and
+  // the cart, held sales and offline queue are all persisted locally before the restart.
+  const loginUpdate = document.querySelector<HTMLElement>("#cashier-login-update");
+  const loginCheckBtn = document.querySelector<HTMLButtonElement>("#cashier-login-check-update");
+  const loginInstallBtn = document.querySelector<HTMLButtonElement>("#cashier-login-install-update");
+  if (loginUpdate) loginUpdate.hidden = isCapacitorRuntime(); // Android updates ship as a new APK
+  const setStatus = (msg: string) => { if (statusEl) statusEl.textContent = msg; setText("#cashier-login-update-status", msg); };
+  window.posAPI.getAppVersion().then((v) => { setText("#app-version", v); setText("#cashier-login-version", v); }).catch(() => {/* ignore */});
   window.posAPI.isUpdateTokenSet().then((set) => setText("#update-token-status", set ? "A token is saved (private-repo mode)." : "No token saved (public repo).")).catch(() => {/* ignore */});
 
   window.posAPI.onUpdateStatus((p) => {
     const state = String(p.state ?? "");
     if (dlBtn) dlBtn.hidden = state !== "available";
     if (installBtn) installBtn.hidden = state !== "downloaded";
+    if (loginInstallBtn) loginInstallBtn.hidden = state !== "downloaded";
     if (checkBtn) checkBtn.disabled = state === "checking" || state === "downloading";
+    if (loginCheckBtn) loginCheckBtn.disabled = state === "checking" || state === "downloading" || state === "installing";
     switch (state) {
       case "checking": setStatus("Checking for updates…"); break;
       case "available": { const version=String(p.version??"");setStatus(`Update available: v${version}. Downloading automatically…`);cartMessage(`POS update v${version} is downloading. Install it from Settings when the current sale is finished.`);const n=document.querySelector<HTMLElement>("#update-notes");const notes=String(p.notes??"").trim();if(n){n.hidden=!notes;n.textContent=notes;}break; }
       case "not-available": setStatus("You're on the latest version."); break;
       case "downloading": setStatus(`Downloading update… ${String(p.percent ?? 0)}%`); break;
-      case "downloaded": { const version=String(p.version??"");setStatus(`Update v${version} downloaded. Click Install & Restart.`);cartMessage(`POS update v${version} is ready. Finish the current sale, then use Settings → Install & Restart.`);break; }
+      case "downloaded": { const version=String(p.version??"");setStatus(`Update v${version} downloaded. Click Install & Restart.`);cartMessage(`POS update v${version} is ready. Finish the current sale, then log out and press Install Update on the login screen (or Settings → Install & Restart).`);break; }
       case "installing": setStatus("Installing update. The app will restart automatically..."); break;
       case "error": setStatus(`Update error: ${String(p.error ?? "unknown")}`); break;
       default: break;
@@ -3199,6 +3208,12 @@ function setupUpdateUi(): void {
   checkBtn?.addEventListener("click", async () => { setStatus("Checking for updates…"); const r = await window.posAPI.checkForUpdate(); if (!r.ok && r.error) setStatus(`Update check failed: ${r.error}`); });
   dlBtn?.addEventListener("click", async () => { setStatus("Starting download…"); if (dlBtn) dlBtn.disabled = true; const r = await window.posAPI.downloadUpdate(); if (dlBtn) dlBtn.disabled = false; if (!r.ok && r.error) setStatus(`Download failed: ${r.error}`); });
   installBtn?.addEventListener("click", () => { setStatus("Restarting to install…"); void window.posAPI.installUpdate(); });
+  loginCheckBtn?.addEventListener("click", async () => { setStatus("Checking for updates…"); const r = await window.posAPI.checkForUpdate(); if (!r.ok && r.error) setStatus(`Update check failed: ${r.error}`); });
+  loginInstallBtn?.addEventListener("click", () => void (async () => {
+    if (cashierSession) { setStatus("Log out the cashier before installing the update."); return; }
+    if (!(await appConfirm("Install the downloaded POS update now? The app will close and restart automatically."))) return;
+    loginInstallBtn.disabled = true; setStatus("Restarting to install…"); void window.posAPI.installUpdate();
+  })());
   document.querySelector<HTMLButtonElement>("#save-update-token")?.addEventListener("click", async () => {
     const input = document.querySelector<HTMLInputElement>("#update-token");
     const token = input?.value.trim() ?? "";
