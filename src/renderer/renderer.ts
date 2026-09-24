@@ -452,6 +452,9 @@ let cashierSession: CashierSession | null = null;
 // authorized dialog), never by this in-form mode - see the #cashier-pin-reset handler.
 type CashierPinMode = "login" | "setup" | "change";
 let cashierPinMode: CashierPinMode = "login";
+// Connectivity the cashier login form was last rendered for. Submit follows the visible form (password vs
+// offline PIN) rather than re-reading the live status, which the 30s health poll can flip underneath it.
+let cashierLoginFormOnline = false;
 // --- POS session health ---
 interface SessionState { openingEntry: string; status: string; user: string; posProfile: string; company: string; postingDate: string; periodStart: string; lastChecked: number; lastError: string; valid: boolean; reason: string; failedClosing: string; failedClosingError: string; }
 let sessionState: SessionState = { openingEntry: "", status: "", user: "", posProfile: "", company: "", postingDate: "", periodStart: "", lastChecked: 0, lastError: "", valid: false, reason: "Not checked", failedClosing: "", failedClosingError: "" };
@@ -733,9 +736,11 @@ function refreshHeaderStatusBadges(): void {
 }
 function updatePosHeader(): void { const set = (id: string, value: string) => { const e = document.querySelector<HTMLElement>(id); if (e) e.textContent = value || "—"; }; set("#pos-branch", (document.querySelector<HTMLInputElement>("#branch")?.value ?? "")); set("#pos-profile-name", document.querySelector<HTMLSelectElement>("#pos-profile")?.value ?? ""); set("#pos-terminal", document.querySelector<HTMLInputElement>("#terminal-id")?.value ?? ""); set("#pos-cashier", cashierDisplay()); set("#pos-opening-entry", document.querySelector<HTMLElement>("#session-opening-entry")?.textContent ?? ""); refreshHeaderStatusBadges(); }
 function showCustomer(): void { const e=document.querySelector<HTMLElement>("#pos-customer"); if(e)e.textContent=selectedCustomer?`${selectedCustomer.customer_name || selectedCustomer.name}${navigator.onLine?"":" (Cached)"}`:"—"; }
+function textSpan(className: string, text: unknown): HTMLSpanElement { const span = document.createElement("span"); span.className = className; span.textContent = String(text ?? ""); return span; }
 function customerInput(): HTMLInputElement | null { return document.querySelector<HTMLInputElement>("#customer-search"); }
 async function selectCustomer(customer: CustomerResult): Promise<void> {
-  const result = await window.posAPI.loadCustomer(customer.name);
+  // Commit the selection before the detail fetch: offline, that fetch waits for its network timeout and
+  // must not delay (or appear to cancel) choosing a customer from the synced list.
   selectedCustomer = customer;
   showCustomer();
   // mark payment and benefits allocation outdated when customer changes
@@ -743,6 +748,11 @@ async function selectCustomer(customer: CustomerResult): Promise<void> {
   appliedBenefits = emptyBenefits();
   benefitsOutdated = true;
   customerBenefits = { loyaltyProgram: "", availablePoints: 0, conversionFactor: 1 };
+  scheduleCartPreview();
+  document.querySelector<HTMLDialogElement>("#customer-dialog")?.close();
+  focusCart();
+  const result = await window.posAPI.loadCustomer(customer.name);
+  if (selectedCustomer !== customer) return; // cashier picked another customer while this loaded
   void loadCustomerBenefits().then(() => {
     const detail = document.querySelector<HTMLElement>("#customer-detail");
     if (!detail) return;
@@ -757,7 +767,6 @@ async function selectCustomer(customer: CustomerResult): Promise<void> {
         : "Not enrolled in loyalty";
     detail.textContent = `${name} · ${mobile || "—"} · ${pointsPart}${result.cached ? " (Cached)" : ""}`;
   });
-  scheduleCartPreview();
   const detail = document.querySelector<HTMLElement>("#customer-detail");
   if (detail) {
     const data = result.customer;
@@ -765,8 +774,6 @@ async function selectCustomer(customer: CustomerResult): Promise<void> {
       ? `${String(data.customer_name ?? customer.customer_name)} · ${String(data.mobile_no ?? customer.mobile_no ?? "—")} · Loading points…`
       : (result.error ?? "Customer unavailable");
   }
-  document.querySelector<HTMLDialogElement>("#customer-dialog")?.close();
-  focusCart();
 }
 async function searchCustomer(preserveSelection = false): Promise<void> {
   const query = customerInput()?.value.trim() ?? "";
@@ -782,7 +789,8 @@ async function searchCustomer(preserveSelection = false): Promise<void> {
     const mobile = c.mobile_no || "—";
     const legacy = (c.custom_legacy_customer_code || "").trim();
     const code = legacy || c.name;
-    b.innerHTML = `<span class="search-name">${c.customer_name}</span><span class="search-meta">${mobile}</span><span class="search-code">${code}</span>`;
+    // Customer names can come from walk-in creation, Sales, or Shopping self-registration: never parse them as HTML.
+    b.append(textSpan("search-name", c.customer_name), textSpan("search-meta", mobile), textSpan("search-code", code));
     b.onclick = () => void selectCustomer(c);
     return b;
   }));
@@ -2902,7 +2910,7 @@ async function saveDialogQuantity(): Promise<void> {
   dialog?.close();
 }
 
-function showCartSearchResults(results: CatalogSearchResult[], preserveSelection = false): void { cartSearchResults = results.slice(0, 7); if (!preserveSelection) selectedSearchIndex = 0; selectedSearchIndex = Math.min(selectedSearchIndex, Math.max(0, cartSearchResults.length - 1)); const container = document.querySelector<HTMLElement>("#cart-search-results"); if (!container) return; container.replaceChildren(...cartSearchResults.map((item, index) => { const button = document.createElement("button"); button.type="button"; button.className=`secondary-button search-result${index === selectedSearchIndex ? " selected" : ""}`; const price = item.sellingPrice === null ? "—" : `${item.sellingPrice.toFixed(2)} ${item.currency ?? ""}`; const stock = item.actualStock === null ? "—" : String(item.actualStock); button.innerHTML=`<span class="search-code">${item.itemCode}</span><span class="search-name">${item.itemName}</span><span class="search-meta">${item.uom} x${item.conversionFactor ?? 1} · ${price} · Stock ${stock}</span>`; button.onclick=()=>void addToCart(item); return button; })); container.querySelector<HTMLElement>(".selected")?.scrollIntoView({ block: "nearest" }); }
+function showCartSearchResults(results: CatalogSearchResult[], preserveSelection = false): void { cartSearchResults = results.slice(0, 7); if (!preserveSelection) selectedSearchIndex = 0; selectedSearchIndex = Math.min(selectedSearchIndex, Math.max(0, cartSearchResults.length - 1)); const container = document.querySelector<HTMLElement>("#cart-search-results"); if (!container) return; container.replaceChildren(...cartSearchResults.map((item, index) => { const button = document.createElement("button"); button.type="button"; button.className=`secondary-button search-result${index === selectedSearchIndex ? " selected" : ""}`; const price = item.sellingPrice === null ? "—" : `${item.sellingPrice.toFixed(2)} ${item.currency ?? ""}`; const stock = item.actualStock === null ? "—" : String(item.actualStock); button.append(textSpan("search-code", item.itemCode), textSpan("search-name", item.itemName), textSpan("search-meta", `${item.uom} x${item.conversionFactor ?? 1} · ${price} · Stock ${stock}`)); button.onclick=()=>void addToCart(item); return button; })); container.querySelector<HTMLElement>(".selected")?.scrollIntoView({ block: "nearest" }); }
 async function runSlashSearch(): Promise<void> {
   if (!allowItemSearch) { showCartSearchResults([]); cartMessage("Item search is disabled for this POS Profile"); return; }
   const query = (cartInput()?.value ?? "").slice(1).trim();
@@ -3169,21 +3177,30 @@ function setupUpdateUi(): void {
   const checkBtn = document.querySelector<HTMLButtonElement>("#check-update");
   const dlBtn = document.querySelector<HTMLButtonElement>("#download-update");
   const installBtn = document.querySelector<HTMLButtonElement>("#install-update");
-  const setStatus = (msg: string) => { if (statusEl) statusEl.textContent = msg; };
-  window.posAPI.getAppVersion().then((v) => setText("#app-version", v)).catch(() => {/* ignore */});
+  // Login-screen mirror of the same updater state, so a cashier can install a pushed update without
+  // Settings access. Installing there is safe: no cashier is logged in, so no sale is in progress, and
+  // the cart, held sales and offline queue are all persisted locally before the restart.
+  const loginUpdate = document.querySelector<HTMLElement>("#cashier-login-update");
+  const loginCheckBtn = document.querySelector<HTMLButtonElement>("#cashier-login-check-update");
+  const loginInstallBtn = document.querySelector<HTMLButtonElement>("#cashier-login-install-update");
+  if (loginUpdate) loginUpdate.hidden = isCapacitorRuntime(); // Android updates ship as a new APK
+  const setStatus = (msg: string) => { if (statusEl) statusEl.textContent = msg; setText("#cashier-login-update-status", msg); };
+  window.posAPI.getAppVersion().then((v) => { setText("#app-version", v); setText("#cashier-login-version", v); }).catch(() => {/* ignore */});
   window.posAPI.isUpdateTokenSet().then((set) => setText("#update-token-status", set ? "A token is saved (private-repo mode)." : "No token saved (public repo).")).catch(() => {/* ignore */});
 
   window.posAPI.onUpdateStatus((p) => {
     const state = String(p.state ?? "");
     if (dlBtn) dlBtn.hidden = state !== "available";
     if (installBtn) installBtn.hidden = state !== "downloaded";
+    if (loginInstallBtn) loginInstallBtn.hidden = state !== "downloaded";
     if (checkBtn) checkBtn.disabled = state === "checking" || state === "downloading";
+    if (loginCheckBtn) loginCheckBtn.disabled = state === "checking" || state === "downloading" || state === "installing";
     switch (state) {
       case "checking": setStatus("Checking for updates…"); break;
       case "available": { const version=String(p.version??"");setStatus(`Update available: v${version}. Downloading automatically…`);cartMessage(`POS update v${version} is downloading. Install it from Settings when the current sale is finished.`);const n=document.querySelector<HTMLElement>("#update-notes");const notes=String(p.notes??"").trim();if(n){n.hidden=!notes;n.textContent=notes;}break; }
       case "not-available": setStatus("You're on the latest version."); break;
       case "downloading": setStatus(`Downloading update… ${String(p.percent ?? 0)}%`); break;
-      case "downloaded": { const version=String(p.version??"");setStatus(`Update v${version} downloaded. Click Install & Restart.`);cartMessage(`POS update v${version} is ready. Finish the current sale, then use Settings → Install & Restart.`);break; }
+      case "downloaded": { const version=String(p.version??"");setStatus(`Update v${version} downloaded. Click Install & Restart.`);cartMessage(`POS update v${version} is ready. Finish the current sale, then log out and press Install Update on the login screen (or Settings → Install & Restart).`);break; }
       case "installing": setStatus("Installing update. The app will restart automatically..."); break;
       case "error": setStatus(`Update error: ${String(p.error ?? "unknown")}`); break;
       default: break;
@@ -3193,6 +3210,12 @@ function setupUpdateUi(): void {
   checkBtn?.addEventListener("click", async () => { setStatus("Checking for updates…"); const r = await window.posAPI.checkForUpdate(); if (!r.ok && r.error) setStatus(`Update check failed: ${r.error}`); });
   dlBtn?.addEventListener("click", async () => { setStatus("Starting download…"); if (dlBtn) dlBtn.disabled = true; const r = await window.posAPI.downloadUpdate(); if (dlBtn) dlBtn.disabled = false; if (!r.ok && r.error) setStatus(`Download failed: ${r.error}`); });
   installBtn?.addEventListener("click", () => { setStatus("Restarting to install…"); void window.posAPI.installUpdate(); });
+  loginCheckBtn?.addEventListener("click", async () => { setStatus("Checking for updates…"); const r = await window.posAPI.checkForUpdate(); if (!r.ok && r.error) setStatus(`Update check failed: ${r.error}`); });
+  loginInstallBtn?.addEventListener("click", () => void (async () => {
+    if (cashierSession) { setStatus("Log out the cashier before installing the update."); return; }
+    if (!(await appConfirm("Install the downloaded POS update now? The app will close and restart automatically."))) return;
+    loginInstallBtn.disabled = true; setStatus("Restarting to install…"); void window.posAPI.installUpdate();
+  })());
   document.querySelector<HTMLButtonElement>("#save-update-token")?.addEventListener("click", async () => {
     const input = document.querySelector<HTMLInputElement>("#update-token");
     const token = input?.value.trim() ?? "";
@@ -3287,7 +3310,7 @@ async function runStartup(reason: string = "startup"): Promise<void> {
     const missingAuthentication = isCapacitorRuntime() ? false : (!saved.apiKey || !saved.hasApiSecret);
     if (!saved.erpnextUrl || missingAuthentication || !saved.posProfile) {
       setStep("settings", "failed"); setOverallBadge("Setup Required", "warn");
-      if (progress) progress.textContent = "Terminal settings required"; showSettingsMessage(isCapacitorRuntime() ? "Enroll this Android device for a POS Profile." : "Enter ERP URL, API Key/Secret and select a POS Profile, then Save and Complete Setup."); showScreen("settings"); return;
+      if (progress) progress.textContent = "Terminal settings required"; showSettingsMessage(isCapacitorRuntime() ? "Enroll this Android device for a POS Profile." : "Enter ERP URL, API Key/Secret and select a POS Profile, then Save and Complete Setup."); showSettingsStep("connection"); showScreen("settings"); return;
     }
     setStep("settings", "complete");
     // 2) Server (silent)
@@ -3314,14 +3337,14 @@ async function runStartup(reason: string = "startup"): Promise<void> {
     const login = await window.posAPI.testLogin();
     if (!login.success) {
       if (isCapacitorRuntime()) { setStep("auth", "pending"); setOverallBadge("Cashier Login Required", "info"); if (progress) progress.textContent = "Cashier login required"; await showCashierLogin("Sign in securely with ERP."); return; }
-      setStep("auth", "failed"); setOverallBadge("Action Required", "err"); if (progress) progress.textContent = "Authentication failed"; showSettingsMessage("Authentication failed. The API key or secret is invalid."); showLoginResult("Authentication failed — check API Key/Secret."); showScreen("settings"); return;
+      setStep("auth", "failed"); setOverallBadge("Action Required", "err"); if (progress) progress.textContent = "Authentication failed"; showSettingsMessage("Authentication failed. The API key or secret is invalid."); showLoginResult("Authentication failed — check API Key/Secret."); showSettingsStep("connection"); showScreen("settings"); return;
     }
     authenticatedUser = login.loggedUser ?? ""; setStep("auth", "complete"); setLoggedUser(authenticatedUser); showLoginResult(`Logged in as ${authenticatedUser}`);
     // 4) Profiles + selected profile
     setStep("profile", "running"); if (progress) progress.textContent = "Loading POS Profile…";
     await populatePosProfileDropdown();
     const profile = await window.posAPI.loadPosProfile();
-    if (!profile.success) { setStep("profile", "failed"); setOverallBadge("Action Required", "err"); if (progress) progress.textContent = profile.error ?? "POS Profile load failed"; showSettingsMessage(profile.error ?? "POS Profile load failed."); showScreen("settings"); return; }
+    if (!profile.success) { setStep("profile", "failed"); setOverallBadge("Action Required", "err"); if (progress) progress.textContent = profile.error ?? "POS Profile load failed"; showSettingsMessage(profile.error ?? "POS Profile load failed."); showSettingsStep("terminal"); showScreen("settings"); return; }
     showPosProfile(profile.profile, profile.error); setStep("profile", "complete");
     if (profile.profile?.customer) { const defaultCustomer={ name: profile.profile.customer, customer_name: profile.profile.customer, customer_group: "", mobile_no: "", email_id: "", tax_id: "" }; selectedCustomer=defaultCustomer; const customer=await window.posAPI.loadCustomer(defaultCustomer.name); if(customer.customer) selectedCustomer={...defaultCustomer,customer_name:String(customer.customer.customer_name??defaultCustomer.customer_name),customer_group:String(customer.customer.customer_group??""),mobile_no:String(customer.customer.mobile_no??""),email_id:String(customer.customer.email_id??""),tax_id:String(customer.customer.tax_id??"")}; showCustomer(); }
     // 5) POS configuration — refresh only when missing or stale (>12h)
@@ -3358,6 +3381,80 @@ function getSettingsFromForm(): AppSettings {
     receiptPrinter: document.querySelector<HTMLSelectElement>("#receipt-printer")?.value ?? "",
     colorTheme: document.querySelector<HTMLSelectElement>("#color-theme")?.value ?? "warm-market"
   };
+}
+
+// --- Settings step-by-step setup (desktop) ---------------------------------
+// Pure presentation over the unchanged settings form: every field keeps its id and the existing
+// submit/sync/update handlers. Android shows all panels at once (its CSS hides the step controls).
+const SETTINGS_STEPS = ["connection", "terminal", "finish", "sync", "advanced"] as const;
+type SettingsStep = typeof SETTINGS_STEPS[number];
+let settingsStep: SettingsStep = "connection";
+
+function showSettingsStep(step: SettingsStep): void {
+  settingsStep = step;
+  const wizard = !isCapacitorRuntime();
+  const index = SETTINGS_STEPS.indexOf(step);
+  document.querySelectorAll<HTMLElement>("[data-settings-panel]").forEach((panel) => { panel.hidden = wizard && panel.dataset.settingsPanel !== step; });
+  document.querySelectorAll<HTMLButtonElement>("[data-settings-step]").forEach((button) => {
+    const i = SETTINGS_STEPS.indexOf(button.dataset.settingsStep as SettingsStep);
+    if (i === index) button.setAttribute("aria-current", "step"); else button.removeAttribute("aria-current");
+    button.dataset.state = i < index ? "done" : "";
+  });
+  if (wizard) document.querySelector<HTMLElement>("#settings-screen")?.scrollIntoView({ block: "start" });
+}
+
+// Step 1 -> 2: save the connection fields, prove they authenticate, and load this server's POS
+// Profiles, so the Terminal step opens with a real list instead of an empty dropdown.
+async function continueFromConnectionStep(button: HTMLButtonElement): Promise<void> {
+  if (isCapacitorRuntime()) { showSettingsStep("terminal"); return; }
+  const previous = await window.posAPI.loadSettings().catch(() => null);
+  const next = getSettingsFromForm();
+  if (!next.erpnextUrl.trim() || !next.apiKey.trim() || (!next.apiSecret && !previous?.hasApiSecret)) {
+    showSettingsMessage("Enter the ERP URL and API Key/Secret (or use Fetch Credentials) first.");
+    return;
+  }
+  const label = button.textContent;
+  button.disabled = true; button.textContent = "Connecting…";
+  try {
+    const changed = !previous || previous.erpnextUrl !== next.erpnextUrl || previous.apiKey !== next.apiKey || Boolean(next.apiSecret);
+    if (changed) {
+      await window.posAPI.saveSettings(next);
+      cashierSession = null; // same rule as Save and Complete Setup: new server/credentials need a fresh cashier login
+      updatePosHeader();
+    }
+    const login = await window.posAPI.testLogin();
+    if (!login.success) { showSettingsMessage("Could not sign in to ERP with this URL and API Key/Secret. Check them and try again."); return; }
+    showLoginResult(`Connected as ${login.loggedUser ?? ""}`);
+    await populatePosProfileDropdown();
+    showSettingsStep("terminal");
+  } catch (error) {
+    showSettingsMessage(error instanceof Error ? error.message : "Unable to connect to ERP.");
+  } finally {
+    button.disabled = false; button.textContent = label;
+  }
+}
+
+function initSettingsSteps(): void {
+  document.querySelectorAll<HTMLButtonElement>("[data-settings-step]").forEach((button) => {
+    button.addEventListener("click", () => showSettingsStep(button.dataset.settingsStep as SettingsStep));
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-settings-back]").forEach((button) => {
+    button.addEventListener("click", () => showSettingsStep(SETTINGS_STEPS[Math.max(0, SETTINGS_STEPS.indexOf(settingsStep) - 1)]));
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-settings-next]").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (settingsStep === "connection") { void continueFromConnectionStep(button); return; }
+      if (settingsStep === "terminal" && !document.querySelector<HTMLSelectElement>("#pos-profile")?.value) { showSettingsMessage("Select a POS Profile to continue."); return; }
+      showSettingsStep(SETTINGS_STEPS[Math.min(SETTINGS_STEPS.length - 1, SETTINGS_STEPS.indexOf(settingsStep) + 1)]);
+    });
+  });
+  // Enter inside an earlier step moves to the next step instead of submitting Save and Complete Setup.
+  document.querySelector<HTMLFormElement>("#settings-form")?.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" || isCapacitorRuntime() || settingsStep === "finish" || !(event.target instanceof HTMLInputElement)) return;
+    event.preventDefault();
+    document.querySelector<HTMLButtonElement>(`[data-settings-panel="${settingsStep}"] [data-settings-next]`)?.click();
+  });
+  showSettingsStep("connection");
 }
 
 function applyColorTheme(theme: string): void {
@@ -3428,6 +3525,8 @@ function showLoginResult(message: string): void {
 function setCashierPinMode(mode: CashierPinMode, message = ""): void {
   cashierPinMode = mode;
   const online = isOnline();
+  cashierLoginFormOnline = online;
+  setText("#cashier-login-connection", online ? "Online" : "Offline");
   const passwordRow = document.querySelector<HTMLElement>("#cashier-password-row");
   const offlinePinRow = document.querySelector<HTMLElement>("#cashier-offline-pin-row");
   const offlinePinConfirmRow = document.querySelector<HTMLElement>("#cashier-offline-pin-confirm-row");
@@ -3438,7 +3537,7 @@ function setCashierPinMode(mode: CashierPinMode, message = ""): void {
   const msg = document.querySelector<HTMLElement>("#cashier-login-message");
   const pinKeypad = document.querySelector<HTMLElement>("#cashier-pin-keypad");
   const needsPin = !online || mode !== "login";
-  if (passwordRow) passwordRow.hidden = !online;
+  if (passwordRow) passwordRow.hidden = !online || isCapacitorRuntime(); // Android signs in with ERP OAuth, never a typed password
   if (offlinePinRow) offlinePinRow.hidden = !needsPin;
   if (offlinePinConfirmRow) offlinePinConfirmRow.hidden = !online || mode === "login";
   // Keypad tracks the same visibility as the offline PIN row — it's an alternate
@@ -3643,7 +3742,7 @@ async function submitCashierLogin(): Promise<void> {
   const password = passwordInput?.value ?? "";
   const offlinePin = offlinePinInput?.value ?? "";
   const offlinePinConfirm = offlinePinConfirmInput?.value ?? "";
-  const online = isOnline();
+  const online = cashierLoginFormOnline;
   const useOAuth = online && isCapacitorRuntime();
   const sendPin = online && cashierPinMode !== "login";
   if (!useOAuth && !username) { if (msg) msg.textContent = "Enter cashier username."; return; }
@@ -3670,7 +3769,16 @@ async function submitCashierLogin(): Promise<void> {
       document.querySelector<HTMLInputElement>("#cashier-offline-pin")?.focus();
       return;
     }
-    if (!result.success) { if (msg) msg.textContent = result.error ?? "Cashier login failed."; showLockoutCountdown(result.error ?? ""); return; }
+    if (!result.success) {
+      // ERP dropped between opening the form and submitting: switch to the offline PIN form instead of
+      // leaving the cashier retrying a password login that cannot reach the server.
+      if (online && /^Cashier login failed: /.test(result.error ?? "") && !(await window.posAPI.testServer().catch(() => ({ connected: false }))).connected) {
+        markServerOffline();
+        await showCashierLogin("ERP is not reachable. Login with your offline PIN to keep selling.");
+        return;
+      }
+      if (msg) msg.textContent = result.error ?? "Cashier login failed."; showLockoutCountdown(result.error ?? ""); return;
+    }
     const selectedProfile = document.querySelector<HTMLSelectElement>("#pos-profile")?.value ?? "";
     if (result.allowedPosProfiles.length && selectedProfile && !result.allowedPosProfiles.includes(selectedProfile)) {
       if (msg) msg.textContent = `Cashier is not allowed for POS Profile ${selectedProfile}.`;
@@ -3689,6 +3797,20 @@ async function submitCashierLogin(): Promise<void> {
     if (offlinePinConfirmInput) offlinePinConfirmInput.value = "";
     if (button) button.disabled = false;
   }
+}
+
+function markServerOffline(): void {
+  const status = document.querySelector<HTMLElement>("#pos-server-status"); if (status) status.textContent = "Offline";
+  prevServerConnected = false; setOnlineIndicator(false); showServerStatus(false); void updateOfflineUi();
+}
+
+// Re-render the cashier login form when the health poll sees ERP go down or come back while it is open,
+// so the password / offline-PIN fields always match the path submit will take.
+function syncCashierLoginConnection(): void {
+  const screen = document.querySelector<HTMLElement>("#cashier-login-screen");
+  if (!screen || screen.hidden || isOnline() === cashierLoginFormOnline) return;
+  if (document.querySelector<HTMLButtonElement>("#cashier-login-submit")?.disabled) return; // login in flight
+  void showCashierLogin(isOnline() ? "ERP is online again. Enter ERP cashier credentials." : "ERP is not reachable. Enter cashier username and offline PIN.");
 }
 
 function logoutCashier(): void {
@@ -3956,6 +4078,7 @@ function initializeRenderer(): void {
   document.querySelector<HTMLButtonElement>("#retry-startup")?.addEventListener("click", () => void runPosBootstrap("retry"));
   document.querySelector<HTMLFormElement>("#cashier-login-form")?.addEventListener("submit", (event) => { event.preventDefault(); void submitCashierLogin(); });
   initPinKeypad();
+  initSettingsSteps();
   document.querySelector<HTMLButtonElement>("#cashier-pin-change")?.addEventListener("click", () => setCashierPinMode("change", "Enter ERP password, then enter and confirm the new Offline Cashier PIN."));
   document.querySelector<HTMLButtonElement>("#cashier-pin-reset")?.addEventListener("click", () => {
     const cashierUser = document.querySelector<HTMLInputElement>("#cashier-username")?.value.trim() ?? "";
@@ -4064,8 +4187,8 @@ function initializeRenderer(): void {
   // Server-health poll (online/offline + reconnect-driven session revalidation).
   window.setInterval(async () => { try { const online = await window.posAPI.testServer(); const status = document.querySelector<HTMLElement>("#pos-server-status"); const connected = Boolean(online.connected); if (status) status.textContent = connected ? "Online" : "Offline"; setOnlineIndicator(connected);
       if (connected && !prevServerConnected) { scheduleCartPreview(); void revalidateLive("reconnect"); void backgroundSyncTick(); void syncQueueNow(); } // after reconnect: re-check session + drain offline queue + sync stale data
-      prevServerConnected = connected; void updateOfflineUi();
-    } catch { const status = document.querySelector<HTMLElement>("#pos-server-status"); if (status) status.textContent = "Reconnecting"; prevServerConnected = false; void updateOfflineUi(); } }, 30_000);
+      prevServerConnected = connected; void updateOfflineUi(); syncCashierLoginConnection();
+    } catch { const status = document.querySelector<HTMLElement>("#pos-server-status"); if (status) status.textContent = "Reconnecting"; prevServerConnected = false; void updateOfflineUi(); syncCashierLoginConnection(); } }, 30_000);
   // Revalidate the POS session every 60 seconds while online.
   window.setInterval(() => { if (isOnline()) void revalidateLive("interval"); }, 60_000);
 
@@ -4095,7 +4218,7 @@ function initializeRenderer(): void {
       if (secretInput) secretInput.value = result.apiSecret;
       const passwordInput = document.querySelector<HTMLInputElement>("#provision-password");
       if (passwordInput) passwordInput.value = "";
-      if (messageEl) messageEl.textContent = "Credentials fetched — review and Save and Complete Setup below.";
+      if (messageEl) messageEl.textContent = "Credentials fetched — press Next: Connect.";
     } catch {
       if (messageEl) { messageEl.textContent = "Unable to fetch credentials."; messageEl.classList.add("error"); }
     } finally {
@@ -4176,7 +4299,7 @@ function initializeRenderer(): void {
     } finally {
       if (button) {
         button.disabled = false;
-        button.textContent = "Test Login";
+        button.textContent = "Test Authentication";
       }
     }
   });

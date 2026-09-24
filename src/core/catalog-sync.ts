@@ -86,7 +86,8 @@ export function createCatalogSyncCore(deps: PosCoreDeps, http: ReturnType<typeof
 
   async function loadCustomer(name: string): Promise<{ customer: Record<string, unknown> | null; cached: boolean; error: string | null }> {
     const settings = deps.db.loadSettings();
-    const cached = deps.db.getCachedCustomer(name);
+    // Detail cache first; offline, a customer never opened online still exists in the synced customer list.
+    const cached = deps.db.getCachedCustomer(name) ?? deps.db.searchCustomers(name).find((row) => textValue(row, "name") === name) ?? null;
     if (!hasUsableCredentials(deps, settings) || !settings.erpnextUrl) return { customer: cached, cached: true, error: cached ? null : "Customer not cached." };
     try {
       const base = new URL(settings.erpnextUrl).toString().replace(/\/+$/, "");

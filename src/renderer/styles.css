@@ -178,6 +178,10 @@ html[data-platform="electron"] .window-controls { display: flex; }
 .cashier-login-form label { display: grid; gap: 6px; color: var(--color-text); font-weight: 700; font-size: 0.88rem; }
 .cashier-login-form input { font-size: 1rem; padding: 11px 13px; }
 .cashier-login-form input:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; border-color: var(--color-accent); }
+/* setCashierPinMode()/showCashierLogin() toggle rows with the `hidden` attribute, but the
+   display:grid/flex rules above and below outrank the browser's [hidden] default, so every
+   password/PIN/confirm row and the keypad rendered at once and pushed Login below the fold. */
+.cashier-login-card [hidden] { display: none !important; }
 
 /* Numeric PIN keypad: an alternate input surface that writes into the same
    #cashier-offline-pin(-confirm) fields the existing login state machine
@@ -240,10 +244,35 @@ html[data-platform="electron"] .window-controls { display: flex; }
 }
 .cashier-login-lockout[hidden] { display: none; }
 
+/* Short desktop tills (1366x768, 1024x768): tighten spacing only, so the offline PIN keypad and
+   Login button fit without scrolling. Taller screens and Android keep the full layout. */
+@media (max-height: 860px) {
+  :root:not(.android-app) .cashier-login-screen { padding: 12px 32px; }
+  :root:not(.android-app) .cashier-login-card { padding: 22px 32px 18px; }
+  :root:not(.android-app) .cashier-login-wordmark { width: 44px; height: 44px; margin-bottom: 10px; font-size: 1.25rem; }
+  :root:not(.android-app) .cashier-login-brand p:last-child { margin-bottom: 14px; }
+  :root:not(.android-app) .cashier-login-form { gap: 10px; }
+  :root:not(.android-app) .pin-keypad { gap: 6px; margin-top: 0; }
+  :root:not(.android-app) .pin-keypad-display { min-height: 14px; padding: 0; }
+  :root:not(.android-app) .pin-keypad-key { padding: 10px 0; }
+}
+
 .cashier-login-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 18px 0 12px; }
 .cashier-login-summary div { padding: 10px; border-radius: 8px; background: var(--color-surface-muted); }
 .cashier-login-summary dt { color: var(--color-text-muted); font-size: 0.72rem; }
 .cashier-login-summary dd { margin: 4px 0 0; color: var(--color-text); font-weight: 800; overflow-wrap: anywhere; }
+/* Secondary login actions: quiet, equal-width, one line, so they read as tools rather than
+   competing with the Login button. grid-auto-flow lets a hidden tool (Android) collapse cleanly. */
+.cashier-login-pin-actions { display: flex; justify-content: space-between; gap: 12px; margin-top: -4px; }
+.cashier-login-link { padding: 4px 2px; background: transparent; color: var(--color-accent-strong); font-size: 0.84rem; font-weight: 700; }
+.cashier-login-link:hover { background: transparent; text-decoration: underline; }
+.cashier-login-tools { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 8px; margin-top: 12px; }
+.cashier-login-tool { padding: 9px 8px; border: 1px solid var(--color-border); background: var(--color-surface); color: var(--color-text-muted); font-size: 0.82rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cashier-login-tool:hover { border-color: var(--color-accent); background: var(--color-accent-soft); color: var(--color-accent-strong); }
+.cashier-login-update { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px 12px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--color-border); }
+.cashier-login-update-info { display: grid; gap: 2px; margin: 0; color: var(--color-text-muted); font-size: 0.8rem; }
+.cashier-login-update-info strong { color: var(--color-text); }
+.cashier-login-update .primary-action { grid-column: 1 / -1; }
 
 /* --- Operational screens (Held Sales, Sales History) --- */
 .op-screen { height: 100vh; padding: 20px 28px; overflow-y: auto; background: var(--color-bg-alt); }
@@ -471,6 +500,36 @@ button:disabled { cursor: wait; opacity: 0.65; }
 .settings-message { margin: 0; color: var(--color-success); font-weight: 600; }
 .settings-message.error { color: var(--color-danger, #c0392b); }
 .login-result { grid-column: 1 / -1; margin: 0; color: var(--color-text); font-weight: 600; }
+
+/* --- Settings as a step-by-step setup (desktop). Every field keeps its id; only one panel shows
+   at a time. Android keeps all panels visible and hides the step controls. --- */
+:root:not(.android-app) #settings-screen { padding-top: 24px; padding-bottom: 32px; }
+#settings-screen header { margin-bottom: 16px; }
+#settings-screen h1 { font-size: clamp(1.6rem, 3vw, 2.2rem); }
+#settings-screen .intro { margin-top: 4px; font-size: 0.95rem; }
+#settings-screen .setup-progress { margin-bottom: 16px; padding: 10px 16px; gap: 4px 18px; }
+#settings-screen .setup-progress li { font-size: 0.8rem; }
+#settings-screen .setup-card { margin-top: 16px; padding: 22px 28px; }
+.setup-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.setup-status { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
+.settings-steps { list-style: none; display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin: 20px 0 0; padding: 0; }
+.settings-steps button { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px 12px; border: 1px solid var(--color-border); border-radius: 10px; background: var(--color-surface-muted); color: var(--color-text-muted); font-size: 0.88rem; text-align: left; }
+.settings-steps button:hover { border-color: var(--color-accent); background: var(--color-accent-soft); }
+.settings-steps button[aria-current="step"] { border-color: var(--color-accent); background: var(--color-accent-soft); color: var(--color-accent-strong); }
+.settings-step-num { display: inline-grid; flex: 0 0 auto; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: var(--color-border); color: var(--color-text); font-size: 0.78rem; }
+.settings-steps button[aria-current="step"] .settings-step-num { background: var(--color-accent); color: var(--color-accent-contrast); }
+.settings-steps button[data-state="done"] .settings-step-num { background: var(--color-success-soft); color: var(--color-success); }
+.settings-feedback { display: grid; gap: 4px; margin-top: 12px; }
+.settings-feedback p:empty, .setup-status p:empty { display: none; }
+.settings-panel[hidden] { display: none !important; }
+.settings-panel.settings-form { gap: 14px 18px; margin-top: 16px; }
+.settings-panel-intro, .settings-panel-nav { grid-column: 1 / -1; }
+.settings-panel-intro { margin: 0; color: var(--color-text-muted); }
+[data-settings-panel="connection"] > label:first-of-type { grid-column: 1 / -1; }
+.settings-panel-nav { display: flex; align-items: center; gap: 12px; margin-top: 4px; padding-top: 14px; border-top: 1px solid var(--color-border); }
+.settings-panel:not(.settings-form) > .settings-panel-nav { margin-top: 24px; }
+.settings-panel-nav-spacer { flex: 1; }
+:root.android-app .settings-steps, :root.android-app [data-settings-back], :root.android-app [data-settings-next] { display: none !important; }
 
 .profile-details { margin-top: 28px; padding-top: 24px; border-top: 1px solid var(--color-border); }
 .profile-details h3 { margin: 0 0 16px; font-size: 1.1rem; }
