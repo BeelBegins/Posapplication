@@ -236,11 +236,15 @@ async function posCashierLogin(input: Record<string, unknown>): Promise<CashierL
   let base: URL;
   try { base = new URL(normalizeErpnextUrl(settings.erpnextUrl)); } catch { return { ...empty, error: "ERP URL is invalid." }; }
   const endpoint = `${base.toString().replace(/\/+$/, "")}/api/method/aimatic.offline_pos.api.pos_cashier_login`;
+  // Bounded so a half-dead ERP link fails fast and the login screen can fall back to the offline PIN.
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), CASHIER_LOGIN_TIMEOUT_MS);
   try {
     const response = await fetch(endpoint, {
       method: "POST",
       headers: { Authorization: `token ${settings.apiKey}:${settings.apiSecret}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ username, password, terminal_id: settings.terminalId, pos_profile: settings.posProfile })
+      body: JSON.stringify({ username, password, terminal_id: settings.terminalId, pos_profile: settings.posProfile }),
+      signal: controller.signal
     });
     const rawBody = await response.text();
     let parsed: { message?: unknown } = {};
@@ -285,11 +289,16 @@ async function posCashierLogin(input: Record<string, unknown>): Promise<CashierL
       if (!saved.ok) return { ...empty, error: saved.error };
       result.offlineCached = true;
       result.requirePinSetup = false;
+    } else if (refreshCashierOfflineCache(result)) {
+      result.offlineCached = true;
     }
     rememberCashierUser(user);
     return result;
   } catch (error) {
-    return { ...empty, error: `Cashier login failed: ${error instanceof Error ? error.message : "network error"}` };
+    const reason = error instanceof Error && error.name === "AbortError" ? "ERP server did not respond" : error instanceof Error ? error.message : "network error";
+    return { ...empty, error: `Cashier login failed: ${reason}` };
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
@@ -386,6 +395,41 @@ function cacheCashierOfflinePin(cashier: CashierLoginResult, pin: string): { ok:
   return { ok: true, error: null };
 }
 
+// Every successful online login re-stamps the cached permissions and server expiry while keeping the
+// existing PIN hash. Without this the expiry saved at PIN creation never moved, so a cashier who logs
+// in online every day was still locked out of offline login once that first window lapsed.
+function refreshCashierOfflineCache(cashier: CashierLoginResult): boolean {
+  const user = normalizeCashierUser(cashier.user);
+  const raw = user ? getCashierCacheRaw(user) : null;
+  if (!raw) return false;
+  let cached: Record<string, unknown>;
+  try { cached = JSON.parse(raw) as Record<string, unknown>; } catch { return false; }
+  const stored = textValue(cached, "pinHash");
+  if (!stored) return false;
+  const settings = loadSettings();
+  setMeta(cashierCacheKey(user), JSON.stringify({
+    ...cached,
+    user,
+    fullName: cashier.fullName,
+    roles: cashier.roles,
+    allowedPosProfiles: cashier.allowedPosProfiles,
+    defaultPosProfile: cashier.defaultPosProfile,
+    canStartShift: cashier.canStartShift,
+    canRefund: cashier.canRefund,
+    canCloseShift: cashier.canCloseShift,
+    canVoidItems: cashier.canVoidItems,
+    canOfflineSale: cashier.canOfflineSale,
+    lastOnlineVerifiedAt: new Date().toISOString(),
+    offlineLoginExpiresAt: cashier.offlineLoginExpiresAt || textValue(cached, "offlineLoginExpiresAt"),
+    hardwareId: getOrCreateHardwareId(),
+    posProfile: settings.posProfile.trim(),
+    pinHash: stored
+  }));
+  setMeta(cashierFailedKey(user), "0");
+  setMeta(cashierLockKey(user), "0");
+  return true;
+}
+
 async function cashierOfflineLogin(input: Record<string, unknown>): Promise<CashierLoginResult> {
   const settings = loadSettings();
   const username = normalizeCashierUser(textValue(input, "username"));
@@ -458,6 +502,7 @@ async function cashierOfflineLogin(input: Record<string, unknown>): Promise<Cash
   };
 }
 
+const CASHIER_LOGIN_TIMEOUT_MS = 15_000;
 const ADMIN_PIN_MIN_LENGTH = 4;
 const ADMIN_PIN_MAX_ATTEMPTS = 5;
 const ADMIN_PIN_LOCK_MS = 5 * 60_000;

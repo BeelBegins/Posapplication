@@ -38,210 +38,253 @@
       </ol>
 
       <section class="setup-card" aria-labelledby="setup-title">
-        <button id="back-to-pos" type="button" class="secondary-button">Back to POS</button>
-        <p id="startup-progress" class="settings-message">Starting…</p>
-        <button id="retry-startup" type="button" class="secondary-button" hidden>Retry</button>
-        <div>
-          <p class="eyebrow">Local setup</p>
-          <h2 id="setup-title">Terminal Settings</h2>
+        <div class="setup-card-head">
+          <div>
+            <p class="eyebrow">Local setup</p>
+            <h2 id="setup-title">Terminal Settings</h2>
+          </div>
+          <button id="back-to-pos" type="button" class="secondary-button">Back to POS</button>
         </div>
-        <form id="settings-form" class="settings-form" novalidate>
-          <label>
-            ERP URL
-            <input id="erpnext-url" name="erpnextUrl" type="text" placeholder="https://erp.example.com" />
-          </label>
-          <fieldset class="provision-credentials" data-terminal-credentials>
-            <legend>Sign in to fetch API Key/Secret (optional — or enter them manually below)</legend>
+        <div class="setup-status">
+          <p id="startup-progress" class="settings-message">Starting…</p>
+          <button id="retry-startup" type="button" class="secondary-button" hidden>Retry</button>
+        </div>
+        <ol id="settings-steps" class="settings-steps" aria-label="Setup steps">
+          <li><button type="button" data-settings-step="connection"><span class="settings-step-num">1</span><span>Connection</span></button></li>
+          <li><button type="button" data-settings-step="terminal"><span class="settings-step-num">2</span><span>Terminal</span></button></li>
+          <li><button type="button" data-settings-step="finish"><span class="settings-step-num">3</span><span>Printer &amp; Finish</span></button></li>
+          <li><button type="button" data-settings-step="sync"><span class="settings-step-num">4</span><span>Sync &amp; Updates</span></button></li>
+          <li><button type="button" data-settings-step="advanced"><span class="settings-step-num">5</span><span>Diagnostics</span></button></li>
+        </ol>
+        <div class="settings-feedback">
+          <p id="settings-message" class="settings-message" role="status"></p>
+          <p id="login-result" class="login-result" role="status"></p>
+        </div>
+        <form id="settings-form" novalidate>
+          <div class="settings-panel settings-form" data-settings-panel="connection">
+            <p class="settings-panel-intro">Connect this till to your ERP server. Sign in once to fetch the terminal API key, or paste it manually.</p>
             <label>
-              Username
-              <input id="provision-username" type="text" autocomplete="username" />
+              ERP URL
+              <input id="erpnext-url" name="erpnextUrl" type="text" placeholder="https://erp.example.com" />
             </label>
-            <label>
-              Password
-              <input id="provision-password" type="password" autocomplete="current-password" />
-            </label>
-            <div class="form-actions">
-              <button id="provision-credentials" type="button" class="secondary-button">Fetch Credentials</button>
-              <p id="provision-message" class="settings-message" role="status"></p>
-            </div>
-          </fieldset>
-          <label data-terminal-credentials>
-            API Key
-            <input id="api-key" name="apiKey" type="text" autocomplete="off" />
-          </label>
-          <label data-terminal-credentials>
-            API Secret
-            <input id="api-secret" name="apiSecret" type="password" autocomplete="off" placeholder="Enter to save or replace" />
-          </label>
-          <label>
-            Terminal ID
-            <input id="terminal-id" name="terminalId" type="text" readonly />
-          </label>
-          <label>
-            POS Profile
-            <select id="pos-profile" name="posProfile">
-              <option value="">Test Login to load profiles</option>
-            </select>
-          </label>
-          <label>
-            Branch
-            <input id="branch" name="branch" type="text" readonly />
-          </label>
-          <label>
-            Warehouse
-            <input id="warehouse" name="warehouse" type="text" />
-          </label>
-          <label>
-            Receipt Printer
-            <select id="receipt-printer" name="receiptPrinter">
-              <option value="">System Default (show print dialog)</option>
-            </select>
-          </label>
-          <div class="form-actions primary-row">
-          <label>
-            Color Theme
-            <select id="color-theme" name="colorTheme">
-              <option value="warm-market">Current — Warm Market</option>
-              <option value="modern-blue">Modern Blue</option>
-              <option value="emerald-retail">Emerald Retail</option>
-              <option value="dark-premium">Dark Premium</option>
-              <option value="orange-energy">Orange Energy</option>
-              <option value="teal-professional">Teal Professional</option>
-            </select>
-          </label>
-            <button id="complete-setup" type="submit" class="primary-action">Save and Complete Setup</button>
-            <button id="refresh-config" type="button" class="secondary-button">Refresh Configuration</button>
-            <p id="settings-message" class="settings-message" role="status"></p>
-            <p id="login-result" class="login-result" role="status"></p>
-          </div>
-        </form>
-
-        <section class="sync-card" aria-label="Synchronization">
-          <h3>Synchronization</h3>
-          <div id="sync-rows" class="sync-rows"></div>
-        </section>
-
-        <section class="sync-card" aria-label="App Updates">
-          <h3>App Updates</h3>
-          <p class="card-meta">Current version <strong id="app-version">—</strong></p>
-          <div class="form-actions primary-row">
-            <button id="check-update" type="button" class="secondary-button">Check for Updates</button>
-            <button id="download-update" type="button" hidden>Download Update</button>
-            <button id="install-update" type="button" hidden>Install &amp; Restart</button>
-          </div>
-          <p id="update-status" class="settings-message" role="status"></p>
-          <pre id="update-notes" class="update-notes" hidden></pre>
-          <div class="form-actions">
-            <button id="show-releases" type="button" class="secondary-button">Show available versions</button>
-          </div>
-          <div id="releases-list" class="op-list"></div>
-          <details class="diagnostics-block">
-            <summary>Private repo token (optional)</summary>
-            <div class="diagnostics-body">
-              <label>GitHub Token (only needed when the update repo is private)
-                <input id="update-token" type="password" autocomplete="off" placeholder="Saved securely; enter to set or replace" />
+            <fieldset class="provision-credentials" data-terminal-credentials>
+              <legend>Sign in to fetch API Key/Secret (optional — or enter them manually below)</legend>
+              <label>
+                Username
+                <input id="provision-username" type="text" autocomplete="username" />
+              </label>
+              <label>
+                Password
+                <input id="provision-password" type="password" autocomplete="current-password" />
               </label>
               <div class="form-actions">
-                <button id="save-update-token" type="button" class="secondary-button">Save Token</button>
-                <p id="update-token-status" class="card-meta"></p>
+                <button id="provision-credentials" type="button" class="secondary-button">Fetch Credentials</button>
+                <p id="provision-message" class="settings-message" role="status"></p>
               </div>
+            </fieldset>
+            <label data-terminal-credentials>
+              API Key
+              <input id="api-key" name="apiKey" type="text" autocomplete="off" />
+            </label>
+            <label data-terminal-credentials>
+              API Secret
+              <input id="api-secret" name="apiSecret" type="password" autocomplete="off" placeholder="Enter to save or replace" />
+            </label>
+            <div class="settings-panel-nav">
+              <span class="settings-panel-nav-spacer"></span>
+              <button type="button" class="primary-action" data-settings-next>Next: Connect</button>
+            </div>
+          </div>
+          <div class="settings-panel settings-form" data-settings-panel="terminal" hidden>
+            <p class="settings-panel-intro">Choose the POS Profile this till sells under. Terminal ID and Branch come from the server.</p>
+            <label>
+              POS Profile
+              <select id="pos-profile" name="posProfile">
+                <option value="">Connect in step 1 to load profiles</option>
+              </select>
+            </label>
+            <label>
+              Terminal ID
+              <input id="terminal-id" name="terminalId" type="text" readonly />
+            </label>
+            <label>
+              Branch
+              <input id="branch" name="branch" type="text" readonly />
+            </label>
+            <label>
+              Warehouse
+              <input id="warehouse" name="warehouse" type="text" />
+            </label>
+            <div class="settings-panel-nav">
+              <button type="button" class="secondary-button" data-settings-back>Back</button>
+              <span class="settings-panel-nav-spacer"></span>
+              <button type="button" class="primary-action" data-settings-next>Next</button>
+            </div>
+          </div>
+          <div class="settings-panel settings-form" data-settings-panel="finish" hidden>
+            <p class="settings-panel-intro">Pick the receipt printer and screen colours, then save to finish setup.</p>
+            <label>
+              Receipt Printer
+              <select id="receipt-printer" name="receiptPrinter">
+                <option value="">System Default (show print dialog)</option>
+              </select>
+            </label>
+            <label>
+              Color Theme
+              <select id="color-theme" name="colorTheme">
+                <option value="warm-market">Current — Warm Market</option>
+                <option value="modern-blue">Modern Blue</option>
+                <option value="emerald-retail">Emerald Retail</option>
+                <option value="dark-premium">Dark Premium</option>
+                <option value="orange-energy">Orange Energy</option>
+                <option value="teal-professional">Teal Professional</option>
+              </select>
+            </label>
+            <div class="settings-panel-nav">
+              <button type="button" class="secondary-button" data-settings-back>Back</button>
+              <span class="settings-panel-nav-spacer"></span>
+              <button id="refresh-config" type="button" class="secondary-button">Refresh Configuration</button>
+              <button id="complete-setup" type="submit" class="primary-action">Save and Complete Setup</button>
+            </div>
+          </div>
+        </form>
+        <div class="settings-panel" data-settings-panel="sync" hidden>
+          <section class="sync-card" aria-label="Synchronization">
+            <h3>Synchronization</h3>
+            <div id="sync-rows" class="sync-rows"></div>
+          </section>
+          <section class="sync-card" aria-label="App Updates">
+            <h3>App Updates</h3>
+            <p class="card-meta">Current version <strong id="app-version">—</strong></p>
+            <div class="form-actions primary-row">
+              <button id="check-update" type="button" class="secondary-button">Check for Updates</button>
+              <button id="download-update" type="button" hidden>Download Update</button>
+              <button id="install-update" type="button" hidden>Install &amp; Restart</button>
+            </div>
+            <p id="update-status" class="settings-message" role="status"></p>
+            <pre id="update-notes" class="update-notes" hidden></pre>
+            <div class="form-actions">
+              <button id="show-releases" type="button" class="secondary-button">Show available versions</button>
+            </div>
+            <div id="releases-list" class="op-list"></div>
+            <details class="diagnostics-block">
+              <summary>Private repo token (optional)</summary>
+              <div class="diagnostics-body">
+                <label>GitHub Token (only needed when the update repo is private)
+                  <input id="update-token" type="password" autocomplete="off" placeholder="Saved securely; enter to set or replace" />
+                </label>
+                <div class="form-actions">
+                  <button id="save-update-token" type="button" class="secondary-button">Save Token</button>
+                  <p id="update-token-status" class="card-meta"></p>
+                </div>
+              </div>
+            </details>
+          </section>
+          <div class="settings-panel-nav">
+            <button type="button" class="secondary-button" data-settings-back>Back</button>
+            <span class="settings-panel-nav-spacer"></span>
+            <button type="button" class="primary-action" data-settings-next>Next</button>
+          </div>
+        </div>
+        <div class="settings-panel" data-settings-panel="advanced" hidden>
+          <details class="diagnostics-block" open>
+            <summary>Diagnostics &amp; Force Sync</summary>
+            <div class="diagnostics-body">
+              <div class="diag-status">
+                <span>Server: <strong id="server-status">Not Connected</strong></span>
+                <span>SQLite: <strong id="sqlite-status">Checking…</strong></span>
+                <span class="database-path">DB: <span id="database-path">—</span></span>
+                <span>POS Profile Cache: <strong id="profile-cache-status">—</strong> (<span id="profile-cache-synced">—</span>)</span>
+              </div>
+              <div class="form-actions">
+                <button id="load-settings" type="button" class="secondary-button">Load Settings</button>
+                <button id="test-server" type="button" class="secondary-button">Test Server</button>
+                <button id="test-login" type="button" class="secondary-button">Test Authentication</button>
+                <button id="load-pos-profile" type="button" class="secondary-button">Force Reload POS Profiles</button>
+                <button id="sync-pos-configuration" type="button" class="secondary-button">Force Full POS Configuration Sync</button>
+                <button id="sync-pos-session" type="button" class="secondary-button">Refresh POS Session</button>
+                <button id="sync-item-catalog" type="button" class="secondary-button">Force Full Item Catalogue Sync</button>
+                <button id="sync-barcodes" type="button" class="secondary-button">Force Barcode Sync</button>
+                <button id="sync-customers" type="button" class="secondary-button">Force Full Customer Sync</button>
+                <button id="sync-fbr-config" type="button" class="secondary-button">Force Full FBR Configuration Sync</button>
+                <button id="preview-customer-display" type="button" class="secondary-button">Preview Customer Display</button>
+              </div>
+              <p id="customer-display-status" class="card-meta"></p>
             </div>
           </details>
-        </section>
 
-        <details class="diagnostics-block">
-          <summary>Advanced Diagnostics</summary>
-          <div class="diagnostics-body">
-            <div class="diag-status">
-              <span>Server: <strong id="server-status">Not Connected</strong></span>
-              <span>SQLite: <strong id="sqlite-status">Checking…</strong></span>
-              <span class="database-path">DB: <span id="database-path">—</span></span>
-              <span>POS Profile Cache: <strong id="profile-cache-status">—</strong> (<span id="profile-cache-synced">—</span>)</span>
-            </div>
-            <div class="form-actions">
-              <button id="load-settings" type="button" class="secondary-button">Load Settings</button>
-              <button id="test-server" type="button" class="secondary-button">Test Server</button>
-              <button id="test-login" type="button" class="secondary-button">Test Authentication</button>
-              <button id="load-pos-profile" type="button" class="secondary-button">Force Reload POS Profiles</button>
-              <button id="sync-pos-configuration" type="button" class="secondary-button">Force Full POS Configuration Sync</button>
-              <button id="sync-pos-session" type="button" class="secondary-button">Refresh POS Session</button>
-              <button id="sync-item-catalog" type="button" class="secondary-button">Force Full Item Catalogue Sync</button>
-              <button id="sync-barcodes" type="button" class="secondary-button">Force Barcode Sync</button>
-              <button id="sync-customers" type="button" class="secondary-button">Force Full Customer Sync</button>
-              <button id="sync-fbr-config" type="button" class="secondary-button">Force Full FBR Configuration Sync</button>
-              <button id="preview-customer-display" type="button" class="secondary-button">Preview Customer Display</button>
-            </div>
-            <p id="customer-display-status" class="card-meta"></p>
+          <section id="pos-profile-details" class="profile-details" hidden aria-live="polite">
+            <h3>POS Profile</h3>
+            <dl>
+              <div><dt>Company</dt><dd id="profile-company"></dd></div>
+              <div><dt>Warehouse</dt><dd id="profile-warehouse"></dd></div>
+              <div><dt>Default Customer</dt><dd id="profile-customer"></dd></div>
+              <div><dt>Selling Price List</dt><dd id="profile-price-list"></dd></div>
+              <div><dt>Currency</dt><dd id="profile-currency"></dd></div>
+              <div><dt>Payment Methods count</dt><dd id="profile-payment-count"></dd></div>
+            </dl>
+          </section>
+
+          <section id="pos-configuration-summary" class="profile-details" hidden aria-live="polite">
+            <h3>POS Configuration</h3>
+            <dl>
+              <div><dt>POS Profile</dt><dd id="config-pos-profile"></dd></div>
+              <div><dt>Company</dt><dd id="config-company"></dd></div>
+              <div><dt>Branch</dt><dd id="config-branch"></dd></div>
+              <div><dt>Warehouse</dt><dd id="config-warehouse"></dd></div>
+              <div><dt>Default Customer</dt><dd id="config-customer"></dd></div>
+              <div><dt>Selling Price List</dt><dd id="config-price-list"></dd></div>
+              <div><dt>Currency</dt><dd id="config-currency"></dd></div>
+              <div><dt>Tax Template</dt><dd id="config-tax-template"></dd></div>
+              <div><dt>Tax rows count</dt><dd id="config-tax-count"></dd></div>
+              <div><dt>Payment methods count</dt><dd id="config-payment-count"></dd></div>
+              <div><dt>Last synced time</dt><dd id="config-last-synced"></dd></div>
+              <div><dt>Cache status</dt><dd id="config-cache-status"></dd></div>
+            </dl>
+          </section>
+
+          <section id="pos-session-summary" class="profile-details" aria-live="polite">
+            <h3>POS Session</h3>
+            <dl>
+              <div><dt>Session Status</dt><dd id="session-status">Not Open</dd></div>
+              <div><dt>POS Opening Entry</dt><dd id="session-opening-entry">No active POS Opening Entry</dd></div>
+              <div><dt>Cashier/User</dt><dd id="session-user"></dd></div>
+              <div><dt>Start Date and Time</dt><dd id="session-start"></dd></div>
+              <div><dt>Opening Balance rows count</dt><dd id="session-balance-count">0</dd></div>
+              <div><dt>Last synced time</dt><dd id="session-last-synced">Not synced</dd></div>
+            </dl>
+          </section>
+          <section class="profile-details" aria-live="polite">
+            <h3>POS Session Diagnostics</h3>
+            <p>Authenticated API User: <strong id="session-api-user">—</strong></p>
+            <p>Requested POS Profile: <strong id="session-requested-profile">—</strong></p>
+            <p>Diagnostic Reason: <strong id="session-diagnostic-reason">Not checked</strong></p>
+            <p>Submitted Open Entries: <strong id="session-entry-count">0</strong></p>
+            <div id="session-entry-list"></div>
+          </section>
+
+          <section class="profile-details" aria-live="polite">
+            <h3>Item Catalog</h3>
+            <p id="catalog-progress" class="settings-message"></p>
+            <p id="barcode-sync-status" class="settings-message">Barcode Sync: Not synced</p>
+            <p id="barcode-count" class="settings-message">Barcode count: 0</p>
+            <dl>
+              <div><dt>Items</dt><dd id="catalog-items">0</dd></div>
+              <div><dt>Prices</dt><dd id="catalog-prices">0</dd></div>
+              <div><dt>Barcodes</dt><dd id="catalog-barcodes">0</dd></div>
+              <div><dt>Stock rows</dt><dd id="catalog-stock">0</dd></div>
+              <div><dt>Last synced time</dt><dd id="catalog-synced">Not synced</dd></div>
+            </dl>
+            <label class="catalog-search">Search catalog
+              <input id="catalog-search" type="search" placeholder="Barcode, item code, or item name" />
+            </label>
+            <div id="catalog-results" class="catalog-results"></div>
+          </section>
+          <div class="settings-panel-nav">
+            <button type="button" class="secondary-button" data-settings-back>Back</button>
+            <span class="settings-panel-nav-spacer"></span>
           </div>
-        </details>
-
-        <section id="pos-profile-details" class="profile-details" hidden aria-live="polite">
-          <h3>POS Profile</h3>
-          <dl>
-            <div><dt>Company</dt><dd id="profile-company"></dd></div>
-            <div><dt>Warehouse</dt><dd id="profile-warehouse"></dd></div>
-            <div><dt>Default Customer</dt><dd id="profile-customer"></dd></div>
-            <div><dt>Selling Price List</dt><dd id="profile-price-list"></dd></div>
-            <div><dt>Currency</dt><dd id="profile-currency"></dd></div>
-            <div><dt>Payment Methods count</dt><dd id="profile-payment-count"></dd></div>
-          </dl>
-        </section>
-
-        <section id="pos-configuration-summary" class="profile-details" hidden aria-live="polite">
-          <h3>POS Configuration</h3>
-          <dl>
-            <div><dt>POS Profile</dt><dd id="config-pos-profile"></dd></div>
-            <div><dt>Company</dt><dd id="config-company"></dd></div>
-            <div><dt>Branch</dt><dd id="config-branch"></dd></div>
-            <div><dt>Warehouse</dt><dd id="config-warehouse"></dd></div>
-            <div><dt>Default Customer</dt><dd id="config-customer"></dd></div>
-            <div><dt>Selling Price List</dt><dd id="config-price-list"></dd></div>
-            <div><dt>Currency</dt><dd id="config-currency"></dd></div>
-            <div><dt>Tax Template</dt><dd id="config-tax-template"></dd></div>
-            <div><dt>Tax rows count</dt><dd id="config-tax-count"></dd></div>
-            <div><dt>Payment methods count</dt><dd id="config-payment-count"></dd></div>
-            <div><dt>Last synced time</dt><dd id="config-last-synced"></dd></div>
-            <div><dt>Cache status</dt><dd id="config-cache-status"></dd></div>
-          </dl>
-        </section>
-
-        <section id="pos-session-summary" class="profile-details" aria-live="polite">
-          <h3>POS Session</h3>
-          <dl>
-            <div><dt>Session Status</dt><dd id="session-status">Not Open</dd></div>
-            <div><dt>POS Opening Entry</dt><dd id="session-opening-entry">No active POS Opening Entry</dd></div>
-            <div><dt>Cashier/User</dt><dd id="session-user"></dd></div>
-            <div><dt>Start Date and Time</dt><dd id="session-start"></dd></div>
-            <div><dt>Opening Balance rows count</dt><dd id="session-balance-count">0</dd></div>
-            <div><dt>Last synced time</dt><dd id="session-last-synced">Not synced</dd></div>
-          </dl>
-        </section>
-        <section class="profile-details" aria-live="polite">
-          <h3>POS Session Diagnostics</h3>
-          <p>Authenticated API User: <strong id="session-api-user">—</strong></p>
-          <p>Requested POS Profile: <strong id="session-requested-profile">—</strong></p>
-          <p>Diagnostic Reason: <strong id="session-diagnostic-reason">Not checked</strong></p>
-          <p>Submitted Open Entries: <strong id="session-entry-count">0</strong></p>
-          <div id="session-entry-list"></div>
-        </section>
-
-        <section class="profile-details" aria-live="polite">
-          <h3>Item Catalog</h3>
-          <p id="catalog-progress" class="settings-message"></p>
-          <p id="barcode-sync-status" class="settings-message">Barcode Sync: Not synced</p>
-          <p id="barcode-count" class="settings-message">Barcode count: 0</p>
-          <dl>
-            <div><dt>Items</dt><dd id="catalog-items">0</dd></div>
-            <div><dt>Prices</dt><dd id="catalog-prices">0</dd></div>
-            <div><dt>Barcodes</dt><dd id="catalog-barcodes">0</dd></div>
-            <div><dt>Stock rows</dt><dd id="catalog-stock">0</dd></div>
-            <div><dt>Last synced time</dt><dd id="catalog-synced">Not synced</dd></div>
-          </dl>
-          <label class="catalog-search">Search catalog
-            <input id="catalog-search" type="search" placeholder="Barcode, item code, or item name" />
-          </label>
-          <div id="catalog-results" class="catalog-results"></div>
-        </section>
+        </div>
       </section>
       </section>
 
@@ -282,9 +325,9 @@
             </div>
             <p id="cashier-login-lockout" class="cashier-login-lockout" role="status" hidden></p>
             <button id="cashier-login-submit" type="submit" class="primary-action">Login</button>
-            <div class="form-actions">
-              <button id="cashier-pin-change" type="button" class="secondary-button">Change Offline PIN</button>
-              <button id="cashier-pin-reset" type="button" class="secondary-button">Forgot/Reset Offline PIN</button>
+            <div class="cashier-login-pin-actions">
+              <button id="cashier-pin-change" type="button" class="cashier-login-link">Change Offline PIN</button>
+              <button id="cashier-pin-reset" type="button" class="cashier-login-link">Forgot / Reset PIN</button>
             </div>
           </form>
           <p id="cashier-offline-note" class="card-meta">Set an offline PIN after online verification to allow this cashier to login when internet is unavailable.</p>
@@ -294,12 +337,15 @@
             <div><dt>POS Profile</dt><dd id="cashier-login-profile">—</dd></div>
           </dl>
           <p id="cashier-login-message" class="settings-message" role="status"></p>
-          <div class="form-actions">
-            <button id="cashier-login-settings" type="button" class="secondary-button">Settings</button>
-            <button id="cashier-login-retry" type="button" class="secondary-button">Retry Connection</button>
+          <div class="cashier-login-tools">
+            <button id="cashier-login-settings" type="button" class="cashier-login-tool">Settings</button>
+            <button id="cashier-login-retry" type="button" class="cashier-login-tool" title="Retry Connection">Reconnect</button>
+            <button id="cashier-login-quick-connect" type="button" class="cashier-login-tool" title="Server Connection">ERP Server</button>
           </div>
-          <div class="form-actions">
-            <button id="cashier-login-quick-connect" type="button" class="secondary-button">Server Connection</button>
+          <div id="cashier-login-update" class="cashier-login-update">
+            <p class="cashier-login-update-info"><span>App version <strong id="cashier-login-version">—</strong></span><span id="cashier-login-update-status" role="status"></span></p>
+            <button id="cashier-login-check-update" type="button" class="cashier-login-tool">Check for Update</button>
+            <button id="cashier-login-install-update" type="button" class="primary-action" hidden>Install Update &amp; Restart</button>
           </div>
         </div>
         <dialog id="quick-connect-dialog" class="customer-dialog admin-dialog">

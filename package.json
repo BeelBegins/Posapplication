@@ -1,6 +1,6 @@
 {
   "name": "erpnext-offline-pos",
-  "version": "3.0.28",
+  "version": "3.0.29",
   "description": "Aimatic POS App for ERP retail stores",
   "main": "dist/main.js",
   "scripts": {
@@ -106,8 +106,7 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "runAfterFinish": true,
-      "include": "build/installer.nsh"
+      "runAfterFinish": true
     }
   }
 }

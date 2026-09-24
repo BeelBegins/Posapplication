@@ -33,3 +33,19 @@ test("calculateFbrCart computes standard-rate tax for a configured item and adds
   assert.deepEqual(result.errors, []);
   assert.equal(result.totals.customerPayable, 128);
 });
+
+test("loadCustomer falls back to the synced customer list when ERP is unreachable", async () => {
+  const synced = { name: "CUST-0042", customer_name: "Ali Traders", mobile_no: "+923001234567" };
+  const deps: PosCoreDeps = {
+    fetch: (async () => { throw new TypeError("fetch failed"); }) as unknown as typeof fetch,
+    db: {
+      loadSettings: () => ({ erpnextUrl: "https://erp.example.com", apiKey: "k", apiSecret: "s" }),
+      getCachedCustomer: () => null,
+      searchCustomers: () => [{ name: "CUST-00421", customer_name: "Other" }, synced]
+    } as unknown as PosCoreDeps["db"]
+  };
+  const core = createCatalogSyncCore(deps, createHttpCore(deps));
+  const result = await core.loadCustomer("CUST-0042");
+  assert.equal(result.cached, true);
+  assert.deepEqual(result.customer, synced);
+});

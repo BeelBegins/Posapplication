@@ -1,6 +1,6 @@
 # Offline POS Rules
 
-Last updated: 2026-07-04
+Last updated: 2026-09-24
 
 ## Goal
 
@@ -25,6 +25,8 @@ Offline Cashier PIN rules:
 - Offline PIN login is blocked if `can_offline_sale` is not true.
 - Wrong offline PIN attempts are delayed and locked after repeated failures.
 - If no offline PIN exists for that cashier, offline sales stay blocked until online cashier login succeeds.
+- Every successful online cashier login refreshes the cached permissions, `can_offline_sale`, `last_online_verified_at`, and `offline_login_expires_at` while keeping the existing PIN hash (and clears failed-attempt lockout). Without this, the expiry from the first PIN setup never moved and daily-online cashiers were locked out of offline login.
+- The cashier login form submits along the path it currently shows (password vs offline PIN). The 30s server-health poll re-renders an open login form when ERP goes down or comes back, and a password login that fails because ERP is unreachable (15s timeout) switches the form to offline PIN.
 
 ## Offline Sale Allowed When
 
@@ -34,6 +36,7 @@ ERPNext/server is offline or unreachable, and all local essentials exist:
 - Cached payment methods exist.
 - Local item and price data exists.
 - Customer/default customer exists.
+  Customer selection is committed immediately; the ERP detail fetch runs afterwards and falls back to the detail cache, then the synced customer list, so an offline pick never waits on the network timeout.
 - Cart is not empty.
 - Item prices are available locally.
 - Payment is complete and prepared.
