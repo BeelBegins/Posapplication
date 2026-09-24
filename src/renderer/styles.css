@@ -753,6 +753,10 @@ dialog input:focus-visible,dialog select:focus-visible,dialog textarea:focus-vis
 .customer-dialog .search-result { font-size: 12px; padding: 6px 8px; }
 .benefits-dialog { width: min(900px, 94vw); }
 .benefits-dialog-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
+.benefits-dialog-title, .benefits-dialog-actions { display: flex; align-items: flex-start; gap: 10px; }
+.benefits-dialog-title { min-width: 0; }
+.benefits-dialog-actions { align-items: center; flex-shrink: 0; }
+.benefits-nav-button, .benefits-close-button { min-height: 40px; white-space: nowrap; }
 .benefits-dialog-head h3 { margin: 0 0 3px; }
 .benefits-dialog-head p { margin: 2px 0; }
 .benefits-customer-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 48px; min-height: 28px; border-radius: 999px; background: var(--color-header); color: var(--color-header-contrast); font-size: .72rem; font-weight: 800; letter-spacing: .08em; }
@@ -774,6 +778,9 @@ dialog input:focus-visible,dialog select:focus-visible,dialog textarea:focus-vis
 .benefit-stat-grid p { display: flex; flex-direction: column; gap: 2px; margin: 0; color: var(--color-text-muted); font-size: .72rem; }
 .benefit-stat-grid strong { color: var(--color-text); font-size: .86rem; overflow-wrap: anywhere; }
 @media (max-width: 760px) {
+  .benefits-dialog-head { align-items: stretch; flex-direction: column; gap: 10px; }
+  .benefits-dialog-actions { justify-content: space-between; order: -1; }
+  .benefits-dialog-title { align-items: flex-start; }
   .benefits-grid { grid-template-columns: 1fr; }
   .benefit-card-head { min-height: 0; }
 }

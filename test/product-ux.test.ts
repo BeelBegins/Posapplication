@@ -318,6 +318,14 @@ test("Benefits dialog exposes distinct voucher, coupon, and loyalty cards", () =
   assert.match(html, /Loyalty Points/);
 });
 
+test("Benefits dialog exposes visible back and close controls", () => {
+  const html = source("src/renderer/index.html");
+  const renderer = source("src/renderer/renderer.ts");
+  for (const id of ["benefits-back", "benefits-close"]) assert.match(html, new RegExp(`id="${id}"`));
+  assert.match(renderer, /#benefits-back.*closeBenefitsDialog/);
+  assert.match(renderer, /#benefits-close.*closeBenefitsDialog/);
+});
+
 test("cash tender guard is present in the POS payment path", () => {
   const renderer = source("src/renderer/renderer.ts");
   assert.match(renderer, /MAX_PKR_CASH_NOTE\s*=\s*5000/);
