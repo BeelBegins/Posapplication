@@ -3501,10 +3501,13 @@ function populateSettingsForm(settings: RendererSettings): void {
   applyColorTheme(settings.colorTheme);
 }
 
-function showSettingsMessage(message: string): void {
+// Failures used to render in the success (green) colour, e.g. "Authentication failed". Callers stay
+// unchanged: the tone is inferred from the wording unless a caller passes it explicitly.
+function showSettingsMessage(message: string, isError = /\b(fail(ed|ure)?|invalid|unable|could not|cannot|error|missing|expired|not allowed|denied)\b/i.test(message)): void {
   const messageElement = document.querySelector<HTMLElement>("#settings-message");
   if (messageElement) {
     messageElement.textContent = message;
+    messageElement.classList.toggle("error", isError);
   }
 }
 

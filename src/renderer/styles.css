@@ -424,6 +424,11 @@ h1 { margin: 0; font-size: clamp(2rem, 5vw, 3.4rem); letter-spacing: -0.04em; }
 .diagnostics-body { padding-bottom: 12px; }
 .diag-status { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 8px 0 12px; font-size: 0.82rem; color: var(--color-text-muted); }
 .diag-status strong { color: var(--color-text); }
+/* Diagnostics: long force-sync labels in an even, wrapping grid instead of one squeezed row that
+   overflowed the window sideways; the DB path gets its own full-width line. */
+.diagnostics-body .form-actions { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); align-items: stretch; gap: 8px; }
+.diagnostics-body .form-actions button { padding: 9px 10px; font-size: 0.84rem; line-height: 1.25; }
+.diag-status .database-path { flex-basis: 100%; order: 10; margin-top: 0; }
 .card-meta { color: var(--color-text-muted); font-size: 0.82rem; }
 
 .status-card {
@@ -480,7 +485,7 @@ input, select {
   background: var(--color-surface);
 }
 
-.form-actions { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; }
+.form-actions { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 .provision-credentials {
   grid-column: 1 / -1;
   display: grid;
@@ -512,11 +517,14 @@ button:disabled { cursor: wait; opacity: 0.65; }
 #settings-screen .setup-card { margin-top: 16px; padding: 22px 28px; }
 .setup-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
 .setup-status { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
-.settings-steps { list-style: none; display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin: 20px 0 0; padding: 0; }
-.settings-steps button { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px 12px; border: 1px solid var(--color-border); border-radius: 10px; background: var(--color-surface-muted); color: var(--color-text-muted); font-size: 0.88rem; text-align: left; }
+.settings-steps { list-style: none; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin: 20px 0 0; padding: 0; }
+.settings-steps button { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; padding: 10px; border: 1px solid var(--color-border); border-radius: 10px; background: var(--color-surface-muted); color: var(--color-text-muted); font-size: 0.86rem; text-align: left; white-space: nowrap; }
+.settings-steps button > span:last-child { overflow: hidden; text-overflow: ellipsis; }
+/* Narrow windows: drop the number bubble so full step names fit; the highlighted step still shows position. */
+@media (max-width: 1180px) { .settings-steps .settings-step-num { display: none; } .settings-steps button { justify-content: center; } }
 .settings-steps button:hover { border-color: var(--color-accent); background: var(--color-accent-soft); }
 .settings-steps button[aria-current="step"] { border-color: var(--color-accent); background: var(--color-accent-soft); color: var(--color-accent-strong); }
-.settings-step-num { display: inline-grid; flex: 0 0 auto; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: var(--color-border); color: var(--color-text); font-size: 0.78rem; }
+.settings-step-num { display: inline-grid; flex: 0 0 auto; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: var(--color-border); color: var(--color-text); font-size: 0.78rem; }
 .settings-steps button[aria-current="step"] .settings-step-num { background: var(--color-accent); color: var(--color-accent-contrast); }
 .settings-steps button[data-state="done"] .settings-step-num { background: var(--color-success-soft); color: var(--color-success); }
 .settings-feedback { display: grid; gap: 4px; margin-top: 12px; }
