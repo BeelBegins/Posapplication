@@ -4345,6 +4345,8 @@ function initializeRenderer(): void {
   document.querySelector<HTMLDialogElement>('#receipt-dialog')?.addEventListener('cancel', (e) => e.preventDefault());
   // Benefits dialog controls
   document.querySelector<HTMLButtonElement>('#benefits-max-points')?.addEventListener('click', () => { const input = document.querySelector<HTMLInputElement>('#benefits-redeem-points'); if (input) { input.value = String(customerBenefits.availablePoints); input.focus(); } });
+  document.querySelector<HTMLButtonElement>('#benefits-back')?.addEventListener('click', closeBenefitsDialog);
+  document.querySelector<HTMLButtonElement>('#benefits-close')?.addEventListener('click', closeBenefitsDialog);
   document.querySelector<HTMLButtonElement>('#benefits-apply')?.addEventListener('click', () => void applyBenefitsModern());
   document.querySelector<HTMLButtonElement>('#benefits-remove')?.addEventListener('click', () => void removeBenefitsModern());
   document.querySelector<HTMLInputElement>('#benefits-redeem-points')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); void applyBenefitsModern(); } });
