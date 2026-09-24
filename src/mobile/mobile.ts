@@ -48,7 +48,9 @@ async function cashierLogin(input:Record<string,unknown>) {
     if(pin!==confirm)return{...emptyLogin(),requirePinSetup:true,error:"Offline Cashier PIN confirmation does not match."};
     const result={success:true,user,fullName:textValue(payload,"full_name")||user,roles:Array.isArray(payload.roles)?payload.roles.map(String):[],allowedPosProfiles:Array.isArray(payload.allowed_pos_profiles)?payload.allowed_pos_profiles.map(String):[],defaultPosProfile:textValue(payload,"default_pos_profile"),canStartShift:Boolean(payload.can_start_shift),canRefund:Boolean(payload.can_refund),canCloseShift:Boolean(payload.can_close_shift),canOfflineSale,offlineLoginExpiresAt:textValue(payload,"offline_login_expires_at"),requirePinSetup:false,error:null as string|null,offlineCached:Boolean(cached||pin)};
     if(pin&&!/^\d{4,8}$/.test(pin))return{...emptyLogin(),requirePinSetup:true,error:"Offline PIN must contain 4 to 8 digits."};
-    if(pin)db.setMeta(cashierKey(user),JSON.stringify({result,pinHash:await pinHash(pin),expiresAt:result.offlineLoginExpiresAt}));remember(user);return result;
+    if(pin)db.setMeta(cashierKey(user),JSON.stringify({result,pinHash:await pinHash(pin),expiresAt:result.offlineLoginExpiresAt}));
+    else if(cached){/* renew permissions + server expiry on every online login, keeping the existing PIN hash */let prior:Record<string,unknown>|null=null;try{prior=asRecord(JSON.parse(cached));}catch{/* corrupted: next PIN setup replaces it */}const priorHash=textValue(prior??{},"pinHash");if(priorHash)db.setMeta(cashierKey(user),JSON.stringify({result,pinHash:priorHash,expiresAt:result.offlineLoginExpiresAt||textValue(prior??{},"expiresAt")}));}
+    remember(user);return result;
   }catch(error){return{...emptyLogin(),error:`Cashier login failed: ${error instanceof Error?error.message:"network error"}`};}
 }
 

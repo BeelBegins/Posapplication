@@ -452,6 +452,9 @@ let cashierSession: CashierSession | null = null;
 // authorized dialog), never by this in-form mode - see the #cashier-pin-reset handler.
 type CashierPinMode = "login" | "setup" | "change";
 let cashierPinMode: CashierPinMode = "login";
+// Connectivity the cashier login form was last rendered for. Submit follows the visible form (password vs
+// offline PIN) rather than re-reading the live status, which the 30s health poll can flip underneath it.
+let cashierLoginFormOnline = false;
 // --- POS session health ---
 interface SessionState { openingEntry: string; status: string; user: string; posProfile: string; company: string; postingDate: string; periodStart: string; lastChecked: number; lastError: string; valid: boolean; reason: string; failedClosing: string; failedClosingError: string; }
 let sessionState: SessionState = { openingEntry: "", status: "", user: "", posProfile: "", company: "", postingDate: "", periodStart: "", lastChecked: 0, lastError: "", valid: false, reason: "Not checked", failedClosing: "", failedClosingError: "" };
@@ -735,7 +738,8 @@ function updatePosHeader(): void { const set = (id: string, value: string) => { 
 function showCustomer(): void { const e=document.querySelector<HTMLElement>("#pos-customer"); if(e)e.textContent=selectedCustomer?`${selectedCustomer.customer_name || selectedCustomer.name}${navigator.onLine?"":" (Cached)"}`:"—"; }
 function customerInput(): HTMLInputElement | null { return document.querySelector<HTMLInputElement>("#customer-search"); }
 async function selectCustomer(customer: CustomerResult): Promise<void> {
-  const result = await window.posAPI.loadCustomer(customer.name);
+  // Commit the selection before the detail fetch: offline, that fetch waits for its network timeout and
+  // must not delay (or appear to cancel) choosing a customer from the synced list.
   selectedCustomer = customer;
   showCustomer();
   // mark payment and benefits allocation outdated when customer changes
@@ -743,6 +747,11 @@ async function selectCustomer(customer: CustomerResult): Promise<void> {
   appliedBenefits = emptyBenefits();
   benefitsOutdated = true;
   customerBenefits = { loyaltyProgram: "", availablePoints: 0, conversionFactor: 1 };
+  scheduleCartPreview();
+  document.querySelector<HTMLDialogElement>("#customer-dialog")?.close();
+  focusCart();
+  const result = await window.posAPI.loadCustomer(customer.name);
+  if (selectedCustomer !== customer) return; // cashier picked another customer while this loaded
   void loadCustomerBenefits().then(() => {
     const detail = document.querySelector<HTMLElement>("#customer-detail");
     if (!detail) return;
@@ -757,7 +766,6 @@ async function selectCustomer(customer: CustomerResult): Promise<void> {
         : "Not enrolled in loyalty";
     detail.textContent = `${name} · ${mobile || "—"} · ${pointsPart}${result.cached ? " (Cached)" : ""}`;
   });
-  scheduleCartPreview();
   const detail = document.querySelector<HTMLElement>("#customer-detail");
   if (detail) {
     const data = result.customer;
@@ -765,8 +773,6 @@ async function selectCustomer(customer: CustomerResult): Promise<void> {
       ? `${String(data.customer_name ?? customer.customer_name)} · ${String(data.mobile_no ?? customer.mobile_no ?? "—")} · Loading points…`
       : (result.error ?? "Customer unavailable");
   }
-  document.querySelector<HTMLDialogElement>("#customer-dialog")?.close();
-  focusCart();
 }
 async function searchCustomer(preserveSelection = false): Promise<void> {
   const query = customerInput()?.value.trim() ?? "";
@@ -3428,6 +3434,8 @@ function showLoginResult(message: string): void {
 function setCashierPinMode(mode: CashierPinMode, message = ""): void {
   cashierPinMode = mode;
   const online = isOnline();
+  cashierLoginFormOnline = online;
+  setText("#cashier-login-connection", online ? "Online" : "Offline");
   const passwordRow = document.querySelector<HTMLElement>("#cashier-password-row");
   const offlinePinRow = document.querySelector<HTMLElement>("#cashier-offline-pin-row");
   const offlinePinConfirmRow = document.querySelector<HTMLElement>("#cashier-offline-pin-confirm-row");
@@ -3643,7 +3651,7 @@ async function submitCashierLogin(): Promise<void> {
   const password = passwordInput?.value ?? "";
   const offlinePin = offlinePinInput?.value ?? "";
   const offlinePinConfirm = offlinePinConfirmInput?.value ?? "";
-  const online = isOnline();
+  const online = cashierLoginFormOnline;
   const useOAuth = online && isCapacitorRuntime();
   const sendPin = online && cashierPinMode !== "login";
   if (!useOAuth && !username) { if (msg) msg.textContent = "Enter cashier username."; return; }
@@ -3670,7 +3678,16 @@ async function submitCashierLogin(): Promise<void> {
       document.querySelector<HTMLInputElement>("#cashier-offline-pin")?.focus();
       return;
     }
-    if (!result.success) { if (msg) msg.textContent = result.error ?? "Cashier login failed."; showLockoutCountdown(result.error ?? ""); return; }
+    if (!result.success) {
+      // ERP dropped between opening the form and submitting: switch to the offline PIN form instead of
+      // leaving the cashier retrying a password login that cannot reach the server.
+      if (online && /^Cashier login failed: /.test(result.error ?? "") && !(await window.posAPI.testServer().catch(() => ({ connected: false }))).connected) {
+        markServerOffline();
+        await showCashierLogin("ERP is not reachable. Login with your offline PIN to keep selling.");
+        return;
+      }
+      if (msg) msg.textContent = result.error ?? "Cashier login failed."; showLockoutCountdown(result.error ?? ""); return;
+    }
     const selectedProfile = document.querySelector<HTMLSelectElement>("#pos-profile")?.value ?? "";
     if (result.allowedPosProfiles.length && selectedProfile && !result.allowedPosProfiles.includes(selectedProfile)) {
       if (msg) msg.textContent = `Cashier is not allowed for POS Profile ${selectedProfile}.`;
@@ -3689,6 +3706,20 @@ async function submitCashierLogin(): Promise<void> {
     if (offlinePinConfirmInput) offlinePinConfirmInput.value = "";
     if (button) button.disabled = false;
   }
+}
+
+function markServerOffline(): void {
+  const status = document.querySelector<HTMLElement>("#pos-server-status"); if (status) status.textContent = "Offline";
+  prevServerConnected = false; setOnlineIndicator(false); showServerStatus(false); void updateOfflineUi();
+}
+
+// Re-render the cashier login form when the health poll sees ERP go down or come back while it is open,
+// so the password / offline-PIN fields always match the path submit will take.
+function syncCashierLoginConnection(): void {
+  const screen = document.querySelector<HTMLElement>("#cashier-login-screen");
+  if (!screen || screen.hidden || isOnline() === cashierLoginFormOnline) return;
+  if (document.querySelector<HTMLButtonElement>("#cashier-login-submit")?.disabled) return; // login in flight
+  void showCashierLogin(isOnline() ? "ERP is online again. Enter ERP cashier credentials." : "ERP is not reachable. Enter cashier username and offline PIN.");
 }
 
 function logoutCashier(): void {
@@ -4064,8 +4095,8 @@ function initializeRenderer(): void {
   // Server-health poll (online/offline + reconnect-driven session revalidation).
   window.setInterval(async () => { try { const online = await window.posAPI.testServer(); const status = document.querySelector<HTMLElement>("#pos-server-status"); const connected = Boolean(online.connected); if (status) status.textContent = connected ? "Online" : "Offline"; setOnlineIndicator(connected);
       if (connected && !prevServerConnected) { scheduleCartPreview(); void revalidateLive("reconnect"); void backgroundSyncTick(); void syncQueueNow(); } // after reconnect: re-check session + drain offline queue + sync stale data
-      prevServerConnected = connected; void updateOfflineUi();
-    } catch { const status = document.querySelector<HTMLElement>("#pos-server-status"); if (status) status.textContent = "Reconnecting"; prevServerConnected = false; void updateOfflineUi(); } }, 30_000);
+      prevServerConnected = connected; void updateOfflineUi(); syncCashierLoginConnection();
+    } catch { const status = document.querySelector<HTMLElement>("#pos-server-status"); if (status) status.textContent = "Reconnecting"; prevServerConnected = false; void updateOfflineUi(); syncCashierLoginConnection(); } }, 30_000);
   // Revalidate the POS session every 60 seconds while online.
   window.setInterval(() => { if (isOnline()) void revalidateLive("interval"); }, 60_000);
 
