@@ -3329,7 +3329,7 @@ async function runStartup(reason: string = "startup"): Promise<void> {
           setupCompleted = true; void renderSyncStatus(); void updateOfflineUi(); showScreen("pos"); return;
         }
       }
-      setOverallBadge("Cashier Login Required", "warn"); if (progress) progress.textContent = "Offline cashier login required"; await showCashierLogin("Enter cashier username and offline PIN."); return;
+      setOverallBadge("Cashier Login Required", "warn"); if (progress) progress.textContent = "Offline cashier login required"; await showCashierLogin(cachedCfg ? "Enter cashier username and offline PIN." : await offlineCacheMissingMessage()); return;
     }
     setStep("server", "complete"); if (serverStatus) serverStatus.textContent = "Online"; prevServerConnected = true; showServerStatus(true);
     // 3) Authenticate
@@ -3693,6 +3693,20 @@ async function showCashierLogin(message = ""): Promise<void> {
   window.setTimeout(() => fastPathTarget?.focus(), 0);
 }
 
+// Says exactly which offline essentials are missing on this till and what fixes it, instead of the
+// old generic "requires cached POS configuration, payment methods, item data and customer data".
+async function offlineCacheMissingMessage(): Promise<string> {
+  const [settings, totals, customers] = await Promise.all([
+    window.posAPI.loadSettings().catch(() => null),
+    window.posAPI.getCatalogTotals().catch(() => ({ items: 0, prices: 0, barcodes: 0, stockRows: 0, lastSynced: null })),
+    window.posAPI.getCustomerSyncState().catch(() => ({ count: 0, lastSynced: null }))
+  ]);
+  const missing = [`POS configuration${settings?.posProfile ? ` for "${settings.posProfile}"` : ""}`];
+  if (!totals.items || !totals.prices) missing.push("items/prices");
+  if (!customers.count) missing.push("customers");
+  return `Offline selling is not ready on this till: ${missing.join(", ")} not saved yet. Connect to the internet once and let setup finish syncing; after that this till can sell offline.`;
+}
+
 async function continueAfterCashierLogin(): Promise<void> {
   const progress = document.querySelector<HTMLElement>("#startup-progress");
   if (!isOnline()) {
@@ -3701,7 +3715,7 @@ async function continueAfterCashierLogin(): Promise<void> {
       setOverallBadge("Cached Data Missing", "err");
       if (progress) progress.textContent = "Cached POS configuration missing";
       const msg = document.querySelector<HTMLElement>("#cashier-login-message");
-      if (msg) msg.textContent = "Offline selling requires cached POS configuration, payment methods, item data and customer data.";
+      if (msg) msg.textContent = await offlineCacheMissingMessage();
       return;
     }
     showPosConfigurationSummary(cachedCfg);
