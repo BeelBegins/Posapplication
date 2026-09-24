@@ -3308,7 +3308,7 @@ async function runStartup(reason: string = "startup"): Promise<void> {
     const missingAuthentication = isCapacitorRuntime() ? false : (!saved.apiKey || !saved.hasApiSecret);
     if (!saved.erpnextUrl || missingAuthentication || !saved.posProfile) {
       setStep("settings", "failed"); setOverallBadge("Setup Required", "warn");
-      if (progress) progress.textContent = "Terminal settings required"; showSettingsMessage(isCapacitorRuntime() ? "Enroll this Android device for a POS Profile." : "Enter ERP URL, API Key/Secret and select a POS Profile, then Save and Complete Setup."); showScreen("settings"); return;
+      if (progress) progress.textContent = "Terminal settings required"; showSettingsMessage(isCapacitorRuntime() ? "Enroll this Android device for a POS Profile." : "Enter ERP URL, API Key/Secret and select a POS Profile, then Save and Complete Setup."); showSettingsStep("connection"); showScreen("settings"); return;
     }
     setStep("settings", "complete");
     // 2) Server (silent)
@@ -3335,14 +3335,14 @@ async function runStartup(reason: string = "startup"): Promise<void> {
     const login = await window.posAPI.testLogin();
     if (!login.success) {
       if (isCapacitorRuntime()) { setStep("auth", "pending"); setOverallBadge("Cashier Login Required", "info"); if (progress) progress.textContent = "Cashier login required"; await showCashierLogin("Sign in securely with ERP."); return; }
-      setStep("auth", "failed"); setOverallBadge("Action Required", "err"); if (progress) progress.textContent = "Authentication failed"; showSettingsMessage("Authentication failed. The API key or secret is invalid."); showLoginResult("Authentication failed — check API Key/Secret."); showScreen("settings"); return;
+      setStep("auth", "failed"); setOverallBadge("Action Required", "err"); if (progress) progress.textContent = "Authentication failed"; showSettingsMessage("Authentication failed. The API key or secret is invalid."); showLoginResult("Authentication failed — check API Key/Secret."); showSettingsStep("connection"); showScreen("settings"); return;
     }
     authenticatedUser = login.loggedUser ?? ""; setStep("auth", "complete"); setLoggedUser(authenticatedUser); showLoginResult(`Logged in as ${authenticatedUser}`);
     // 4) Profiles + selected profile
     setStep("profile", "running"); if (progress) progress.textContent = "Loading POS Profile…";
     await populatePosProfileDropdown();
     const profile = await window.posAPI.loadPosProfile();
-    if (!profile.success) { setStep("profile", "failed"); setOverallBadge("Action Required", "err"); if (progress) progress.textContent = profile.error ?? "POS Profile load failed"; showSettingsMessage(profile.error ?? "POS Profile load failed."); showScreen("settings"); return; }
+    if (!profile.success) { setStep("profile", "failed"); setOverallBadge("Action Required", "err"); if (progress) progress.textContent = profile.error ?? "POS Profile load failed"; showSettingsMessage(profile.error ?? "POS Profile load failed."); showSettingsStep("terminal"); showScreen("settings"); return; }
     showPosProfile(profile.profile, profile.error); setStep("profile", "complete");
     if (profile.profile?.customer) { const defaultCustomer={ name: profile.profile.customer, customer_name: profile.profile.customer, customer_group: "", mobile_no: "", email_id: "", tax_id: "" }; selectedCustomer=defaultCustomer; const customer=await window.posAPI.loadCustomer(defaultCustomer.name); if(customer.customer) selectedCustomer={...defaultCustomer,customer_name:String(customer.customer.customer_name??defaultCustomer.customer_name),customer_group:String(customer.customer.customer_group??""),mobile_no:String(customer.customer.mobile_no??""),email_id:String(customer.customer.email_id??""),tax_id:String(customer.customer.tax_id??"")}; showCustomer(); }
     // 5) POS configuration — refresh only when missing or stale (>12h)
@@ -3379,6 +3379,80 @@ function getSettingsFromForm(): AppSettings {
     receiptPrinter: document.querySelector<HTMLSelectElement>("#receipt-printer")?.value ?? "",
     colorTheme: document.querySelector<HTMLSelectElement>("#color-theme")?.value ?? "warm-market"
   };
+}
+
+// --- Settings step-by-step setup (desktop) ---------------------------------
+// Pure presentation over the unchanged settings form: every field keeps its id and the existing
+// submit/sync/update handlers. Android shows all panels at once (its CSS hides the step controls).
+const SETTINGS_STEPS = ["connection", "terminal", "finish", "sync", "advanced"] as const;
+type SettingsStep = typeof SETTINGS_STEPS[number];
+let settingsStep: SettingsStep = "connection";
+
+function showSettingsStep(step: SettingsStep): void {
+  settingsStep = step;
+  const wizard = !isCapacitorRuntime();
+  const index = SETTINGS_STEPS.indexOf(step);
+  document.querySelectorAll<HTMLElement>("[data-settings-panel]").forEach((panel) => { panel.hidden = wizard && panel.dataset.settingsPanel !== step; });
+  document.querySelectorAll<HTMLButtonElement>("[data-settings-step]").forEach((button) => {
+    const i = SETTINGS_STEPS.indexOf(button.dataset.settingsStep as SettingsStep);
+    if (i === index) button.setAttribute("aria-current", "step"); else button.removeAttribute("aria-current");
+    button.dataset.state = i < index ? "done" : "";
+  });
+  if (wizard) document.querySelector<HTMLElement>("#settings-screen")?.scrollIntoView({ block: "start" });
+}
+
+// Step 1 -> 2: save the connection fields, prove they authenticate, and load this server's POS
+// Profiles, so the Terminal step opens with a real list instead of an empty dropdown.
+async function continueFromConnectionStep(button: HTMLButtonElement): Promise<void> {
+  if (isCapacitorRuntime()) { showSettingsStep("terminal"); return; }
+  const previous = await window.posAPI.loadSettings().catch(() => null);
+  const next = getSettingsFromForm();
+  if (!next.erpnextUrl.trim() || !next.apiKey.trim() || (!next.apiSecret && !previous?.hasApiSecret)) {
+    showSettingsMessage("Enter the ERP URL and API Key/Secret (or use Fetch Credentials) first.");
+    return;
+  }
+  const label = button.textContent;
+  button.disabled = true; button.textContent = "Connecting…";
+  try {
+    const changed = !previous || previous.erpnextUrl !== next.erpnextUrl || previous.apiKey !== next.apiKey || Boolean(next.apiSecret);
+    if (changed) {
+      await window.posAPI.saveSettings(next);
+      cashierSession = null; // same rule as Save and Complete Setup: new server/credentials need a fresh cashier login
+      updatePosHeader();
+    }
+    const login = await window.posAPI.testLogin();
+    if (!login.success) { showSettingsMessage("Could not sign in to ERP with this URL and API Key/Secret. Check them and try again."); return; }
+    showLoginResult(`Connected as ${login.loggedUser ?? ""}`);
+    await populatePosProfileDropdown();
+    showSettingsStep("terminal");
+  } catch (error) {
+    showSettingsMessage(error instanceof Error ? error.message : "Unable to connect to ERP.");
+  } finally {
+    button.disabled = false; button.textContent = label;
+  }
+}
+
+function initSettingsSteps(): void {
+  document.querySelectorAll<HTMLButtonElement>("[data-settings-step]").forEach((button) => {
+    button.addEventListener("click", () => showSettingsStep(button.dataset.settingsStep as SettingsStep));
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-settings-back]").forEach((button) => {
+    button.addEventListener("click", () => showSettingsStep(SETTINGS_STEPS[Math.max(0, SETTINGS_STEPS.indexOf(settingsStep) - 1)]));
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-settings-next]").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (settingsStep === "connection") { void continueFromConnectionStep(button); return; }
+      if (settingsStep === "terminal" && !document.querySelector<HTMLSelectElement>("#pos-profile")?.value) { showSettingsMessage("Select a POS Profile to continue."); return; }
+      showSettingsStep(SETTINGS_STEPS[Math.min(SETTINGS_STEPS.length - 1, SETTINGS_STEPS.indexOf(settingsStep) + 1)]);
+    });
+  });
+  // Enter inside an earlier step moves to the next step instead of submitting Save and Complete Setup.
+  document.querySelector<HTMLFormElement>("#settings-form")?.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" || isCapacitorRuntime() || settingsStep === "finish" || !(event.target instanceof HTMLInputElement)) return;
+    event.preventDefault();
+    document.querySelector<HTMLButtonElement>(`[data-settings-panel="${settingsStep}"] [data-settings-next]`)?.click();
+  });
+  showSettingsStep("connection");
 }
 
 function applyColorTheme(theme: string): void {
@@ -4002,6 +4076,7 @@ function initializeRenderer(): void {
   document.querySelector<HTMLButtonElement>("#retry-startup")?.addEventListener("click", () => void runPosBootstrap("retry"));
   document.querySelector<HTMLFormElement>("#cashier-login-form")?.addEventListener("submit", (event) => { event.preventDefault(); void submitCashierLogin(); });
   initPinKeypad();
+  initSettingsSteps();
   document.querySelector<HTMLButtonElement>("#cashier-pin-change")?.addEventListener("click", () => setCashierPinMode("change", "Enter ERP password, then enter and confirm the new Offline Cashier PIN."));
   document.querySelector<HTMLButtonElement>("#cashier-pin-reset")?.addEventListener("click", () => {
     const cashierUser = document.querySelector<HTMLInputElement>("#cashier-username")?.value.trim() ?? "";
@@ -4141,7 +4216,7 @@ function initializeRenderer(): void {
       if (secretInput) secretInput.value = result.apiSecret;
       const passwordInput = document.querySelector<HTMLInputElement>("#provision-password");
       if (passwordInput) passwordInput.value = "";
-      if (messageEl) messageEl.textContent = "Credentials fetched — review and Save and Complete Setup below.";
+      if (messageEl) messageEl.textContent = "Credentials fetched — press Next: Connect.";
     } catch {
       if (messageEl) { messageEl.textContent = "Unable to fetch credentials."; messageEl.classList.add("error"); }
     } finally {
