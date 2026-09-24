@@ -178,6 +178,10 @@ html[data-platform="electron"] .window-controls { display: flex; }
 .cashier-login-form label { display: grid; gap: 6px; color: var(--color-text); font-weight: 700; font-size: 0.88rem; }
 .cashier-login-form input { font-size: 1rem; padding: 11px 13px; }
 .cashier-login-form input:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; border-color: var(--color-accent); }
+/* setCashierPinMode()/showCashierLogin() toggle rows with the `hidden` attribute, but the
+   display:grid/flex rules above and below outrank the browser's [hidden] default, so every
+   password/PIN/confirm row and the keypad rendered at once and pushed Login below the fold. */
+.cashier-login-card [hidden] { display: none !important; }
 
 /* Numeric PIN keypad: an alternate input surface that writes into the same
    #cashier-offline-pin(-confirm) fields the existing login state machine
@@ -239,6 +243,19 @@ html[data-platform="electron"] .window-controls { display: flex; }
   text-align: center;
 }
 .cashier-login-lockout[hidden] { display: none; }
+
+/* Short desktop tills (1366x768, 1024x768): tighten spacing only, so the offline PIN keypad and
+   Login button fit without scrolling. Taller screens and Android keep the full layout. */
+@media (max-height: 860px) {
+  :root:not(.android-app) .cashier-login-screen { padding: 12px 32px; }
+  :root:not(.android-app) .cashier-login-card { padding: 22px 32px 18px; }
+  :root:not(.android-app) .cashier-login-wordmark { width: 44px; height: 44px; margin-bottom: 10px; font-size: 1.25rem; }
+  :root:not(.android-app) .cashier-login-brand p:last-child { margin-bottom: 14px; }
+  :root:not(.android-app) .cashier-login-form { gap: 10px; }
+  :root:not(.android-app) .pin-keypad { gap: 6px; margin-top: 0; }
+  :root:not(.android-app) .pin-keypad-display { min-height: 14px; padding: 0; }
+  :root:not(.android-app) .pin-keypad-key { padding: 10px 0; }
+}
 
 .cashier-login-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 18px 0 12px; }
 .cashier-login-summary div { padding: 10px; border-radius: 8px; background: var(--color-surface-muted); }
