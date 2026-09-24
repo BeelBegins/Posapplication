@@ -244,6 +244,10 @@ html[data-platform="electron"] .window-controls { display: flex; }
 .cashier-login-summary div { padding: 10px; border-radius: 8px; background: var(--color-surface-muted); }
 .cashier-login-summary dt { color: var(--color-text-muted); font-size: 0.72rem; }
 .cashier-login-summary dd { margin: 4px 0 0; color: var(--color-text); font-weight: 800; overflow-wrap: anywhere; }
+.cashier-login-update { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--color-border); }
+.cashier-login-update[hidden] { display: none; }
+.cashier-login-update-info { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px; margin: 0 0 8px; color: var(--color-text-muted); font-size: 0.82rem; }
+.cashier-login-update-info strong { color: var(--color-text); }
 
 /* --- Operational screens (Held Sales, Sales History) --- */
 .op-screen { height: 100vh; padding: 20px 28px; overflow-y: auto; background: var(--color-bg-alt); }

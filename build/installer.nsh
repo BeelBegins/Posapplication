@@ -1,11 +1,16 @@
 ; Custom NSIS include for electron-builder.
-; Adds: (1) a password gate before installation, (2) a Windows Defender exclusion for the install dir.
+; Adds a password gate before a fresh installation (skipped for in-app auto-updates).
 ;
-; SECURITY CAVEATS (see chat):
+; SECURITY CAVEATS:
 ;  - The password below is a casual deterrent only. It is compiled into the installer and is
 ;    recoverable by a determined user; it does not encrypt the payload.
-;  - Add-MpPreference reduces antivirus coverage for the install folder. Because this installer is
-;    UNSIGNED, Windows SmartScreen will still warn on first run (More info -> Run anyway).
+;  - This installer is UNSIGNED, so Windows SmartScreen still warns on first run
+;    (More info -> Run anyway). Code signing is the only real fix for that.
+;  - It deliberately does NOT touch Windows Defender. Earlier builds ran
+;    `powershell -ExecutionPolicy Bypass Add-MpPreference -ExclusionPath` from this unsigned
+;    installer on every install/update; that is textbook defense-evasion behaviour and made
+;    antivirus flag or block the installer. Older installs' uninstallers still remove that
+;    exclusion once when they are replaced by this version.
 
 !include "nsDialogs.nsh"
 !include "LogicLib.nsh"
@@ -25,6 +30,12 @@
   !macroend
 
   Function PasswordPageCreate
+    ; In-app updates (electron-updater passes --updated) replace an already-authorized install, so a
+    ; cashier can update from the login screen without knowing the install password. A silent /S run
+    ; never showed this page either, so this adds no new way around it.
+    ${if} ${isUpdated}
+      Abort
+    ${endif}
     nsDialogs::Create 1018
     Pop $0
     ${If} $0 == error
@@ -46,14 +57,4 @@
       Abort ; keep the user on the password page
     ${EndIf}
   FunctionEnd
-
-  !macro customInstall
-    DetailPrint "Adding Windows Defender exclusion for $INSTDIR"
-    nsExec::ExecToLog 'powershell -NoProfile -ExecutionPolicy Bypass -Command "try { Add-MpPreference -ExclusionPath \"$INSTDIR\" -ErrorAction Stop } catch { }"'
-  !macroend
 !endif
-
-!macro customUnInstall
-  DetailPrint "Removing Windows Defender exclusion for $INSTDIR"
-  nsExec::ExecToLog 'powershell -NoProfile -ExecutionPolicy Bypass -Command "try { Remove-MpPreference -ExclusionPath \"$INSTDIR\" -ErrorAction Stop } catch { }"'
-!macroend
