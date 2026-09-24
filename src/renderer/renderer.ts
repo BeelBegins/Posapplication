@@ -4347,6 +4347,8 @@ function initializeRenderer(): void {
   document.querySelector<HTMLButtonElement>('#benefits-max-points')?.addEventListener('click', () => { const input = document.querySelector<HTMLInputElement>('#benefits-redeem-points'); if (input) { input.value = String(customerBenefits.availablePoints); input.focus(); } });
   document.querySelector<HTMLButtonElement>('#benefits-back')?.addEventListener('click', closeBenefitsDialog);
   document.querySelector<HTMLButtonElement>('#benefits-close')?.addEventListener('click', closeBenefitsDialog);
+  document.querySelector<HTMLDialogElement>('#benefits-dialog')?.addEventListener('keydown', (event) => { if (event.key === 'Escape' || event.key === 'Esc') { event.preventDefault(); event.stopPropagation(); closeBenefitsDialog(); } });
+  document.querySelector<HTMLDialogElement>('#benefits-dialog')?.addEventListener('cancel', (event) => { event.preventDefault(); closeBenefitsDialog(); });
   document.querySelector<HTMLButtonElement>('#benefits-apply')?.addEventListener('click', () => void applyBenefitsModern());
   document.querySelector<HTMLButtonElement>('#benefits-remove')?.addEventListener('click', () => void removeBenefitsModern());
   document.querySelector<HTMLInputElement>('#benefits-redeem-points')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); void applyBenefitsModern(); } });
@@ -4381,7 +4383,7 @@ function initializeRenderer(): void {
     if (benefitsOpen) {
       if (event.key === 'Tab') { /* default behavior for Tab */ return; }
       if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); void applyBenefitsModern(); return; }
-      if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeBenefitsDialog(); return; }
+      if (event.key === 'Escape' || event.key === 'Esc') { event.preventDefault(); event.stopPropagation(); closeBenefitsDialog(); return; }
     }
     if (event.key === 'F6') { event.preventDefault(); event.stopPropagation(); if (paymentOpen) { void completePaymentAllocation(); } else { void openPayment(); } return; }
     if (paymentOpen) {

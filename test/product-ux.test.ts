@@ -326,6 +326,15 @@ test("Benefits dialog exposes visible back and close controls", () => {
   assert.match(renderer, /#benefits-close.*closeBenefitsDialog/);
 });
 
+test("Benefits dialog closes on Escape and native cancel", () => {
+  const renderer = source("src/renderer/renderer.ts");
+  assert.match(renderer, /#benefits-dialog.*addEventListener/);
+  assert.match(renderer, /addEventListener.*keydown/);
+  assert.match(renderer, /addEventListener.*cancel/);
+  assert.match(renderer, /event.key === .Escape. || event.key === .Esc/);
+  assert.match(renderer, /benefits-dialog.*cancel/);
+});
+
 test("cash tender guard is present in the POS payment path", () => {
   const renderer = source("src/renderer/renderer.ts");
   assert.match(renderer, /MAX_PKR_CASH_NOTE\s*=\s*5000/);
