@@ -85,9 +85,21 @@ async function scheduleReminders(count: number): Promise<void> {
   } catch { /* Notifications are helpful; the in-app queue remains authoritative. */ }
 }
 
+async function logout(): Promise<void> {
+  const button = document.querySelector<HTMLButtonElement>("#logout");
+  if (button) { button.disabled = true; button.textContent = "Signing out…"; }
+  await credentials?.clear();
+  try { await LocalNotifications.cancel({ notifications: [1, 2, 3, 4, 5, 6].map((id) => ({ id })) }); } catch { /* Notification cleanup is best-effort. */ }
+  current = null;
+  pending = [];
+  busy = "";
+  noticeText("");
+  signIn();
+}
+
 function queueView(): string {
   const rows = pending;
-  return `<main><header class="top"><div class="identity"><span>${icon("truck", 22)}</span><div><strong>Stock Receiving</strong><small>${esc(text(context, "full_name"))}</small></div></div><span class="${navigator.onLine ? "online" : "offline"}">${navigator.onLine ? "Online" : "Offline"}</span></header><section class="page"><div class="title"><div><p class="eyebrow">${esc(text(context, "branches") || "Branch")}</p><h1>Pending receiving</h1><p>Check every item before confirming.</p></div><button id="refresh" class="secondary" ${busy ? "disabled" : ""}>${busy || "Refresh"}</button></div>${notice ? `<div class="notice ${noticeTone}">${esc(notice)}</div>` : ""}<div class="queue">${rows.map((row) => `<button class="queue-card" data-open-type="${esc(text(row, "source_type"))}" data-open-name="${esc(text(row, "name"))}"><span><strong>${esc(text(row, "source_type") === "Purchase Receipt" ? "Purchase Receipt" : "Stock Transfer Note")}</strong><small>${esc(text(row, "name"))}${text(row, "supplier") ? ` · ${esc(text(row, "supplier"))}` : ""}</small><small>${esc(text(row, "date"))} · ${esc(text(row, "branch"))}</small></span><b>${esc(text(row, "item_count"))} items ${icon("chevron-right", 18)}</b></button>`).join("") || `<div class="empty">${icon("check", 42)}<h2>All clear</h2><p>No pending receiving documents for your branch.</p></div>`}</div></section></main>`;
+  return `<main><header class="top"><div class="identity"><span>${icon("truck", 22)}</span><div><strong>Stock Receiving</strong><small>${esc(text(context, "full_name"))}</small></div></div><div class="top-actions"><span class="${navigator.onLine ? "online" : "offline"}">${navigator.onLine ? "Online" : "Offline"}</span><button id="logout" class="secondary">Log out</button></div></header><section class="page"><div class="title"><div><p class="eyebrow">${esc(text(context, "branches") || "Branch")}</p><h1>Pending receiving</h1><p>Check every item before confirming.</p></div><button id="refresh" class="secondary" ${busy ? "disabled" : ""}>${busy || "Refresh"}</button></div>${notice ? `<div class="notice ${noticeTone}">${esc(notice)}</div>` : ""}<div class="queue">${rows.map((row) => `<button class="queue-card" data-open-type="${esc(text(row, "source_type"))}" data-open-name="${esc(text(row, "name"))}"><span><strong>${esc(text(row, "source_type") === "Purchase Receipt" ? "Purchase Receipt" : "Stock Transfer Note")}</strong><small>${esc(text(row, "name"))}${text(row, "supplier") ? ` · ${esc(text(row, "supplier"))}` : ""}</small><small>${esc(text(row, "date"))} · ${esc(text(row, "branch"))}</small></span><b>${esc(text(row, "item_count"))} items ${icon("chevron-right", 18)}</b></button>`).join("") || `<div class="empty">${icon("check", 42)}<h2>All clear</h2><p>No pending receiving documents for your branch.</p></div>`}</div></section></main>`;
 }
 
 function documentView(): string {
@@ -130,6 +142,7 @@ async function syncOutbox(): Promise<void> {
 }
 
 function bind(): void {
+  document.querySelector<HTMLButtonElement>("#logout")?.addEventListener("click", () => void logout());
   document.querySelector<HTMLButtonElement>("#refresh")?.addEventListener("click", async () => { try { await refreshPending(); noticeText("Queue refreshed.", "success"); render(); } catch (error) { noticeText(error instanceof Error ? error.message : "Refresh failed.", "danger"); render(); } });
   document.querySelectorAll<HTMLButtonElement>("[data-open-type]").forEach((button) => button.addEventListener("click", () => void openDocument(button.dataset.openType!, button.dataset.openName!)));
   document.querySelector<HTMLButtonElement>("#back")?.addEventListener("click", () => { current = null; noticeText(""); render(); });
