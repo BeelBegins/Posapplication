@@ -1,6 +1,6 @@
 import profilesJson from "./product-profiles.json";
 
-export type ProductId = "pos" | "restaurant" | "sales" | "shopping";
+export type ProductId = "pos" | "restaurant" | "sales" | "shopping" | "stock-receiving";
 export type AppPlatform = "electron" | "capacitor" | "web";
 export type AuthenticationMode = "terminal-token" | "user-session" | "customer-session";
 export type AndroidOrientation = "sensorPortrait" | "sensorLandscape" | "unspecified";

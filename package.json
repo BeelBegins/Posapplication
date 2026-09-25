@@ -36,7 +36,11 @@
     "dev": "concurrently \"tsc --watch\" \"wait-on dist/main.js && set ELECTRON_RUN_AS_NODE=&& electron .\"",
     "rebuild": "electron-rebuild -f -w better-sqlite3",
     "postinstall": "npm run rebuild",
-    "test": "rimraf .test-out && tsc -p tsconfig.test.json && cross-env ELECTRON_RUN_AS_NODE=1 electron --experimental-test-module-mocks --test .test-out/test"
+    "test": "rimraf .test-out && tsc -p tsconfig.test.json && cross-env ELECTRON_RUN_AS_NODE=1 electron --experimental-test-module-mocks --test .test-out/test",
+    "build:stock-receiving:android:web": "cross-env AI_MATIC_PRODUCT=stock-receiving npm run build:android:web",
+    "android:stock-receiving:sync": "cross-env AI_MATIC_PRODUCT=stock-receiving npm run android:sync",
+    "android:stock-receiving:apk": "cross-env AI_MATIC_PRODUCT=stock-receiving npm run android:apk",
+    "android:stock-receiving:aab": "cross-env AI_MATIC_PRODUCT=stock-receiving npm run android:aab"
   },
   "devDependencies": {
     "@capacitor/cli": "^8.4.2",
@@ -62,6 +66,7 @@
     "@capacitor/browser": "^8.0.3",
     "@capacitor/core": "^8.4.2",
     "@capacitor/geolocation": "^8.2.0",
+    "@capacitor/local-notifications": "^8.3.1",
     "better-sqlite3": "^12.11.1",
     "electron-updater": "^6.8.9"
   },

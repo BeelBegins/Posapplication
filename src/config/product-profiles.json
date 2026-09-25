@@ -42,5 +42,16 @@
     "storageNamespace": "aimatic-shopping",
     "authentication": "customer-session",
     "features": ["customer-shopping"]
+  },
+  "stock-receiving": {
+    "id": "stock-receiving",
+    "name": "Ai Matic Stock Receiving",
+    "enabled": true,
+    "platforms": ["capacitor"],
+    "androidAppId": "com.beelbegins.aimaticstockreceiving",
+    "androidOrientation": "sensorPortrait",
+    "storageNamespace": "aimatic-stock-receiving",
+    "authentication": "user-session",
+    "features": ["stock-receiving", "barcode-input", "local-reminders"]
   }
 }

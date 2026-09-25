@@ -7,15 +7,16 @@ if (!profile || !profile.enabled || !profile.platforms.includes("capacitor")) {
   throw new Error(`Product profile '${productId}' is not enabled for Capacitor`);
 }
 
-// The ML Kit barcode scanner adds native models for every ABI. Only POS and Sales
-// have live scan workflows; keep it out of Restaurant's prototype and Shopping.
+// The ML Kit barcode scanner adds native models for every ABI. Only POS, Sales,
+// and Stock Receiving have live scan workflows; keep it out of Restaurant and Shopping.
 const includePlugins = ["@capacitor/app"];
-if (productId === "pos" || productId === "sales") {
+if (productId === "pos" || productId === "sales" || productId === "stock-receiving") {
   includePlugins.push("@capacitor/barcode-scanner");
 }
 if (productId === "sales") {
   includePlugins.push("@capacitor/geolocation");
 }
+if (productId === "stock-receiving") includePlugins.push("@capacitor/local-notifications");
 includePlugins.push("@capacitor/browser");
 
 module.exports = {
