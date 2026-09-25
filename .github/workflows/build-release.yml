@@ -68,6 +68,9 @@ jobs:
           - product: shopping
             artifact: android-shopping-release
             filename: Aimatic-Shopping-App
+          - product: stock-receiving
+            artifact: android-stock-receiving-release
+            filename: Aimatic-Stock-Receiving-App
     env:
       AI_MATIC_PRODUCT: ${{ matrix.product }}
     steps:
@@ -175,6 +178,10 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: android-shopping-release
+          path: dist-apk
+      - uses: actions/download-artifact@v4
+        with:
+          name: android-stock-receiving-release
           path: dist-apk
       - uses: actions/download-artifact@v4
         with:

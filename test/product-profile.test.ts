@@ -2,12 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { getProductProfile, listProductProfiles, requireBuildableProfile } from "../src/config/product-profile";
 
-test("POS, Restaurant, Sales, and Shopping profiles are independently buildable", () => {
+test("all enabled product profiles are independently buildable", () => {
   const enabled = listProductProfiles().filter((profile) => profile.enabled).map((profile) => profile.id);
-  assert.deepEqual(enabled, ["pos", "restaurant", "sales", "shopping"]);
+  assert.deepEqual(enabled, ["pos", "restaurant", "sales", "shopping", "stock-receiving"]);
   assert.equal(requireBuildableProfile("pos", "electron").name, "Ai Matic POS");
   assert.equal(requireBuildableProfile("pos", "capacitor").androidAppId, "com.beelbegins.aimaticpos");
   assert.equal(requireBuildableProfile("pos", "capacitor").androidOrientation, "sensorPortrait");
+  assert.equal(requireBuildableProfile("stock-receiving", "capacitor").androidAppId, "com.beelbegins.aimaticstockreceiving");
 });
 
 test("Sales and Shopping remain isolated from Electron", () => {
