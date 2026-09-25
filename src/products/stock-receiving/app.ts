@@ -14,7 +14,7 @@ const root = document.querySelector<HTMLElement>("#app")!;
 const configKey = "aimatic-stock-receiving-config-v1";
 const draftsKey = "aimatic-stock-receiving-drafts-v1";
 const outboxKey = "aimatic-stock-receiving-outbox-v1";
-const releasesUrl = "https://github.com/BeelBegins/Posapplication/releases/latest";
+const releasesApi = "https://api.github.com/repos/BeelBegins/Posapplication/releases/latest";
 let config: OAuthPublicClientConfig | null = null;
 let credentials: OAuthPkceCredentialProvider | null = null;
 let api: ReturnType<typeof createStockReceivingApi> | null = null;
@@ -33,7 +33,36 @@ function keyFor(row: Row): string { return `${text(row, "source_type")}::${text(
 function draftMap(): Record<string, Row> { return jsonRead<Record<string, Row>>(draftsKey, {}); }
 function outbox(): Row[] { return jsonRead<Row[]>(outboxKey, []); }
 function noticeText(message: string, tone = ""): void { notice = message; noticeTone = tone; }
-async function openReleases(): Promise<void> { await Browser.open({ url: releasesUrl, presentationStyle: "popover" }).catch(() => { window.open(releasesUrl, "_blank", "noopener"); }); }
+function versionParts(value: string): number[] { return value.replace(/^v/i, "").split(".").map((part) => Number.parseInt(part, 10) || 0); }
+function isNewerVersion(candidate: string, currentVersion: string): boolean { const a = versionParts(candidate); const b = versionParts(currentVersion); for (let index = 0; index < Math.max(a.length, b.length); index += 1) { if ((a[index] || 0) !== (b[index] || 0)) return (a[index] || 0) > (b[index] || 0); } return false; }
+async function checkForUpdate(): Promise<void> {
+  const button = document.querySelector<HTMLButtonElement>("#check-update");
+  if (!button) return;
+  const original = button.textContent || "Update";
+  button.disabled = true;
+  button.textContent = "Checking…";
+  try {
+    const response = await fetch(releasesApi, { headers: { Accept: "application/vnd.github+json" } });
+    const release = await response.json().catch(() => ({})) as Row;
+    if (!response.ok) throw new Error(text(release, "message") || `GitHub error ${response.status}`);
+    const latestVersion = text(release, "tag_name").replace(/^v/i, "");
+    const apk = list(release.assets).find((asset) => text(asset, "name").startsWith("Aimatic-Stock-Receiving-App-") && text(asset, "name").endsWith(".apk"));
+    const apkUrl = text(apk, "browser_download_url");
+    if (!latestVersion || !apkUrl) throw new Error("Latest Stock Receiving APK is not published yet.");
+    if (!isNewerVersion(latestVersion, __APP_VERSION__)) {
+      button.textContent = `Up to date · v${__APP_VERSION__}`;
+      window.setTimeout(() => { if (button.isConnected) { button.textContent = original; button.disabled = false; } }, 2500);
+      return;
+    }
+    button.textContent = `Downloading v${latestVersion}…`;
+    await Browser.open({ url: apkUrl, presentationStyle: "popover" });
+    button.textContent = `Download v${latestVersion}`;
+    window.setTimeout(() => { if (button.isConnected) { button.textContent = original; button.disabled = false; } }, 4000);
+  } catch (error) {
+    button.textContent = "Update failed — retry";
+    window.setTimeout(() => { if (button.isConnected) { button.textContent = original; button.disabled = false; } }, 3000);
+  }
+}
 async function payload(response: Response): Promise<Row> {
   const raw = await response.json().catch(() => ({})) as Row;
   const value = raw.message && typeof raw.message === "object" ? raw.message : raw;
@@ -55,13 +84,13 @@ async function configure(baseUrl: string): Promise<void> {
 function setup(error = ""): void {
   root.innerHTML = `<section class="setup"><div class="setup-card"><div class="mark">SR</div><p class="eyebrow">Stock receiving</p><h1>Connect to ERP</h1><p>Enter your ERP server once. Then sign in with your normal ERP email and password.</p>${error ? `<div class="notice danger">${esc(error)}</div>` : ""}<form id="server-form"><label>Server link<input id="server-url" type="url" required placeholder="https://erp.example.com" autocomplete="url"></label><button class="primary wide">Continue</button></form><button id="check-update" class="secondary wide update-button">Check app update</button><small>v${esc(__APP_VERSION__)} · No API key or secret</small></div></section>`;
   document.querySelector<HTMLFormElement>("#server-form")!.onsubmit = async (event) => { event.preventDefault(); const value = document.querySelector<HTMLInputElement>("#server-url")!.value; try { await configure(value); signIn(); } catch (error) { setup(error instanceof Error ? error.message : "Server connection failed."); } };
-  document.querySelector<HTMLButtonElement>("#check-update")?.addEventListener("click", () => void openReleases());
+  document.querySelector<HTMLButtonElement>("#check-update")?.addEventListener("click", () => void checkForUpdate());
 }
 
 function signIn(error = ""): void {
   root.innerHTML = `<section class="setup"><div class="setup-card"><div class="mark">SR</div><p class="eyebrow">Stock receiving</p><h1>Sign in</h1><p>Use your ERP email and password. Your ERP branch permissions still apply.</p>${error ? `<div class="notice danger">${esc(error)}</div>` : ""}<button id="login" class="primary wide">Sign in with ERP</button><button id="check-update" class="secondary wide update-button">Check app update</button><button id="change-server" class="secondary wide" style="margin-top:10px">Change server</button><small>v${esc(__APP_VERSION__)}</small></div></section>`;
   document.querySelector<HTMLButtonElement>("#login")!.onclick = async () => { const button = document.querySelector<HTMLButtonElement>("#login")!; button.disabled = true; button.textContent = "Opening ERP login…"; try { await credentials!.login(); await loadContext(); } catch (error) { signIn(error instanceof Error ? error.message : "Sign in failed."); } };
-  document.querySelector<HTMLButtonElement>("#check-update")?.addEventListener("click", () => void openReleases());
+  document.querySelector<HTMLButtonElement>("#check-update")?.addEventListener("click", () => void checkForUpdate());
   document.querySelector<HTMLButtonElement>("#change-server")!.onclick = () => { localStorage.removeItem(configKey); void credentials?.clear(); setup(); };
 }
 
@@ -147,7 +176,7 @@ async function syncOutbox(): Promise<void> {
 }
 
 function bind(): void {
-  document.querySelector<HTMLButtonElement>("#check-update")?.addEventListener("click", () => void openReleases());
+  document.querySelector<HTMLButtonElement>("#check-update")?.addEventListener("click", () => void checkForUpdate());
   document.querySelector<HTMLButtonElement>("#logout")?.addEventListener("click", () => void logout());
   document.querySelector<HTMLButtonElement>("#refresh")?.addEventListener("click", async () => { try { await refreshPending(); noticeText("Queue refreshed.", "success"); render(); } catch (error) { noticeText(error instanceof Error ? error.message : "Refresh failed.", "danger"); render(); } });
   document.querySelectorAll<HTMLButtonElement>("[data-open-type]").forEach((button) => button.addEventListener("click", () => void openDocument(button.dataset.openType!, button.dataset.openName!)));
