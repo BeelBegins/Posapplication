@@ -1,4 +1,5 @@
 import { LocalNotifications } from "@capacitor/local-notifications";
+import { Browser } from "@capacitor/browser";
 import { createApiClient } from "../../api/client";
 import { createStockReceivingApi } from "../../api/stock-receiving";
 import { scanItemBarcode } from "../../mobile/item-barcode-scanner";
@@ -13,6 +14,7 @@ const root = document.querySelector<HTMLElement>("#app")!;
 const configKey = "aimatic-stock-receiving-config-v1";
 const draftsKey = "aimatic-stock-receiving-drafts-v1";
 const outboxKey = "aimatic-stock-receiving-outbox-v1";
+const releasesUrl = "https://github.com/BeelBegins/Posapplication/releases/latest";
 let config: OAuthPublicClientConfig | null = null;
 let credentials: OAuthPkceCredentialProvider | null = null;
 let api: ReturnType<typeof createStockReceivingApi> | null = null;
@@ -31,6 +33,7 @@ function keyFor(row: Row): string { return `${text(row, "source_type")}::${text(
 function draftMap(): Record<string, Row> { return jsonRead<Record<string, Row>>(draftsKey, {}); }
 function outbox(): Row[] { return jsonRead<Row[]>(outboxKey, []); }
 function noticeText(message: string, tone = ""): void { notice = message; noticeTone = tone; }
+async function openReleases(): Promise<void> { await Browser.open({ url: releasesUrl, presentationStyle: "popover" }).catch(() => { window.open(releasesUrl, "_blank", "noopener"); }); }
 async function payload(response: Response): Promise<Row> {
   const raw = await response.json().catch(() => ({})) as Row;
   const value = raw.message && typeof raw.message === "object" ? raw.message : raw;
@@ -50,13 +53,15 @@ async function configure(baseUrl: string): Promise<void> {
 }
 
 function setup(error = ""): void {
-  root.innerHTML = `<section class="setup"><div class="setup-card"><div class="mark">SR</div><p class="eyebrow">Stock receiving</p><h1>Connect to ERP</h1><p>Enter your ERP server once. Then sign in with your normal ERP email and password.</p>${error ? `<div class="notice danger">${esc(error)}</div>` : ""}<form id="server-form"><label>Server link<input id="server-url" type="url" required placeholder="https://erp.example.com" autocomplete="url"></label><button class="primary wide">Continue</button></form><small>v${esc(__APP_VERSION__)} · No API key or secret</small></div></section>`;
+  root.innerHTML = `<section class="setup"><div class="setup-card"><div class="mark">SR</div><p class="eyebrow">Stock receiving</p><h1>Connect to ERP</h1><p>Enter your ERP server once. Then sign in with your normal ERP email and password.</p>${error ? `<div class="notice danger">${esc(error)}</div>` : ""}<form id="server-form"><label>Server link<input id="server-url" type="url" required placeholder="https://erp.example.com" autocomplete="url"></label><button class="primary wide">Continue</button></form><button id="check-update" class="secondary wide update-button">Check app update</button><small>v${esc(__APP_VERSION__)} · No API key or secret</small></div></section>`;
   document.querySelector<HTMLFormElement>("#server-form")!.onsubmit = async (event) => { event.preventDefault(); const value = document.querySelector<HTMLInputElement>("#server-url")!.value; try { await configure(value); signIn(); } catch (error) { setup(error instanceof Error ? error.message : "Server connection failed."); } };
+  document.querySelector<HTMLButtonElement>("#check-update")?.addEventListener("click", () => void openReleases());
 }
 
 function signIn(error = ""): void {
-  root.innerHTML = `<section class="setup"><div class="setup-card"><div class="mark">SR</div><p class="eyebrow">Stock receiving</p><h1>Sign in</h1><p>Use your ERP email and password. Your ERP branch permissions still apply.</p>${error ? `<div class="notice danger">${esc(error)}</div>` : ""}<button id="login" class="primary wide">Sign in with ERP</button><button id="change-server" class="secondary wide" style="margin-top:10px">Change server</button></div></section>`;
+  root.innerHTML = `<section class="setup"><div class="setup-card"><div class="mark">SR</div><p class="eyebrow">Stock receiving</p><h1>Sign in</h1><p>Use your ERP email and password. Your ERP branch permissions still apply.</p>${error ? `<div class="notice danger">${esc(error)}</div>` : ""}<button id="login" class="primary wide">Sign in with ERP</button><button id="check-update" class="secondary wide update-button">Check app update</button><button id="change-server" class="secondary wide" style="margin-top:10px">Change server</button><small>v${esc(__APP_VERSION__)}</small></div></section>`;
   document.querySelector<HTMLButtonElement>("#login")!.onclick = async () => { const button = document.querySelector<HTMLButtonElement>("#login")!; button.disabled = true; button.textContent = "Opening ERP login…"; try { await credentials!.login(); await loadContext(); } catch (error) { signIn(error instanceof Error ? error.message : "Sign in failed."); } };
+  document.querySelector<HTMLButtonElement>("#check-update")?.addEventListener("click", () => void openReleases());
   document.querySelector<HTMLButtonElement>("#change-server")!.onclick = () => { localStorage.removeItem(configKey); void credentials?.clear(); setup(); };
 }
 
@@ -99,7 +104,7 @@ async function logout(): Promise<void> {
 
 function queueView(): string {
   const rows = pending;
-  return `<main><header class="top"><div class="identity"><span>${icon("truck", 22)}</span><div><strong>Stock Receiving</strong><small>${esc(text(context, "full_name"))}</small></div></div><div class="top-actions"><span class="${navigator.onLine ? "online" : "offline"}">${navigator.onLine ? "Online" : "Offline"}</span><button id="logout" class="secondary">Log out</button></div></header><section class="page"><div class="title"><div><p class="eyebrow">${esc(text(context, "branches") || "Branch")}</p><h1>Pending receiving</h1><p>Check every item before confirming.</p></div><button id="refresh" class="secondary" ${busy ? "disabled" : ""}>${busy || "Refresh"}</button></div>${notice ? `<div class="notice ${noticeTone}">${esc(notice)}</div>` : ""}<div class="queue">${rows.map((row) => `<button class="queue-card" data-open-type="${esc(text(row, "source_type"))}" data-open-name="${esc(text(row, "name"))}"><span><strong>${esc(text(row, "source_type") === "Purchase Receipt" ? "Purchase Receipt" : "Stock Transfer Note")}</strong><small>${esc(text(row, "name"))}${text(row, "supplier") ? ` · ${esc(text(row, "supplier"))}` : ""}</small><small>${esc(text(row, "date"))} · ${esc(text(row, "branch"))}</small></span><b>${esc(text(row, "item_count"))} items ${icon("chevron-right", 18)}</b></button>`).join("") || `<div class="empty">${icon("check", 42)}<h2>All clear</h2><p>No pending receiving documents for your branch.</p></div>`}</div></section></main>`;
+  return `<main><header class="top"><div class="identity"><span>${icon("truck", 22)}</span><div><strong>Stock Receiving</strong><small>${esc(text(context, "full_name"))}</small></div></div><div class="top-actions"><span class="${navigator.onLine ? "online" : "offline"}">${navigator.onLine ? "Online" : "Offline"}</span><button id="check-update" class="secondary update-button">Update</button><button id="logout" class="secondary">Log out</button></div></header><section class="page"><div class="title"><div><p class="eyebrow">${esc(text(context, "branches") || "Branch")}</p><h1>Pending receiving</h1><p>Check every item before confirming.</p></div><button id="refresh" class="secondary" ${busy ? "disabled" : ""}>${busy || "Refresh"}</button></div>${notice ? `<div class="notice ${noticeTone}">${esc(notice)}</div>` : ""}<div class="queue">${rows.map((row) => `<button class="queue-card" data-open-type="${esc(text(row, "source_type"))}" data-open-name="${esc(text(row, "name"))}"><span><strong>${esc(text(row, "source_type") === "Purchase Receipt" ? "Purchase Receipt" : "Stock Transfer Note")}</strong><small>${esc(text(row, "name"))}${text(row, "supplier") ? ` · ${esc(text(row, "supplier"))}` : ""}</small><small>${esc(text(row, "date"))} · ${esc(text(row, "branch"))}</small></span><b>${esc(text(row, "item_count"))} items ${icon("chevron-right", 18)}</b></button>`).join("") || `<div class="empty">${icon("check", 42)}<h2>All clear</h2><p>No pending receiving documents for your branch.</p></div>`}</div></section></main>`;
 }
 
 function documentView(): string {
@@ -142,6 +147,7 @@ async function syncOutbox(): Promise<void> {
 }
 
 function bind(): void {
+  document.querySelector<HTMLButtonElement>("#check-update")?.addEventListener("click", () => void openReleases());
   document.querySelector<HTMLButtonElement>("#logout")?.addEventListener("click", () => void logout());
   document.querySelector<HTMLButtonElement>("#refresh")?.addEventListener("click", async () => { try { await refreshPending(); noticeText("Queue refreshed.", "success"); render(); } catch (error) { noticeText(error instanceof Error ? error.message : "Refresh failed.", "danger"); render(); } });
   document.querySelectorAll<HTMLButtonElement>("[data-open-type]").forEach((button) => button.addEventListener("click", () => void openDocument(button.dataset.openType!, button.dataset.openName!)));
