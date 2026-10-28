@@ -101,6 +101,9 @@ export interface ShiftPaymentRow {
 export interface ShiftSummary {
   openingEntry: string; posProfile: string; user: string; company: string; periodStart: string; postingDate: string; status: string;
   payments: ShiftPaymentRow[]; invoiceCount: number; netSales: number; refunds: number; totalOpening: number; totalExpected: number; isEstimate: boolean;
+  systemSales?: number; collectedSales?: number; loyaltyAmount?: number; loyaltyPointsRedeemed?: number;
+  loyaltyRedemptionCount?: number; unhonoredLoyaltyAmount?: number; unhonoredLoyaltyPoints?: number;
+  unhonoredLoyaltyCount?: number; reconciliationGap?: number; otherAdjustment?: number;
 }
 
 export interface ReleaseEntry {
