@@ -250,7 +250,14 @@ export function createPosSessionCore(deps: PosCoreDeps) {
       openingEntry: entry, posProfile: textValue(session, "pos_profile") || settings.posProfile, user: textValue(session, "user"),
       company: textValue(session, "company"), periodStart: textValue(session, "period_start_date") || textValue(session, "posting_date") || textValue(session, "creation"),
       postingDate: textValue(session, "posting_date"), status: textValue(session, "status") || "Open",
-      payments, invoiceCount, netSales, refunds: deps.db.getShiftRefundTotal(entry), totalOpening: payments.reduce((s, p) => s + p.opening_amount, 0), totalExpected: payments.reduce((s, p) => s + p.expected_amount, 0), isEstimate: true
+      payments, invoiceCount, netSales, refunds: deps.db.getShiftRefundTotal(entry), totalOpening: payments.reduce((s, p) => s + p.opening_amount, 0), totalExpected: payments.reduce((s, p) => s + p.expected_amount, 0), isEstimate: true,
+      systemSales: netSales,
+      collectedSales: netSales,
+      loyaltyAmount: 0,
+      loyaltyPointsRedeemed: 0,
+      loyaltyRedemptionCount: 0,
+      reconciliationGap: 0,
+      otherAdjustment: 0
     };
     return { success: true, summary: applyLocalRefundBreakdown(summary, entry, false), error: null };
   }

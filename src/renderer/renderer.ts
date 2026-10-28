@@ -106,7 +106,7 @@ interface ReleaseEntry { tag: string; version: string; name: string; notes: stri
 interface ShiftPaymentRow { mode_of_payment: string; opening_amount: number; collected_amount: number; expected_amount: number; sale_amount?: number; refund_amount?: number; net_movement?: number; }
 interface CashierLoginResult { success: boolean; user: string; fullName: string; roles: string[]; allowedPosProfiles: string[]; defaultPosProfile: string; canStartShift: boolean; canRefund: boolean; canCloseShift: boolean; canVoidItems: boolean; canOfflineSale: boolean; offlineLoginExpiresAt: string; requirePinSetup: boolean; offlineCached?: boolean; offlineLogin?: boolean; error: string | null; }
 interface CashierSession extends CashierLoginResult { loginTime: string; }
-interface ShiftSummary { openingEntry: string; posProfile: string; user: string; company: string; periodStart: string; postingDate: string; status: string; payments: ShiftPaymentRow[]; invoiceCount: number; netSales: number; refunds: number; totalOpening: number; totalExpected: number; isEstimate: boolean; }
+interface ShiftSummary { openingEntry: string; posProfile: string; user: string; company: string; periodStart: string; postingDate: string; status: string; payments: ShiftPaymentRow[]; invoiceCount: number; netSales: number; refunds: number; totalOpening: number; totalExpected: number; isEstimate: boolean; systemSales?: number; collectedSales?: number; loyaltyAmount?: number; loyaltyPointsRedeemed?: number; loyaltyRedemptionCount?: number; unhonoredLoyaltyAmount?: number; unhonoredLoyaltyPoints?: number; unhonoredLoyaltyCount?: number; reconciliationGap?: number; otherAdjustment?: number; }
 interface ShiftHistoryRow { openingEntry: string; closingEntry: string | null; posProfile: string; cashier: string; company: string; openedAt: string | null; closedAt: string | null; openingCash: number; expectedCash: number; actualCash: number; difference: number; netSales: number; status: string; summary: Record<string, unknown> | null; createdAt: string; }
 
 interface HeldSaleSummary { id: number; terminalInvoiceId: string; displayName: string; customer: string; customerName: string; posProfile: string; openingEntry: string; itemCount: number; estimatedTotal: number; createdAt: string; updatedAt: string; status: string; }
@@ -990,13 +990,31 @@ function normalizeShiftSummary(summary: ShiftSummary): ShiftSummary {
     const expected = money2(opening + net);
     return { ...p, opening_amount: opening, collected_amount: net, sale_amount: sale, refund_amount: refund, net_movement: net, expected_amount: expected };
   });
+  const paymentCollected = money2(payments.reduce((sum, p) => sum + (p.net_movement ?? 0), 0));
+  const explicitCollected = shiftNumber(summary.collectedSales);
+  const collectedSales = money2(explicitCollected ?? paymentCollected);
+  const explicitSystem = shiftNumber(summary.systemSales);
+  const loyaltyAmount = money2(shiftNumber(summary.loyaltyAmount) ?? 0);
+  const systemSales = money2(explicitSystem ?? (summary.systemSales === undefined ? collectedSales + loyaltyAmount : collectedSales));
+  const reconciliationGap = money2(shiftNumber(summary.reconciliationGap) ?? (systemSales - collectedSales));
+  const otherAdjustment = money2(shiftNumber(summary.otherAdjustment) ?? (reconciliationGap - loyaltyAmount));
   return {
     ...summary,
     payments,
     netSales: money2(payments.reduce((sum, p) => sum + (p.sale_amount ?? 0), 0)),
     refunds: money2(payments.reduce((sum, p) => sum + (p.refund_amount ?? 0), 0)),
     totalOpening: money2(payments.reduce((sum, p) => sum + p.opening_amount, 0)),
-    totalExpected: money2(payments.reduce((sum, p) => sum + p.expected_amount, 0))
+    totalExpected: money2(payments.reduce((sum, p) => sum + p.expected_amount, 0)),
+    systemSales,
+    collectedSales,
+    loyaltyAmount,
+    loyaltyPointsRedeemed: Math.round(shiftNumber(summary.loyaltyPointsRedeemed) ?? 0),
+    loyaltyRedemptionCount: Math.round(shiftNumber(summary.loyaltyRedemptionCount) ?? 0),
+    unhonoredLoyaltyAmount: money2(shiftNumber(summary.unhonoredLoyaltyAmount) ?? 0),
+    unhonoredLoyaltyPoints: Math.round(shiftNumber(summary.unhonoredLoyaltyPoints) ?? 0),
+    unhonoredLoyaltyCount: Math.round(shiftNumber(summary.unhonoredLoyaltyCount) ?? 0),
+    reconciliationGap,
+    otherAdjustment
   };
 }
 function reconRows(): { mode: string; expected: number; opening: number; actual: number }[] {
@@ -1068,11 +1086,15 @@ function buildShiftSummaryHtml(): string {
     <div>Printed: ${new Date().toLocaleString()}</div>
     <hr/>
     ${line("Opening", opening)}
-    ${line("Sales", sales)}
+    ${line("System Sales", s?.systemSales ?? sales)}
+    ${line("Loyalty Redeemed", s?.loyaltyAmount ?? 0)}
+    ${line("Loyalty Points", s?.loyaltyPointsRedeemed ?? 0)}
+    ${line("Collected Sales", s?.collectedSales ?? sales)}
     ${line("Refunds", refunds)}
     ${line("Expected", expected)}
     ${line("Actual (counted)", actual)}
     ${line("Difference", difference, true)}
+    ${line("Other Adjustment", s?.otherAdjustment ?? 0)}
     ${receivedSection}
     <hr/>
     <div style="text-align:center;font-size:11px;font-weight:800">Difference by mode</div>
@@ -1122,6 +1144,10 @@ async function showCloseShift(): Promise<void> {
   setText("#close-opened-at", s.periodStart ? new Date(s.periodStart).toLocaleString() : "—");
   setText("#close-invoice-count", String(s.invoiceCount));
   setText("#close-net-sales", fmtMoney(s.netSales));
+  setText("#close-system-sales", fmtMoney(s.systemSales ?? s.netSales));
+  setText("#close-loyalty-redeemed", `${fmtMoney(s.loyaltyAmount ?? 0)} (${s.loyaltyPointsRedeemed ?? 0} pts)`);
+  setText("#close-collected-sales", fmtMoney(s.collectedSales ?? s.netSales));
+  setText("#close-other-adjustment", fmtMoney(s.otherAdjustment ?? 0));
   const note = document.querySelector<HTMLElement>("#close-estimate-note"); if (note) note.hidden = !s.isEstimate;
   const heldCount = await window.posAPI.listHeldSales().then((rows) => rows.length).catch(() => 0);
   if (message) message.textContent = queue.queued > 0
@@ -1244,7 +1270,14 @@ function shiftReportText(r: ShiftHistoryRow): string {
     const actual = c ? Number(c.closing_amount) || 0 : 0;
     lines.push(`${p.mode_of_payment.padEnd(18)} ${fmtMoney(p.opening_amount).padStart(8)} ${fmtMoney(p.expected_amount).padStart(9)} ${fmtMoney(actual).padStart(8)} ${fmtMoney(actual - p.expected_amount).padStart(11)}`);
   }
-  lines.push(``, `Net Sales: ${fmtMoney(r.netSales)}`, `Cash Difference: ${fmtMoney(r.difference)}`);
+  lines.push(
+    ``,
+    `System Sales: ${fmtMoney(summary?.systemSales ?? r.netSales)}`,
+    `Loyalty Redeemed: ${fmtMoney(summary?.loyaltyAmount ?? 0)} (${summary?.loyaltyPointsRedeemed ?? 0} pts)`,
+    `Collected Sales: ${fmtMoney(summary?.collectedSales ?? r.netSales)}`,
+    `Other Adjustment: ${fmtMoney(summary?.otherAdjustment ?? 0)}`,
+    `Cash Difference: ${fmtMoney(r.difference)}`
+  );
   return lines.join("\n");
 }
 function showShiftHistorySummary(r: ShiftHistoryRow): void { void appAlert(shiftReportText(r)); }
