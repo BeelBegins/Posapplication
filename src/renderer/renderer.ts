@@ -1052,7 +1052,7 @@ function buildShiftSummaryHtml(): string {
   const branch = document.querySelector<HTMLInputElement>("#branch")?.value ?? "";
   const cashier = s?.user || (document.querySelector<HTMLElement>("#pos-cashier")?.textContent ?? "—");
   const opened = s?.periodStart ? new Date(s.periodStart).toLocaleString() : "—";
-  const line = (label: string, value: number, bold = false) => `<div style="display:flex;justify-content:space-between;font-weight:${bold ? 900 : 700}">${bold ? "<strong>" : ""}<span>${esc(label)}</span><span>${value.toFixed(2)}</span>${bold ? "</strong>" : ""}</div>`;
+  const line = (label: string, value: number, bold = false) => `<div class="shift-summary-line" style="font-weight:${bold ? 900 : 700}"><span class="shift-summary-label">${esc(label)}</span><span class="shift-summary-value">${value.toFixed(2)}</span></div>`;
   // Payment mix by mode (Cash / Credit Card / …) — same split Sales Dashboard shows.
   const receivedByMode = (s?.payments ?? [])
     .map((p) => ({
@@ -1063,20 +1063,22 @@ function buildShiftSummaryHtml(): string {
   const receivedSection = receivedByMode.length
     ? `<hr/><div style="text-align:center;font-size:11px;font-weight:800">Amount Received by Mode</div>${receivedByMode.map((p) => line(p.mode, p.amount)).join("")}`
     : "";
-  const perMode = rows.map((r) => `<div style="display:flex;justify-content:space-between;font-weight:700"><span>${esc(r.mode)}</span><span>${money2(r.actual - r.expected).toFixed(2)}</span></div>`).join("");
-  // @page + print-color-adjust mirror receiptPrintCss() above: without them,
-  // this print job never registers as an 80mm receipt (wrong printer-driver
-  // defaults for thermal darkness/media) and Chromium is free to lighten
-  // colors for print - both were confirmed causes of shift summaries
-  // printing very light and ignoring the 80mm roll width. No explicit width
-  // on the body content itself, unlike the invoice receipt CSS below, so
-  // there's nothing here that can repeat that same margin-vs-width overflow.
+  const perMode = rows.map((r) => line(r.mode, money2(r.actual - r.expected))).join("");
+  // Keep shift summaries on the same constrained 80mm canvas as receipts.
+  // Without an explicit border-box width, Chromium can lay out the body at
+  // the full page width and the printer clips the rightmost amount digits.
   const style = `<style>
-    @page{size:80mm auto;margin:2mm 0.11mm}
-    @media print{html,body{margin:0!important;padding:0!important;background:#fff!important}}
-    html,body{color:#000!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+    @page{size:80mm auto;margin:0}
+    *{box-sizing:border-box}
+    @media print{html,body{width:80mm!important;max-width:80mm!important;margin:0!important;padding:0!important;background:#fff!important;overflow:visible!important}}
+    html,body{width:80mm;max-width:80mm;margin:0;padding:0;color:#000!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+    .shift-summary{width:80mm;max-width:80mm;margin:0 auto;padding:2mm 2mm 3mm;font:700 12px/1.5 monospace;color:#000;overflow:visible}
+    .shift-summary-line{display:flex;align-items:flex-start;gap:2mm;width:100%;min-width:0}
+    .shift-summary-label{flex:1 1 auto;min-width:0;overflow-wrap:anywhere;word-break:break-word}
+    .shift-summary-value{flex:0 0 auto;min-width:0;white-space:nowrap;text-align:right}
+    .shift-summary hr{border:0;border-top:1px dotted #000;margin:2mm 0}
   </style>`;
-  const body = `<div style="font:700 12px/1.5 monospace;padding:2mm 0;color:#000">
+  const body = `<div class="shift-summary">
     <div style="text-align:center;font-weight:900"><strong>${esc(branch || "POS")}</strong><br/>SHIFT SUMMARY</div>
     <hr/>
     <div>Opening Entry: ${esc(s?.openingEntry ?? "—")}</div>
