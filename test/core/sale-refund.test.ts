@@ -101,7 +101,10 @@ test("submitOnlineSale marks the sale Failed and does not queue on a non-network
 
 test("submitPosRefund logs the refund amount and payment mode locally on a successful response", async () => {
   const fake = freshFake();
-  const stubFetch = (async () => ({
+  let submittedBody: Record<string, unknown> = {};
+  const stubFetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    submittedBody = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+    return {
     ok: true, status: 200, statusText: "OK",
     text: async () => JSON.stringify({
       message: {
@@ -110,7 +113,8 @@ test("submitPosRefund logs the refund amount and payment mode locally on a succe
         payments: [{ mode_of_payment: "Cash" }]
       }
     })
-  })) as unknown as typeof fetch;
+    };
+  }) as unknown as typeof fetch;
   const core = buildCore(fake, stubFetch);
   const result = await core.submitPosRefund({ pos_opening_entry: "OE-1", payments: [{ mode_of_payment: "Cash" }] });
   assert.equal(result.error, null);
@@ -118,4 +122,22 @@ test("submitPosRefund logs the refund amount and payment mode locally on a succe
   assert.equal(fake.refundLog[0].returnInvoice, "RET-INV-1");
   assert.equal(fake.refundLog[0].amount, 150);
   assert.equal(fake.refundLog[0].mode, "Cash");
+  assert.equal(submittedBody.pos_profile, "Main");
+});
+
+test("getInvoiceForRefund sends an exact cross-terminal bill reference", async () => {
+  const fake = freshFake();
+  let requestedUrl = "";
+  const stubFetch = (async (input: RequestInfo | URL) => {
+    requestedUrl = String(input);
+    return {
+      ok: true, status: 200, statusText: "OK",
+      json: async () => ({ message: { original_invoice: "ACC-PSINV-2026-00001", any_remaining: true, items: [] } })
+    };
+  }) as unknown as typeof fetch;
+  const core = buildCore(fake, stubFetch);
+  const result = await core.getInvoiceForRefund(" FBR-2026-00001 ");
+  assert.equal(result.error, null);
+  assert.match(requestedUrl, /invoice_reference=FBR-2026-00001/);
+  assert.equal(result.data?.original_invoice, "ACC-PSINV-2026-00001");
 });

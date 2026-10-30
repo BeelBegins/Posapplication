@@ -280,6 +280,8 @@ html[data-platform="electron"] .window-controls { display: flex; }
 .op-header h2 { margin: 0; }
 .op-filters { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; }
 .op-filters input { width: auto; min-width: 180px; flex: 0 0 auto; margin: 0; }
+.history-refund-lookup { padding-top: 4px; border-top: 1px solid var(--color-border); }
+.history-refund-lookup::before { content: "Refund a bill from any terminal"; flex: 1 0 100%; color: var(--color-text-muted); font-size: 0.8rem; font-weight: 700; }
 .op-list { display: grid; gap: 10px; }
 .op-card { display: grid; grid-template-columns: 1fr auto; gap: 8px 16px; padding: 14px 16px; border: 1px solid var(--color-border); border-radius: 10px; background: var(--color-surface); }
 .op-card .op-card-main { display: grid; gap: 4px; }

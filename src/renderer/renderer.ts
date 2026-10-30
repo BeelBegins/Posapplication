@@ -2352,6 +2352,14 @@ async function openRefund(posInvoice:string):Promise<void>{
   showScreen("refund");
 }
 
+async function findRemoteRefundInvoice():Promise<void>{
+  const input=document.querySelector<HTMLInputElement>("#history-refund-reference");
+  const reference=input?.value.trim()??"";
+  const message=document.querySelector<HTMLElement>("#history-message");
+  if(!reference){if(message)message.textContent="Enter the ERP invoice number, FBR invoice number, or terminal bill ID.";input?.focus();return;}
+  await openRefund(reference);
+}
+
 async function renderRefundScreen():Promise<void>{
   if(!refundData)return;
   const d=refundData;
@@ -2545,7 +2553,7 @@ async function verifyAndSubmitRefund(items:{original_row_name:string;qty:number}
   }
   refundSubmitting=true;if(msg)msg.textContent="Submitting Refund…";
   // terminal_refund_id is NOT regenerated on retry — idempotency is server-enforced.
-  const payload={terminal_refund_id:refundTerminalId,original_invoice:refundData.original_invoice,pos_opening_entry:sessionState.openingEntry,cashier_user:cashierSession.user,cashier_full_name:cashierSession.fullName||cashierSession.user,offline_authenticated:false,offline_auth_method:"",local_offline_session_id:"",reason,items,payments:[{mode_of_payment:mode,amount:0}],supervisor_token:refundSupervisorToken??""};
+  const payload={terminal_refund_id:refundTerminalId,original_invoice:refundData.original_invoice,pos_profile:sessionState.posProfile,pos_opening_entry:sessionState.openingEntry,cashier_user:cashierSession.user,cashier_full_name:cashierSession.fullName||cashierSession.user,offline_authenticated:false,offline_auth_method:"",local_offline_session_id:"",reason,items,payments:[{mode_of_payment:mode,amount:0}],supervisor_token:refundSupervisorToken??""};
   const result=await window.posAPI.submitPosRefund(payload);
   refundSubmitting=false;if(btn)btn.disabled=false;
   const res=result.result;
@@ -4510,6 +4518,8 @@ function initializeRenderer(): void {
   document.querySelector<HTMLButtonElement>('#history-back')?.addEventListener('click', () => void goToPos());
   document.querySelector<HTMLButtonElement>('#history-refresh')?.addEventListener('click', () => void renderSalesHistory());
   document.querySelector<HTMLInputElement>('#history-search')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); void renderSalesHistory(); } });
+  document.querySelector<HTMLButtonElement>('#history-find-refund')?.addEventListener('click', () => void findRemoteRefundInvoice());
+  document.querySelector<HTMLInputElement>('#history-refund-reference')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); void findRemoteRefundInvoice(); } });
   document.querySelector<HTMLButtonElement>('#session-hold')?.addEventListener('click', () => void holdCurrentSale());
   // Refund controls (registered once).
   document.querySelector<HTMLButtonElement>('#refund-back')?.addEventListener('click', () => void openSalesHistory());
