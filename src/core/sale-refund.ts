@@ -289,7 +289,8 @@ export function createSaleRefundCore(
     if (!hasUsableCredentials(deps, s) || !s.erpnextUrl) return { data: null, error: "Online connection required to load the invoice." };
     try {
       const base = new URL(s.erpnextUrl).toString().replace(/\/+$/, "");
-      const response = await authFetch(deps, `${base}/api/method/aimatic.offline_pos.api.get_pos_invoice_for_refund?invoice_name=${encodeURIComponent(invoiceName)}`);
+      const query = new URLSearchParams({ invoice_reference: invoiceName.trim() });
+      const response = await authFetch(deps, `${base}/api/method/aimatic.offline_pos.api.get_pos_invoice_for_refund?${query.toString()}`);
       if (!response.ok) return { data: null, error: await getResponseError(response) };
       const body = await response.json() as { message?: unknown };
       const data = asRecord(body.message);

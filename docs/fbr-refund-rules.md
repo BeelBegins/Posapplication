@@ -37,6 +37,13 @@ Offline sale is not a final FBR invoice until server sync succeeds.
 
 Refund remains online-only.
 
+Sales History is local to each terminal. To refund a bill created on another
+cashier's terminal, use the cross-terminal lookup with the exact ERP POS
+Invoice number, FBR invoice number, or terminal bill ID. The server resolves
+the reference and still enforces POS Invoice read permission, same-Company
+posting, active refunding-terminal shift, cashier authorization, remaining
+quantity, and idempotency.
+
 Refund must use ERPNext server endpoint:
 
 ```text

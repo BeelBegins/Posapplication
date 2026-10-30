@@ -568,6 +568,12 @@ Client flow:
 7. Server creates return POS Invoice and FBR credit note.
 8. Client shows refund receipt.
 
+Sales History is terminal-local, so the client also exposes an explicit
+server lookup for an exact ERP POS Invoice number, FBR invoice number, or
+terminal bill ID. The server resolves one matching submitted POS Invoice and
+then applies the same read permission and refund authorization rules; it never
+performs a fuzzy or unrestricted invoice search.
+
 Server must enforce:
 
 - cashier permission
