@@ -61,6 +61,8 @@ contextBridge.exposeInMainWorld("posAPI", {
   ,searchCatalog: (query: string) => ipcRenderer.invoke("catalog:search", query)
   ,onCatalogProgress: (callback: (message: string) => void) => ipcRenderer.on("catalog:progress", (_event, message: string) => callback(message))
   ,lookupCatalog: (query: string) => ipcRenderer.invoke("catalog:lookup", query)
+  ,getScaleRules: () => ipcRenderer.invoke("scale:get-rules")
+  ,saveScaleRules: (rules: unknown) => ipcRenderer.invoke("scale:save-rules", rules)
   ,loadCart: () => ipcRenderer.invoke("cart:load")
   ,saveCart: (lines: unknown[]) => ipcRenderer.invoke("cart:save", lines)
   ,syncCustomers: (mode?: string) => ipcRenderer.invoke("customers:sync", mode)

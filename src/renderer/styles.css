@@ -975,3 +975,16 @@ dialog input:focus-visible,dialog select:focus-visible,dialog textarea:focus-vis
   .receipt-body, .receipt-frame { max-height: none; height: auto; border: 0; border-radius: 0; box-shadow: none; }
   .receipt-body, .receipt-totals, .receipt-fbr { break-inside: avoid; page-break-inside: avoid; }
 }
+
+/* Weighing scale rules (Settings -> Printer & Finish) */
+.scale-settings { grid-column: 1 / -1; display: grid; gap: 12px; margin: 0; padding: 14px 16px; border: 1px solid var(--color-border-strong); border-radius: 10px; }
+.scale-settings legend { padding: 0 4px; font-size: 0.85rem; font-weight: 700; }
+.scale-settings .card-meta { margin: 0; }
+.scale-rules { display: grid; gap: 10px; }
+.scale-rule { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px 10px; align-items: end; padding: 10px; border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-surface-muted); }
+.scale-rule label { font-size: 0.78rem; }
+.scale-rule input, .scale-rule select { margin-top: 4px; padding: 7px 8px; }
+.scale-rule .scale-rule-check { display: flex; align-items: center; gap: 6px; padding-bottom: 8px; }
+.scale-rule .scale-rule-check input { width: auto; margin: 0; }
+.scale-test { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 10px; align-items: end; }
+.scale-test .card-meta { grid-column: 1 / -1; margin: 0; }

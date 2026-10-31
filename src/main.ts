@@ -1,4 +1,6 @@
 import { app, BrowserWindow, ipcMain, screen, shell } from "electron";
+import { lookupWithScale, loadScaleRules, SCALE_RULES_META_KEY } from "./core/scale-lookup";
+import { normalizeScaleRules } from "./domain/weighted-barcode";
 import { autoUpdater } from "electron-updater";
 import path from "node:path";
 import { writeFile } from "node:fs/promises";
@@ -922,7 +924,9 @@ app.whenReady().then(() => {
   ipcMain.handle("fbr:sync", (_event, mode) => core.syncFbrConfig(mode === "full" ? "full" : "auto"));
   ipcMain.handle("fbr:state", () => getFbrSyncState());
   ipcMain.handle("catalog:search", (_event, query) => { const profile = asRecord(getPosBootstrap(loadSettings().posProfile)?.pos_profile); return searchCatalog(String(query), textValue(profile, "warehouse"), textValue(profile, "selling_price_list")); });
-  ipcMain.handle("catalog:lookup", (_event, query) => { const profile = asRecord(getPosBootstrap(loadSettings().posProfile)?.pos_profile); return lookupCatalog(String(query), textValue(profile, "warehouse"), textValue(profile, "selling_price_list")); });
+  ipcMain.handle("catalog:lookup", (_event, query) => { const profile = asRecord(getPosBootstrap(loadSettings().posProfile)?.pos_profile); return lookupWithScale({ getMeta, lookupCatalog }, String(query), textValue(profile, "warehouse"), textValue(profile, "selling_price_list")); });
+  ipcMain.handle("scale:get-rules", () => loadScaleRules({ getMeta }));
+  ipcMain.handle("scale:save-rules", (_event, rules) => { const result = normalizeScaleRules(rules); if (!result.error) setMeta(SCALE_RULES_META_KEY, JSON.stringify(result.rules)); return { ok: !result.error, error: result.error, rules: result.rules }; });
   ipcMain.handle("cart:load", () => { const id = core.getCartIdentity(); return loadCartState(id.hardwareId, id.openingEntry); });
   ipcMain.handle("cart:save", (_event, lines) => { const id = core.getCartIdentity(); saveCartState(id.hardwareId, id.openingEntry, Array.isArray(lines) ? lines : []); });
   ipcMain.on("customer-display:cart-update", (_event, payload) => {

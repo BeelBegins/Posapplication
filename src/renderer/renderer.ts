@@ -38,7 +38,9 @@ interface PosAPI {
   getCatalogTotals: () => Promise<CatalogTotals>;
   searchCatalog: (query: string) => Promise<CatalogSearchResult[]>;
   onCatalogProgress: (callback: (message: string) => void) => void;
-  lookupCatalog: (query: string) => Promise<{ exact: CatalogSearchResult | null; results: CatalogSearchResult[] }>;
+  lookupCatalog: (query: string) => Promise<{ exact: CatalogSearchResult | null; results: CatalogSearchResult[]; scaleError?: string }>;
+  getScaleRules: () => Promise<ScaleRuleView[]>;
+  saveScaleRules: (rules: ScaleRuleView[]) => Promise<{ ok: boolean; error: string | null; rules: ScaleRuleView[] }>;
   loadCart: () => Promise<{ cartKey: string; lines: CartLine[] }>;
   saveCart: (lines: CartLine[]) => Promise<void>;
   syncCustomers: (mode?: "auto" | "full") => Promise<{ success: boolean; state: {count:number;lastSynced:string|null}; error:string|null }>;
@@ -176,8 +178,9 @@ interface PosSessionSummary {
 }
 
 interface CatalogTotals { items: number; prices: number; barcodes: number; stockRows: number; lastSynced: string | null; }
-interface CatalogSearchResult { itemCode: string; itemName: string; barcode: string | null; uom: string; conversionFactor: number; sellingPrice: number | null; currency: string | null; actualStock: number | null; warehouse: string | null; mrp: number | null; }
+interface CatalogSearchResult { scaleQuantity?: number; scaleLabel?: string; itemCode: string; itemName: string; barcode: string | null; uom: string; conversionFactor: number; sellingPrice: number | null; currency: string | null; actualStock: number | null; warehouse: string | null; mrp: number | null; }
 interface CartLine extends CatalogSearchResult { quantity: number; }
+interface ScaleRuleView { name: string; prefix: string; itemLength: number; valueLength: number; kind: "weight" | "price" | "count"; unit: "g" | "kg"; decimals: number; checkDigit: boolean; }
 interface CustomerResult { name:string; customer_name:string; customer_group:string; mobile_no:string; email_id:string; tax_id:string; custom_legacy_customer_code?:string; }
 interface PaymentRow { method:string; amount:number; }
 
@@ -2843,7 +2846,7 @@ async function afterCartMutation(message: string): Promise<void> {
   focusCart(true);
 }
 
-async function addToCart(item: CatalogSearchResult): Promise<void> { const index = cartLines.findIndex((line) => line.itemCode === item.itemCode && line.uom === item.uom); let message = "Item added"; if (index >= 0) { cartLines[index].quantity += 1; selectedCartIndex = index; message = "Quantity changed"; } else { cartLines.push({ ...item, quantity: 1 }); selectedCartIndex = cartLines.length - 1; } await afterCartMutation(message); }
+async function addToCart(item: CatalogSearchResult): Promise<void> { if (item.scaleQuantity) { const { scaleQuantity, scaleLabel, ...row } = item; void scaleLabel; cartLines.push({ ...row, quantity: scaleQuantity }); selectedCartIndex = cartLines.length - 1; await afterCartMutation(`Scale item added: ${scaleQuantity} ${item.uom}`); return; } const index = cartLines.findIndex((line) => line.itemCode === item.itemCode && line.uom === item.uom); let message = "Item added"; if (index >= 0) { cartLines[index].quantity += 1; selectedCartIndex = index; message = "Quantity changed"; } else { cartLines.push({ ...item, quantity: 1 }); selectedCartIndex = cartLines.length - 1; } await afterCartMutation(message); }
 
 // Single choke point for every path that fully removes a cart row (F8/Delete,
 // the cart-remove button, quantity dropping to/being set to 0) - gates on a
@@ -2951,6 +2954,7 @@ async function scanCartInput(): Promise<void> {
       scanReadyAt = Date.now() + SCAN_SETTLE_MS;
       return;
     }
+    if (lookup.scaleError) { playBarcodeFailBeep(); clearCartSearch(); await appAlert(lookup.scaleError, "Scale Label"); focusCart(true); scanReadyAt = Date.now() + SCAN_SETTLE_MS; return; }
     if (isOnline()) {
       const resolved = await window.posAPI.resolveCatalogItem(query);
       if (resolved.exact) {
@@ -3434,6 +3438,61 @@ async function continueFromConnectionStep(button: HTMLButtonElement): Promise<vo
   }
 }
 
+// --- Weighing scale label rules (Settings -> Printer & Finish) --------------
+let scaleRulesDraft: ScaleRuleView[] = [];
+function scaleRuleField(label: string, input: HTMLElement): HTMLLabelElement { const l = document.createElement("label"); l.append(label, input); return l; }
+function renderScaleRules(): void {
+  const box = document.querySelector<HTMLElement>("#scale-rules"); if (!box) return;
+  box.replaceChildren(...scaleRulesDraft.map((rule, index) => {
+    const row = document.createElement("div"); row.className = "scale-rule";
+    const text = (value: string, onChange: (v: string) => void, type = "text") => { const i = document.createElement("input"); i.type = type; i.value = value; i.addEventListener("input", () => onChange(i.value)); return i; };
+    const select = (options: [string, string][], value: string, onChange: (v: string) => void) => { const s = document.createElement("select"); for (const [v, label] of options) s.add(new Option(label, v)); s.value = value; s.addEventListener("change", () => onChange(s.value)); return s; };
+    const check = document.createElement("label"); check.className = "scale-rule-check";
+    const box2 = document.createElement("input"); box2.type = "checkbox"; box2.checked = rule.checkDigit; box2.addEventListener("change", () => { rule.checkDigit = box2.checked; });
+    check.append(box2, "Check digit");
+    const remove = document.createElement("button"); remove.type = "button"; remove.className = "secondary-button"; remove.textContent = "Remove";
+    remove.addEventListener("click", () => { scaleRulesDraft.splice(index, 1); renderScaleRules(); });
+    row.append(
+      scaleRuleField("Name", text(rule.name, (v) => { rule.name = v; })),
+      scaleRuleField("Prefix", text(rule.prefix, (v) => { rule.prefix = v.replace(/\D/g, ""); })),
+      scaleRuleField("Item digits", text(String(rule.itemLength), (v) => { rule.itemLength = Number(v); }, "number")),
+      scaleRuleField("Value digits", text(String(rule.valueLength), (v) => { rule.valueLength = Number(v); }, "number")),
+      scaleRuleField("Value is", select([["weight", "Weight"], ["price", "Price"], ["count", "Piece count"]], rule.kind, (v) => { rule.kind = v as ScaleRuleView["kind"]; })),
+      scaleRuleField("Weight unit", select([["g", "Gram"], ["kg", "Kg"]], rule.unit, (v) => { rule.unit = v as ScaleRuleView["unit"]; })),
+      scaleRuleField("Decimals", text(String(rule.decimals), (v) => { rule.decimals = Number(v); }, "number")),
+      check, remove);
+    return row;
+  }));
+}
+async function loadScaleRulesIntoForm(): Promise<void> {
+  scaleRulesDraft = (await window.posAPI.getScaleRules().catch(() => [])).map((rule) => ({ ...rule }));
+  renderScaleRules();
+}
+function initScaleSettings(): void {
+  void loadScaleRulesIntoForm();
+  const message = (text: string, isError = false) => { const el = document.querySelector<HTMLElement>("#scale-message"); if (el) { el.textContent = text; el.classList.toggle("error", isError); } };
+  document.querySelector<HTMLButtonElement>("#scale-add-rule")?.addEventListener("click", () => {
+    scaleRulesDraft.push({ name: `Scale ${scaleRulesDraft.length + 1}`, prefix: "20", itemLength: 5, valueLength: 5, kind: "weight", unit: "g", decimals: 0, checkDigit: true });
+    renderScaleRules();
+  });
+  document.querySelector<HTMLButtonElement>("#scale-save-rules")?.addEventListener("click", async () => {
+    const result = await window.posAPI.saveScaleRules(scaleRulesDraft);
+    if (result.ok) { scaleRulesDraft = result.rules.map((rule) => ({ ...rule })); renderScaleRules(); message(`Saved ${result.rules.length} scale rule(s).`); } else message(result.error ?? "Could not save scale rules.", true);
+  });
+  const run = async () => {
+    const out = document.querySelector<HTMLElement>("#scale-test-result"); if (!out) return;
+    const code = document.querySelector<HTMLInputElement>("#scale-test-input")?.value.trim() ?? "";
+    if (!code) { out.textContent = "Enter a barcode to test."; return; }
+    const lookup = await window.posAPI.lookupCatalog(code);
+    if (lookup.scaleError) out.textContent = `Not usable: ${lookup.scaleError}`;
+    else if (lookup.exact?.scaleQuantity) { const q = lookup.exact.scaleQuantity; const price = lookup.exact.sellingPrice === null ? "no price" : `${(q * lookup.exact.sellingPrice).toFixed(2)} ${lookup.exact.currency ?? ""}`; out.textContent = `Scale label: ${lookup.exact.itemName} (${lookup.exact.itemCode}) × ${q} ${lookup.exact.uom} = ${price}. Rules are saved ones — press Save first after editing.`; }
+    else if (lookup.exact) out.textContent = `Normal barcode (not a scale label): ${lookup.exact.itemName}.`;
+    else out.textContent = "No item found for this barcode.";
+  };
+  document.querySelector<HTMLButtonElement>("#scale-test-run")?.addEventListener("click", () => void run());
+  document.querySelector<HTMLInputElement>("#scale-test-input")?.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); void run(); } });
+}
+
 function initSettingsSteps(): void {
   document.querySelectorAll<HTMLButtonElement>("[data-settings-step]").forEach((button) => {
     button.addEventListener("click", () => showSettingsStep(button.dataset.settingsStep as SettingsStep));
@@ -3450,6 +3509,7 @@ function initSettingsSteps(): void {
   });
   // Enter inside an earlier step moves to the next step instead of submitting Save and Complete Setup.
   document.querySelector<HTMLFormElement>("#settings-form")?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && event.target instanceof HTMLElement && event.target.closest("#scale-settings")) { event.preventDefault(); return; } // editing scale rules must not submit Save and Complete Setup
     if (event.key !== "Enter" || isCapacitorRuntime() || settingsStep === "finish" || !(event.target instanceof HTMLInputElement)) return;
     event.preventDefault();
     document.querySelector<HTMLButtonElement>(`[data-settings-panel="${settingsStep}"] [data-settings-next]`)?.click();
@@ -4096,6 +4156,7 @@ function initializeRenderer(): void {
   document.querySelector<HTMLFormElement>("#cashier-login-form")?.addEventListener("submit", (event) => { event.preventDefault(); void submitCashierLogin(); });
   initPinKeypad();
   initSettingsSteps();
+  initScaleSettings();
   document.querySelector<HTMLButtonElement>("#cashier-pin-change")?.addEventListener("click", () => setCashierPinMode("change", "Enter ERP password, then enter and confirm the new Offline Cashier PIN."));
   document.querySelector<HTMLButtonElement>("#cashier-pin-reset")?.addEventListener("click", () => {
     const cashierUser = document.querySelector<HTMLInputElement>("#cashier-username")?.value.trim() ?? "";
