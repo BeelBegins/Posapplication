@@ -7,8 +7,10 @@ Output: XLSX with sheets
                      default naming series. The scale PLU is stored as the item's Barcode (Stock UOM).
   "Scale PLU List"-> PLU, item name, group: what to program into the scale (same PLU as the barcode).
 
-PLUs are sequential from --start (default 10001) with --digits digits, matching the POS
-Settings -> Weighing scale rule's "Item digits". Re-run with a higher --start for later batches so
+PLUs are sequential from --start (default 10001) with --digits digits (any length), matching the
+POS Settings -> Weighing scale rule's "Item digits". The ERP Item Barcode is --key-prefix (default
+"SC") + PLU, e.g. SC10001: ordinary barcodes are all digits, so a scale item can never clash with an
+existing item that already owns the barcode 10001. The scale itself only prints the digits. Re-run with a higher --start for later batches so
 PLUs never repeat; --taken lists PLUs already used (one per line) to skip.
 
 Usage: python3 scripts/generate-scale-items.py items.csv out.xlsx [--uom Kg] [--start 10001]
@@ -47,6 +49,7 @@ def main():
     ap.add_argument("--uom", default="Kg"); ap.add_argument("--start", type=int, default=10001)
     ap.add_argument("--digits", type=int, default=5); ap.add_argument("--tax-category", default="")
     ap.add_argument("--taken", default="")
+    ap.add_argument("--key-prefix", default="SC", help="letters stored before the PLU in ERP Item Barcode (must equal the POS rule's \"ERP barcode starts with\"); \"\" = plain digits")
     a = ap.parse_args()
     taken = set()
     if a.taken:
@@ -67,11 +70,11 @@ def main():
     ws.append(["ID", "Item Name", "Item Group", "Default Unit of Measure", "Maintain Stock", "Allow Sales",
                "Description", "FBR Tax Category", "Barcode (Barcodes)", "UOM (Barcodes)"])
     for (name, typ, grp), plu in zip(items, plus):
-        ws.append(["", name, grp, a.uom, 1, 1, typ or name, a.tax_category, plu, a.uom])
+        ws.append(["", name, grp, a.uom, 1, 1, typ or name, a.tax_category, a.key_prefix + plu, a.uom])
     pl = wb.create_sheet("Scale PLU List")
-    pl.append(["PLU", "Item Name", "Item Group", "Unit", "Price per unit (fill from ERP price list)"])
+    pl.append(["PLU (program into scale)", "ERP Item Barcode", "Item Name", "Item Group", "Unit", "Price per unit (fill from ERP price list)"])
     for (name, _, grp), plu in zip(items, plus):
-        pl.append([plu, name, grp, a.uom, ""])
+        pl.append([plu, a.key_prefix + plu, name, grp, a.uom, ""])
     for sheet in (ws, pl):
         for column in sheet.columns:
             sheet.column_dimensions[column[0].column_letter].width = min(48, max(len(str(c.value or "")) for c in column) + 2)

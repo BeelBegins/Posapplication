@@ -180,7 +180,7 @@ interface PosSessionSummary {
 interface CatalogTotals { items: number; prices: number; barcodes: number; stockRows: number; lastSynced: string | null; }
 interface CatalogSearchResult { scaleQuantity?: number; scaleLabel?: string; itemCode: string; itemName: string; barcode: string | null; uom: string; conversionFactor: number; sellingPrice: number | null; currency: string | null; actualStock: number | null; warehouse: string | null; mrp: number | null; }
 interface CartLine extends CatalogSearchResult { quantity: number; }
-interface ScaleRuleView { name: string; prefix: string; itemLength: number; valueLength: number; kind: "weight" | "price" | "count"; unit: "g" | "kg"; decimals: number; checkDigit: boolean; }
+interface ScaleRuleView { name: string; prefix: string; itemLength: number; valueLength: number; kind: "weight" | "price" | "count"; unit: "g" | "kg"; decimals: number; checkDigit: boolean; lookupPrefix: string; }
 interface CustomerResult { name:string; customer_name:string; customer_group:string; mobile_no:string; email_id:string; tax_id:string; custom_legacy_customer_code?:string; }
 interface PaymentRow { method:string; amount:number; }
 
@@ -3460,6 +3460,7 @@ function renderScaleRules(): void {
       scaleRuleField("Value is", select([["weight", "Weight"], ["price", "Price"], ["count", "Piece count"]], rule.kind, (v) => { rule.kind = v as ScaleRuleView["kind"]; })),
       scaleRuleField("Weight unit", select([["g", "Gram"], ["kg", "Kg"]], rule.unit, (v) => { rule.unit = v as ScaleRuleView["unit"]; })),
       scaleRuleField("Decimals", text(String(rule.decimals), (v) => { rule.decimals = Number(v); }, "number")),
+      scaleRuleField("ERP barcode starts with", text(rule.lookupPrefix, (v) => { rule.lookupPrefix = v.trim(); })),
       check, remove);
     return row;
   }));
@@ -3472,7 +3473,7 @@ function initScaleSettings(): void {
   void loadScaleRulesIntoForm();
   const message = (text: string, isError = false) => { const el = document.querySelector<HTMLElement>("#scale-message"); if (el) { el.textContent = text; el.classList.toggle("error", isError); } };
   document.querySelector<HTMLButtonElement>("#scale-add-rule")?.addEventListener("click", () => {
-    scaleRulesDraft.push({ name: `Scale ${scaleRulesDraft.length + 1}`, prefix: "20", itemLength: 5, valueLength: 5, kind: "weight", unit: "g", decimals: 0, checkDigit: true });
+    scaleRulesDraft.push({ name: `Scale ${scaleRulesDraft.length + 1}`, prefix: "20", itemLength: 5, valueLength: 5, kind: "weight", unit: "g", decimals: 0, checkDigit: true, lookupPrefix: "SC" });
     renderScaleRules();
   });
   document.querySelector<HTMLButtonElement>("#scale-save-rules")?.addEventListener("click", async () => {

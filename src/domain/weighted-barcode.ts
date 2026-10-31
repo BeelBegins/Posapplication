@@ -22,12 +22,18 @@ export interface ScaleRule {
   decimals: number;
   /** Trailing EAN/UPC check digit over the whole label. */
   checkDigit: boolean;
+  /**
+   * Letters added in front of the item digits to find the item in ERP: the Item Barcode is stored
+   * as lookupPrefix + item digits (e.g. "SC10001"). Real barcodes are all digits, so a scale item
+   * can never be confused with an ordinary item that happens to own the barcode "10001".
+   */
+  lookupPrefix: string;
 }
 
-export interface ParsedScaleBarcode { rule: ScaleRule; itemKey: string; value: number; }
+export interface ParsedScaleBarcode { rule: ScaleRule; /** digits on the label */ itemKey: string; /** what to search ERP for: rule.lookupPrefix + itemKey */ lookupKey: string; value: number; }
 
 export const DEFAULT_SCALE_RULES: ScaleRule[] = [
-  { name: "Weight label (EAN-13: 20 + 5 item + 5 grams + check)", prefix: "20", itemLength: 5, valueLength: 5, kind: "weight", unit: "g", decimals: 0, checkDigit: true }
+  { name: "Weight label (EAN-13: 20 + 5 item + 5 grams + check)", prefix: "20", itemLength: 5, valueLength: 5, kind: "weight", unit: "g", decimals: 0, checkDigit: true, lookupPrefix: "SC" }
 ];
 
 export function ruleLength(rule: ScaleRule): number {
@@ -62,7 +68,9 @@ export function normalizeScaleRules(input: unknown): { rules: ScaleRule[]; error
     if (!Number.isInteger(decimals) || decimals < 0 || decimals > valueLength) return { rules, error: `${label}: decimals must be 0-${valueLength}.` };
     if (!["weight", "price", "count"].includes(kind)) return { rules, error: `${label}: type must be weight, price or count.` };
     if (!["g", "kg"].includes(unit)) return { rules, error: `${label}: unit must be g or kg.` };
-    const rule: ScaleRule = { name: String(row.name ?? "").trim() || label, prefix, itemLength, valueLength, kind: kind as ScaleRule["kind"], unit: unit as ScaleRule["unit"], decimals, checkDigit: row.checkDigit === true };
+    const lookupPrefix = String(row.lookupPrefix ?? "").trim();
+    if (!/^[A-Za-z0-9-]{0,8}$/.test(lookupPrefix)) return { rules, error: `${label}: lookup prefix may only have letters, numbers or "-" (max 8).` };
+    const rule: ScaleRule = { lookupPrefix, name: String(row.name ?? "").trim() || label, prefix, itemLength, valueLength, kind: kind as ScaleRule["kind"], unit: unit as ScaleRule["unit"], decimals, checkDigit: row.checkDigit === true };
     if (ruleLength(rule) > 20) return { rules, error: `${label}: total label length is over 20 digits.` };
     rules.push(rule);
   }
@@ -91,7 +99,7 @@ export function parseScaleBarcode(raw: string, rules: ScaleRule[]): ParsedScaleB
     const valueStart = itemStart + rule.itemLength;
     const itemKey = code.slice(itemStart, valueStart);
     const value = Number(code.slice(valueStart, valueStart + rule.valueLength)) / 10 ** rule.decimals;
-    return { rule, itemKey, value };
+    return { rule, itemKey, lookupKey: `${rule.lookupPrefix}${itemKey}`, value };
   }
   return null;
 }
