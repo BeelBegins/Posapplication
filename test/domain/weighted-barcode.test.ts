@@ -17,13 +17,13 @@ test("default rule splits prefix, 5-digit item key and gram weight", () => {
 });
 
 test("kg-with-3-decimals layout reads the same label as 1.250 kg", () => {
-  const rule: ScaleRule = { name: "kg", prefix: "20", itemLength: 5, valueLength: 5, kind: "weight", unit: "kg", decimals: 3, checkDigit: true };
+  const rule: ScaleRule = { name: "kg", prefix: "20", itemLength: 5, valueLength: 5, kind: "weight", unit: "kg", decimals: 3, checkDigit: true, lookupPrefix: "" };
   const parsed = parseScaleBarcode(label("201234501250"), [rule]) as ParsedScaleBarcode;
   assert.equal(scaleQuantity(parsed, "KG", null).quantity, 1.25);
 });
 
 test("item key may be shorter or longer than 5 digits and prefix may be one digit", () => {
-  const rule: ScaleRule = { name: "x", prefix: "2", itemLength: 6, valueLength: 5, kind: "weight", unit: "g", decimals: 0, checkDigit: true };
+  const rule: ScaleRule = { name: "x", prefix: "2", itemLength: 6, valueLength: 5, kind: "weight", unit: "g", decimals: 0, checkDigit: true, lookupPrefix: "" };
   const parsed = parseScaleBarcode(label("200123400500"), [rule]) as ParsedScaleBarcode;
   assert.equal(parsed.itemKey, "001234");
   assert.equal(scaleQuantity(parsed, "Kg", null).quantity, 0.5);
@@ -42,7 +42,7 @@ test("ordinary barcodes and other lengths are not scale labels", () => {
 });
 
 test("price labels convert to a quantity from the unit price", () => {
-  const rule: ScaleRule = { name: "p", prefix: "21", itemLength: 5, valueLength: 5, kind: "price", unit: "g", decimals: 0, checkDigit: false };
+  const rule: ScaleRule = { name: "p", prefix: "21", itemLength: 5, valueLength: 5, kind: "price", unit: "g", decimals: 0, checkDigit: false, lookupPrefix: "" };
   const parsed = parseScaleBarcode("211234500500", [rule]) as ParsedScaleBarcode;
   assert.equal(parsed.value, 500);
   assert.equal(scaleQuantity(parsed, "Kg", 250).quantity, 2);
@@ -58,7 +58,7 @@ test("normalizeScaleRules validates and rejects ambiguous rules", () => {
   assert.equal(normalizeScaleRules(DEFAULT_SCALE_RULES).error, null);
   assert.match(normalizeScaleRules([{ prefix: "x", itemLength: 5, valueLength: 5 }]).error ?? "", /prefix/);
   assert.match(normalizeScaleRules([{ prefix: "20", itemLength: 5, valueLength: 5, decimals: 9 }]).error ?? "", /decimals/);
-  const a = { prefix: "20", itemLength: 5, valueLength: 5, checkDigit: true };
+  const a = { prefix: "20", itemLength: 5, valueLength: 5, checkDigit: true, lookupPrefix: "" };
   assert.match(normalizeScaleRules([a, { ...a, prefix: "2", itemLength: 6 }]).error ?? "", /same labels/);
 });
 
@@ -72,7 +72,7 @@ const fakeDb = (meta: string | null, items: Record<string, CatalogSearchResult>)
 });
 
 test("lookupWithScale turns a label into the item with a decimal quantity", () => {
-  const r = lookupWithScale(fakeDb(null, { "12345": rice }), label("201234501250"), "W", "PL");
+  const r = lookupWithScale(fakeDb(null, { SC12345: rice }), label("201234501250"), "W", "PL");
   assert.equal(r.exact?.itemCode, "ITEM-0042");
   assert.equal(r.exact?.scaleQuantity, 1.25);
   assert.equal(r.scaleError, undefined);
@@ -86,6 +86,14 @@ test("a real item barcode that looks like a label wins over scale parsing", () =
 
 test("unknown item key, bad UOM and corrupt saved rules give errors, not wrong lines", () => {
   assert.match(lookupWithScale(fakeDb(null, {}), label("201234501250"), "W", "PL").scaleError ?? "", /not found/);
-  assert.match(lookupWithScale(fakeDb(null, { "12345": { ...rice, uom: "Nos" } }), label("201234501250"), "W", "PL").scaleError ?? "", /weight unit/);
-  assert.equal(lookupWithScale(fakeDb("{not json", { "12345": rice }), label("201234501250"), "W", "PL").exact, null);
+  assert.match(lookupWithScale(fakeDb(null, { SC12345: { ...rice, uom: "Nos" } }), label("201234501250"), "W", "PL").scaleError ?? "", /weight unit/);
+  assert.equal(lookupWithScale(fakeDb("{not json", { SC12345: rice }), label("201234501250"), "W", "PL").exact, null);
+});
+
+test("lookup prefix keeps scale items apart from an ordinary item that owns the same digits", () => {
+  const other = { ...rice, itemCode: "ITEM-OTHER", itemName: "Biscuit" };
+  const r = lookupWithScale(fakeDb(null, { "12345": other, SC12345: rice }), label("201234501250"), "W", "PL");
+  assert.equal(r.exact?.itemCode, "ITEM-0042");
+  assert.equal(parseScaleBarcode(label("201234501250"), DEFAULT_SCALE_RULES) !== null && (parseScaleBarcode(label("201234501250"), DEFAULT_SCALE_RULES) as ParsedScaleBarcode).lookupKey, "SC12345");
+  assert.match(normalizeScaleRules([{ ...DEFAULT_SCALE_RULES[0], lookupPrefix: "S C!" }]).error ?? "", /lookup prefix/);
 });

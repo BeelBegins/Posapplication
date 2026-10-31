@@ -30,8 +30,8 @@ export function lookupWithScale(db: ScaleLookupDb, query: string, warehouse: str
   const parsed = parseScaleBarcode(query, loadScaleRules(db));
   if (!parsed) return normal;
   if ("error" in parsed) return { exact: null, results: [], scaleError: parsed.error };
-  const item = db.lookupCatalog(parsed.itemKey, warehouse, priceList).exact;
-  if (!item) return { exact: null, results: [], scaleError: `Scale label item ${parsed.itemKey} was not found in the catalogue.` };
+  const item = db.lookupCatalog(parsed.lookupKey, warehouse, priceList).exact;
+  if (!item) return { exact: null, results: [], scaleError: `Scale label item ${parsed.lookupKey} was not found in the catalogue (Item Barcode must be exactly "${parsed.lookupKey}"). Sync the catalogue or check the item.` };
   const qty = scaleQuantity(parsed, item.uom, item.sellingPrice);
   if (qty.error) return { exact: null, results: [], scaleError: `${item.itemName}: ${qty.error}` };
   return { exact: { ...item, scaleQuantity: qty.quantity, scaleLabel: query }, results: [] };
