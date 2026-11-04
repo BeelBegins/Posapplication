@@ -74,6 +74,9 @@ interface PosAPI {
   listHeldSales: () => Promise<HeldSaleSummary[]>;
   getHeldSale: (id: number) => Promise<HeldSaleDetail | null>;
   deleteHeldSale: (id: number) => Promise<void>;
+  recordVoid: (input: Record<string, unknown>) => Promise<{ ok: boolean; eventId: string; error: string | null }>;
+  listVoidLog: (filter?: Record<string, unknown>) => Promise<{ events: VoidEventView[]; summary: { count: number; amount: number }; pending: number }>;
+  syncVoidLog: () => Promise<{ sent: number; remaining: number; error: string | null }>;
   renameHeldSale: (id: number, name: string) => Promise<void>;
   listSalesHistory: (filter: Record<string, unknown>) => Promise<SalesHistoryRow[]>;
   getSaleHistory: (id: string) => Promise<SalesHistoryRow | null>;
@@ -178,6 +181,7 @@ interface PosSessionSummary {
 interface CatalogTotals { items: number; prices: number; barcodes: number; stockRows: number; lastSynced: string | null; }
 interface CatalogSearchResult { itemCode: string; itemName: string; barcode: string | null; uom: string; conversionFactor: number; sellingPrice: number | null; currency: string | null; actualStock: number | null; warehouse: string | null; mrp: number | null; }
 interface CartLine extends CatalogSearchResult { quantity: number; }
+interface VoidEventView { eventId: string; kind: "line_void" | "clear_cart" | "held_sale_deleted"; createdAt: string; cashierUser: string; cashierName: string; openingEntry: string; customer: string; authorizedBy: string; lines: Array<{ itemCode: string; itemName: string; uom: string; qty: number; rate: number; amount: number }>; totalAmount: number; syncedAt: string | null; }
 interface CustomerResult { name:string; customer_name:string; customer_group:string; mobile_no:string; email_id:string; tax_id:string; custom_legacy_customer_code?:string; }
 interface PaymentRow { method:string; amount:number; }
 
@@ -849,6 +853,7 @@ async function syncQueueNow(manual = false): Promise<void> {
   if (queueSyncInFlight) return;
   queueSyncInFlight = true;
   try {
+    void window.posAPI.syncVoidLog().catch(() => undefined);
     const r = await window.posAPI.syncSaleQueue();
     if (manual || r.synced || r.failed || r.error) cartMessage(r.error ? `Queue sync stopped: ${r.error}. ${r.remaining} sale(s) remain queued.` : `Queue sync: ${r.synced} synced${r.failed ? `, ${r.failed} failed` : ""}${r.remaining ? `, ${r.remaining} remaining` : ""}.`);
   } catch { if (manual) cartMessage("Queue sync failed — will retry on next reconnect."); }
@@ -964,6 +969,7 @@ async function refreshFromStartShift(): Promise<void> {
 
 // --- Close Shift -------------------------------------------------------------
 let closeShiftSummary: ShiftSummary | null = null;
+let closeShiftVoids: { count: number; amount: number } = { count: 0, amount: 0 };
 // Set by showCloseShift when the active cashier needed a supervisor step-up
 // to even open this screen; passed through to close_pos_session, which
 // consumes it server-side, atomically with the close itself. Null when the
@@ -1099,6 +1105,10 @@ function buildShiftSummaryHtml(): string {
     ${line("Other Adjustment", s?.otherAdjustment ?? 0)}
     ${receivedSection}
     <hr/>
+    <div style="text-align:center;font-size:11px;font-weight:800">Voids this shift</div>
+    <div style="display:flex;justify-content:space-between;font-weight:700"><span>Void events</span><span>${closeShiftVoids.count}</span></div>
+    ${line("Void value (est.)", closeShiftVoids.amount)}
+    <hr/>
     <div style="text-align:center;font-size:11px;font-weight:800">Difference by mode</div>
     ${perMode}
     ${s?.isEstimate ? '<hr/><div style="text-align:center;font-size:10px;font-weight:700">Local estimate — server is authoritative</div>' : ""}
@@ -1139,6 +1149,7 @@ async function showCloseShift(): Promise<void> {
   const result = await window.posAPI.getShiftSummary({ opening_entry: sessionState.openingEntry, cashier_user: cashierSession.user });
   if (!result.success || !result.summary) { showScreen("pos"); cartMessage(result.error ?? "Unable to load shift summary"); return; }
   closeShiftSummary = normalizeShiftSummary(result.summary);
+  closeShiftVoids = await window.posAPI.listVoidLog({ openingEntry: sessionState.openingEntry }).then((r) => r.summary).catch(() => ({ count: 0, amount: 0 }));
   const s = closeShiftSummary;
   setText("#close-opening-entry", s.openingEntry);
   setText("#close-cashier", s.user);
@@ -2136,7 +2147,7 @@ async function renderHeldSales():Promise<void>{
   }));
 }
 async function renameHeldSaleUi(id:number,current:string):Promise<void>{ const name=await promptName("Rename Held Sale","New name",current); if(!name||!name.trim())return; await window.posAPI.renameHeldSale(id,name.trim()); await renderHeldSales(); }
-async function deleteHeldSaleUi(id:number):Promise<void>{ if(!(await appConfirm("Delete this held draft? Submitted invoices are never affected.")))return; await window.posAPI.deleteHeldSale(id); await renderHeldSales(); }
+async function deleteHeldSaleUi(id:number):Promise<void>{ if(!(await appConfirm("Delete this held draft? Submitted invoices are never affected.")))return; const held=await window.posAPI.getHeldSale(id).catch(()=>null); if(held&&Array.isArray(held.cart)&&held.cart.length){ const lines=(held.cart as Array<Record<string,unknown>>).map((l)=>({...l,quantity:Number(l.quantity)||0,sellingPrice:typeof l.sellingPrice==="number"?l.sellingPrice:0})) as unknown as CartLine[]; recordVoidEvent("held_sale_deleted",lines,cashierSession?.canVoidItems?"cashier_privilege":"supervisor_prompt",held.displayName||`Held #${id}`); } await window.posAPI.deleteHeldSale(id); await renderHeldSales(); }
 
 async function resumeHeldSale(id:number):Promise<void>{
   if(cartLines.length&&!(await appConfirm("Replace the current cart with the held sale?")))return;
@@ -2250,7 +2261,43 @@ function buildHistoryRow(row:SalesHistoryRow,refundStatus:RefundHistoryStatus|un
   actions.append(view,dup,refund);
   card.append(main,actions);return card;
 }
+let historyView:"sales"|"voids"=("sales" as "sales"|"voids");
+function setHistoryView(view:"sales"|"voids"):void{
+  historyView=view;
+  document.querySelector("#history-tab-sales")?.setAttribute("aria-selected",String(view==="sales"));
+  document.querySelector("#history-tab-voids")?.setAttribute("aria-selected",String(view==="voids"));
+  const search=document.querySelector<HTMLInputElement>("#history-search"); if(search)search.placeholder=view==="voids"?"Cashier / item / customer":"Invoice / terminal / customer / FBR #";
+  void renderSalesHistory();
+}
+const VOID_KIND_LABEL:Record<VoidEventView["kind"],string>={line_void:"Item voided",clear_cart:"Cart cleared",held_sale_deleted:"Held sale deleted"};
+async function renderVoidHistory():Promise<void>{
+  const list=document.querySelector<HTMLElement>("#history-list"); const msg=document.querySelector<HTMLElement>("#history-message"); if(!list)return;
+  const search=(document.querySelector<HTMLInputElement>("#history-search")?.value.trim()??"").toLowerCase();
+  const from=document.querySelector<HTMLInputElement>("#history-from")?.value??""; const to=document.querySelector<HTMLInputElement>("#history-to")?.value??"";
+  if(msg)msg.textContent="Loading…";
+  let result:Awaited<ReturnType<typeof window.posAPI.listVoidLog>>;
+  try{result=await window.posAPI.listVoidLog({dateFrom:from?new Date(`${from}T00:00:00`).toISOString():"",dateTo:to?new Date(`${to}T23:59:59.999`).toISOString():""});}
+  catch{if(msg)msg.textContent="Unable to load void log.";return;}
+  const events=search?result.events.filter((e)=>[e.cashierUser,e.cashierName,e.customer,...e.lines.flatMap((l)=>[l.itemCode,l.itemName])].join(" ").toLowerCase().includes(search)):result.events;
+  const total=events.reduce((sum,e)=>sum+e.totalAmount,0);
+  if(msg){msg.textContent=result.pending?`${result.pending} void record(s) not yet sent to ERP — they stay saved on this till.`:"";msg.style.color=result.pending?"var(--color-warning)":"";}
+  const summary=document.createElement("p"); summary.className="void-summary"; summary.textContent=`${events.length} void(s) · estimated ${fmtMoney(total)}`;
+  if(!events.length){list.replaceChildren(summary,Object.assign(document.createElement("div"),{className:"op-empty",textContent:"No voids in this period."}));return;}
+  list.replaceChildren(summary,...events.map((e)=>{
+    const row=document.createElement("div"); row.className="void-row"; row.dataset.sync=e.syncedAt?"synced":"pending";
+    const head=document.createElement("div"); head.className="void-row-head";
+    const title=document.createElement("span"); title.textContent=`${VOID_KIND_LABEL[e.kind]??e.kind} · ${fmtMoney(e.totalAmount)}`;
+    const when=document.createElement("span"); when.textContent=new Date(e.createdAt).toLocaleString();
+    head.append(title,when);
+    const items=document.createElement("div"); items.className="void-row-meta"; items.textContent=e.lines.map((l)=>`${l.itemName||l.itemCode} × ${l.qty} ${l.uom}`).join(", ")||"—";
+    const meta=document.createElement("div"); meta.className="void-row-meta";
+    meta.append(`${e.cashierName||e.cashierUser} · ${e.authorizedBy==="supervisor_prompt"?"supervisor approved":"cashier's own permission"}${e.openingEntry?` · ${e.openingEntry}`:""} · `);
+    const sync=document.createElement("span"); sync.className="void-sync"; sync.textContent=e.syncedAt?"sent to ERP":"waiting to send"; meta.append(sync);
+    row.append(head,items,meta); return row;
+  }));
+}
 async function renderSalesHistory():Promise<void>{
+  if(historyView==="voids"){await renderVoidHistory();return;}
   const list=document.querySelector<HTMLElement>("#history-list"); const msg=document.querySelector<HTMLElement>("#history-message"); if(!list)return;
   const search=document.querySelector<HTMLInputElement>("#history-search")?.value.trim()??"";
   const fromInput=document.querySelector<HTMLInputElement>("#history-from");
@@ -2900,14 +2947,26 @@ async function addToCart(item: CatalogSearchResult): Promise<void> { const index
 // the token here - not just trusting a locally successful dialog - is what
 // proves a real supervisor password was checked *now*, not merely at some
 // earlier moment for a different purpose.
+// Every void is written to the local void log (and sent to ERP when it can be) so a removed line
+// leaves a trace. Fire-and-forget: a logging problem must never block the cashier or the cart.
+function recordVoidEvent(kind: VoidEventView["kind"], lines: CartLine[], authorizedBy: "supervisor_prompt" | "cashier_privilege", note = ""): void {
+  void window.posAPI.recordVoid({
+    kind, authorizedBy, note,
+    cashierUser: cashierSession?.user ?? "", cashierName: cashierSession?.fullName ?? "",
+    customer: selectedCustomer?.name ?? "",
+    lines: lines.map((l) => ({ itemCode: l.itemCode, itemName: l.itemName, uom: l.uom, qty: l.quantity, rate: l.sellingPrice ?? 0 }))
+  }).then(() => { if (isOnline()) void window.posAPI.syncVoidLog().catch(() => undefined); }).catch(() => undefined);
+}
 async function voidCartRow(index: number): Promise<void> {
   if (index < 0 || index >= cartLines.length) return;
+  const voidedBy = cashierSession?.canVoidItems ? "cashier_privilege" : "supervisor_prompt";
   if (!cashierSession?.canVoidItems) {
     const auth = await requestSupervisorActionAuthorization("void_item");
     if (!auth.ok) return;
     const consumed = await window.posAPI.consumeAdminAction({ token: auth.token, action: "void_item" });
     if (!consumed.ok) { cartMessage(consumed.error ?? "Supervisor authorization could not be verified."); return; }
   }
+  recordVoidEvent("line_void", [cartLines[index]], voidedBy);
   cartLines.splice(index, 1);
   await afterCartMutation("Item voided");
 }
@@ -2923,12 +2982,14 @@ async function clearFullCart(): Promise<void> {
     return;
   }
   if (!(await appConfirm("Clear the full cart?"))) return;
+  const clearedBy = cashierSession?.canVoidItems ? "cashier_privilege" : "supervisor_prompt";
   if (!cashierSession?.canVoidItems) {
     const auth = await requestSupervisorActionAuthorization("clear_cart");
     if (!auth.ok) return;
     const consumed = await window.posAPI.consumeAdminAction({ token: auth.token, action: "clear_cart" });
     if (!consumed.ok) { cartMessage(consumed.error ?? "Supervisor authorization could not be verified."); return; }
   }
+  recordVoidEvent("clear_cart", [...cartLines], clearedBy);
   await clearActiveSale("Cart cleared");
 }
 
@@ -4516,6 +4577,8 @@ function initializeRenderer(): void {
   document.querySelector<HTMLButtonElement>('#open-sales-history')?.addEventListener('click', () => void openSalesHistory());
   document.querySelector<HTMLButtonElement>('#held-back')?.addEventListener('click', () => void goToPos());
   document.querySelector<HTMLButtonElement>('#history-back')?.addEventListener('click', () => void goToPos());
+  document.querySelector<HTMLButtonElement>('#history-tab-sales')?.addEventListener('click', () => setHistoryView('sales'));
+  document.querySelector<HTMLButtonElement>('#history-tab-voids')?.addEventListener('click', () => setHistoryView('voids'));
   document.querySelector<HTMLButtonElement>('#history-refresh')?.addEventListener('click', () => void renderSalesHistory());
   document.querySelector<HTMLInputElement>('#history-search')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); void renderSalesHistory(); } });
   document.querySelector<HTMLButtonElement>('#history-find-refund')?.addEventListener('click', () => void findRemoteRefundInvoice());

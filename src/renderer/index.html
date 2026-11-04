@@ -568,6 +568,10 @@
 
       <section id="sales-history-screen" class="app-screen op-screen" hidden>
         <header class="op-header"><h2>Sales History</h2><button id="history-back" type="button" class="secondary-button">Back to POS</button></header>
+        <div class="op-tabs" role="tablist" aria-label="Sales history view">
+          <button id="history-tab-sales" type="button" role="tab" aria-selected="true">Sales</button>
+          <button id="history-tab-voids" type="button" role="tab" aria-selected="false">Voids</button>
+        </div>
         <div class="op-filters">
           <input id="history-search" type="search" placeholder="Invoice / terminal / customer / FBR #" />
           <input id="history-from" type="date" aria-label="From date" />
