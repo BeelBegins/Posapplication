@@ -5,6 +5,7 @@ import { createPosSessionCore } from "./pos-session";
 import { createPosConfigCore } from "./pos-config";
 import { createSaleRefundCore } from "./sale-refund";
 import { createReleasesCore } from "./releases";
+import { createVoidLogCore } from "./void-log";
 
 export * from "./types";
 export * from "./http";
@@ -25,6 +26,7 @@ export function createPosCore(deps: PosCoreDeps) {
     ...posSession,
     ...createPosConfigCore(deps, http),
     ...createSaleRefundCore(deps, http, posSession),
-    ...createReleasesCore(deps)
+    ...createReleasesCore(deps),
+    ...createVoidLogCore(deps, () => posSession.getCartIdentity())
   };
 }
