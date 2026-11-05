@@ -30,6 +30,9 @@ function summarizePosConfiguration(configuration: Record<string, unknown>): PosC
   const allowHeldSales = !Object.prototype.hasOwnProperty.call(profile, "custom_allow_held_sales")
     ? false
     : Boolean(Number(profile.custom_allow_held_sales));
+  // Opt-in: retail tills void without a reason step unless the profile asks for one.
+  const requireVoidReason = Object.prototype.hasOwnProperty.call(profile, "custom_require_void_reason")
+    && Boolean(Number(profile.custom_require_void_reason));
   const isFoodpandaProfile = Object.prototype.hasOwnProperty.call(profile, "custom_is_foodpanda_profile")
     && Boolean(Number(profile.custom_is_foodpanda_profile));
   const defaultPaymentModes = (Array.isArray(profile.payments) ? profile.payments : [])
@@ -55,6 +58,7 @@ function summarizePosConfiguration(configuration: Record<string, unknown>): PosC
     allowItemSearch,
     allowClearCart,
     allowHeldSales,
+    requireVoidReason,
     isFoodpandaProfile,
     foodpandaCreditMode,
     lastSynced: syncedAt,

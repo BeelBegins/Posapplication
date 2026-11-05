@@ -1,54 +1,30 @@
-# Void log — handoff
+# Void log
 
-Status 2026-11-04, branch `claude/keen-einstein-3y522g`. **POS app half is done and tested (142 tests, browser-driven Voids tab). Server (`aimatic`) half is NOT built — the POS keeps every void saved on the till and retries until it exists.** Nothing here has been run on a real till or real ERP.
+Status 2026-11-05: POS and server halves are built. Server (aimatic `f2e0e83`, `c21803f`) is live on szl; this POS work is on branch `pos-void-reason` (based on v3.0.38) and is **not released**. Until tills run a release containing it, ERP receives no voids.
 
 ## Why
-ERP only sees completed sales. A cashier could scan items, remove them and keep the money; before this, nothing recorded it. The server only logged supervisor *approvals* (`POS Admin Audit Log`: user, action, terminal, status) — no item, qty, amount, cashier or shift — and a cashier with `canVoidItems` voids with no approval and no record at all.
+ERP only sees completed sales. A cashier could scan items, remove them and keep the money; before this, nothing recorded it. The server only logged supervisor *approvals* (`POS Admin Audit Log`), and a cashier with `canVoidItems` voided with no approval and no record.
 
-## What the POS now records
-`line_void` (cart line removed, incl. quantity going to 0), `clear_cart`, `held_sale_deleted`. Each event: `eventId` (idempotency key), kind, createdAt, cashierUser/Name, posProfile, terminalId, hardwareId, openingEntry, customer, `authorizedBy` (`supervisor_prompt` | `cashier_privilege`), lines[{itemCode,itemName,uom,qty,rate,amount}], totalAmount (qty×rate before tax, an estimate), note.
-- Code: `src/domain/void-log.ts` (pure), `src/core/void-log.ts` (store + sync), hooks in `renderer.ts` (`recordVoidEvent`), IPC `void-log:*`, Android via `mobile.ts`.
-- Stored in `app_meta` key `void_log_v1`, capped at 5000, unsynced events never dropped, synced ones pruned after 90 days. Recording is local-first and never blocks the cart.
-- Synced on each recorded void when online, and with every sale-queue sync (reconnect, Sync Now, before Close Shift).
-- UI: Sales History → **Voids** tab (date range, search by cashier/item/customer, "waiting to send / sent to ERP"); shift summary print has "Voids this shift" (count + value, local log only).
+## What the POS records
+`line_void` (cart line removed, incl. quantity going to 0), `clear_cart`, `held_sale_deleted`. Each event: `eventId` (idempotency key), kind, createdAt, cashierUser/Name, posProfile, terminalId, hardwareId, openingEntry, customer, `authorizedBy`, lines[{itemCode,itemName,uom,qty,rate,amount}], totalAmount, note, `reason`.
+- `authorizedBy`: `supervisor_prompt` only when a supervisor password was actually checked for this void; otherwise `cashier_privilege` (the cashier's own decision). Held-sale delete never asks a supervisor, so it is always `cashier_privilege`.
+- `reason`: asked only when POS Profile **Require Void Reason** (`custom_require_void_reason`) is checked; default off so retail tills have no extra step. The reason is asked before any supervisor prompt (a cancelled reason never burns an authorization), cancelling it cancels the void, and the dialog owns the keyboard while open (Delete/F8/F10/F9/`/` cannot start another action). Max 500 characters, same as the server.
+- Code: `src/domain/void-log.ts` (pure), `src/core/void-log.ts` (store + sync), renderer `recordVoidEvent` / `askVoidReason`, IPC `void-log:*`, Android via `mobile.ts`. Stored in `app_meta` key `void_log_v1`, capped at 5000; unsynced events are never dropped, synced ones are pruned after 90 days. Recording never blocks the cart.
+- Synced on each recorded void when online and with every sale-queue sync (reconnect, Sync Now, before Close Shift).
+- UI: Sales History → **Voids** tab (date range; search by cashier, item, customer or reason; "waiting to send / sent to ERP"); shift summary print has "Voids this shift".
 
-## Server contract the POS already calls
-`POST /api/method/aimatic.offline_pos.api.log_pos_voids` with form/JSON `pos_profile` and `events` = **JSON string** of a list of events (fields above, camelCase, without `syncedAt`/`attempts`).
-Response must be `{"message": {"accepted": ["<eventId>", ...]}}`. Accepted = stored (or already stored). Anything not listed is retried. HTTP 404 = "not built yet" (POS shows a clear message and keeps the voids).
+## Server contract
+`POST /api/method/aimatic.offline_pos.api.log_pos_voids` with `pos_profile` and `events` = JSON string of events (without `syncedAt`/`attempts`). Response `{"message": {"accepted": [eventId...], "rejected": [{eventId, error}]}}`; only accepted events are marked sent, the rest retry. The server stores them in `POS Void Log` (+ `POS Void Log Item`), recomputes value as qty × rate, and shows them in Sales Dashboard → Voids / Void Details and the Discord Sales card.
 
-## Server work to do (repo `BeelBegins/aimatic`, branch `master`; needs write access)
-1. **Doctype `POS Void Log`** (submittable not needed; no edit/delete for anyone but System Manager): `event_id` (Data, unique, reqd), `kind` (Select line_void/clear_cart/held_sale_deleted), `occurred_at` (Datetime), `cashier_user` (Link User), `cashier_name`, `pos_profile` (Link), `terminal_id`, `hardware_id`, `pos_opening_entry` (Data — may be blank/offline batch, don't Link), `customer`, `authorized_by` (Select), `total_amount` (Currency), `lines_json` (Long Text) **plus child table `POS Void Log Item`** (item_code, item_name, uom, qty, rate, amount) so reports can group by item. Add `branch`/`company` fetched from the POS Profile for dashboard filtering.
-2. **Endpoint** `log_pos_voids(pos_profile, events)` in `aimatic/offline_pos/api.py`, same guards as other POS endpoints (`_require_login`, `require_active_device(hardware_id)` per event). Sketch:
-```python
-@frappe.whitelist()
-def log_pos_voids(pos_profile, events):
-    _require_login()
-    accepted = []
-    for ev in json.loads(events):
-        if frappe.db.exists("POS Void Log", {"event_id": ev["eventId"]}):
-            accepted.append(ev["eventId"]); continue
-        doc = frappe.get_doc({"doctype": "POS Void Log", "event_id": ev["eventId"], "kind": ev["kind"],
-            "occurred_at": get_datetime(ev["createdAt"]), "cashier_user": ev["cashierUser"], "pos_profile": pos_profile,
-            "terminal_id": ev.get("terminalId"), "hardware_id": ev.get("hardwareId"), "pos_opening_entry": ev.get("openingEntry"),
-            "customer": ev.get("customer"), "authorized_by": ev["authorizedBy"], "total_amount": flt(ev["totalAmount"]),
-            "items": [{"item_code": l["itemCode"], "item_name": l["itemName"], "uom": l["uom"], "qty": l["qty"], "rate": l["rate"], "amount": l["amount"]} for l in ev["lines"]]})
-        doc.insert(ignore_permissions=True)
-        accepted.append(ev["eventId"])
-    return {"accepted": accepted}
-```
-   Validate `kind`/`authorizedBy` against the allowed values, cap batch size (POS sends ≤50), and take `cashier_user` from the event only if it equals an existing user (the API user is the transport identity, not the cashier).
-3. **Sales Dashboard Console** (`aimatic/aimatic/page/sales_dashboard_console/`): add "Void Details" — totals by branch/cashier/day, drill-down to the list with items, `authorized_by` highlighted (cashier_privilege voids are the ones to watch). Reuse its existing data-fetch pattern.
-4. Optional: add `void_count`/`void_amount` to the server shift summary so the printed summary does not depend on the till's local log.
-5. Optional: record `item`, `qty`, `amount` in `POS Admin Audit Log` for `void_item`/`clear_cart` — not needed once `POS Void Log` exists.
-
-## To verify after the server exists
-1. Void a line online → row appears in `POS Void Log` and Voids tab shows "sent to ERP".
-2. Go offline, void, Clear Cart, delete a held sale → all show "waiting to send"; reconnect → they sync once (no duplicates after a second sync).
-3. Cashier with and without `canVoidItems`: `authorized_by` is right in both.
-4. Dashboard totals match the Voids tab for a shift; shift summary print shows the same count.
+## To verify on a real till after release
+1. Void a line online → row in `POS Void Log`; Voids tab shows "sent to ERP".
+2. Offline: void, Clear Cart, delete a held sale → "waiting to send"; reconnect → each syncs once, no duplicates after a second sync.
+3. Cashier with and without `canVoidItems`: `authorizedBy` correct; held delete is `cashier_privilege`.
+4. Profile with Require Void Reason on: reason dialog appears and the reason reaches ERP; with it off, no dialog.
+5. Dashboard totals match the Voids tab for a shift.
 
 ## Known limits
-- Quantity *reductions* that stay above 0 (e.g. 5 → 2) are not logged; only whole-line removal. Say if you want them.
-- Which supervisor approved a void is not recorded yet (the POS only knows an approval happened); needs `authorize_pos_admin_action` to return the approving user.
-- No "reason" prompt (not requested). Value is qty × selling price before tax.
+- Quantity reductions that stay above 0 (e.g. 5 → 2) are not logged; only whole-line removal.
+- Which supervisor approved is not recorded (the POS only knows an approval happened).
+- Value is qty × selling price before tax.
 - A cart abandoned by logging out / closing the app is not logged.

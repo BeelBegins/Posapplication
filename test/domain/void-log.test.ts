@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { appendVoidEvent, buildVoidEvent, filterVoidEvents, markVoidAttempts, markVoidEventsSynced, parseVoidLog, pendingVoidEvents, summarizeVoids, VOID_LOG_MAX_EVENTS } from "../../src/domain/void-log";
+import { appendVoidEvent, buildVoidEvent, filterVoidEvents, markVoidAttempts, markVoidEventsSynced, parseVoidLog, pendingVoidEvents, summarizeVoids, VOID_LOG_MAX_EVENTS, VOID_REASON_MAX_LENGTH } from "../../src/domain/void-log";
 
 const ev = (over: Partial<Parameters<typeof buildVoidEvent>[0]> = {}, at = new Date("2026-11-04T10:00:00Z"), id = "a") =>
   buildVoidEvent({ kind: "line_void", cashierUser: "c@x.pk", authorizedBy: "cashier_privilege", openingEntry: "POS-OPE-1", lines: [{ itemCode: "I1", itemName: "Rice", uom: "Kg", qty: 1.25, rate: 160 }], ...over }, at, () => id);
@@ -52,4 +52,16 @@ test("summary splits by kind", () => {
   assert.equal(s.count, 2);
   assert.equal(s.amount, 310);
   assert.equal(s.byKind.clear_cart.amount, 110);
+});
+
+test("reason is optional, trimmed and capped like the server field", () => {
+  assert.equal(ev().reason, "");
+  assert.equal(ev({ reason: "  Customer changed mind  " }).reason, "Customer changed mind");
+  assert.equal(ev({ reason: "x".repeat(VOID_REASON_MAX_LENGTH + 50) }).reason.length, VOID_REASON_MAX_LENGTH);
+});
+
+test("events saved before reasons existed still parse", () => {
+  const old = { ...ev() } as Record<string, unknown>;
+  delete old.reason;
+  assert.equal(parseVoidLog(JSON.stringify([old])).length, 1);
 });

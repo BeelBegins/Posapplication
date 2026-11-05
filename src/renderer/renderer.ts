@@ -163,6 +163,7 @@ interface PosConfigurationSummary {
   allowItemSearch: boolean;
   allowClearCart: boolean;
   allowHeldSales: boolean;
+  requireVoidReason?: boolean;
   isFoodpandaProfile: boolean;
   foodpandaCreditMode: string;
   lastSynced: string;
@@ -181,7 +182,7 @@ interface PosSessionSummary {
 interface CatalogTotals { items: number; prices: number; barcodes: number; stockRows: number; lastSynced: string | null; }
 interface CatalogSearchResult { itemCode: string; itemName: string; barcode: string | null; uom: string; conversionFactor: number; sellingPrice: number | null; currency: string | null; actualStock: number | null; warehouse: string | null; mrp: number | null; }
 interface CartLine extends CatalogSearchResult { quantity: number; }
-interface VoidEventView { eventId: string; kind: "line_void" | "clear_cart" | "held_sale_deleted"; createdAt: string; cashierUser: string; cashierName: string; openingEntry: string; customer: string; authorizedBy: string; lines: Array<{ itemCode: string; itemName: string; uom: string; qty: number; rate: number; amount: number }>; totalAmount: number; syncedAt: string | null; }
+interface VoidEventView { eventId: string; kind: "line_void" | "clear_cart" | "held_sale_deleted"; createdAt: string; cashierUser: string; cashierName: string; openingEntry: string; customer: string; authorizedBy: string; lines: Array<{ itemCode: string; itemName: string; uom: string; qty: number; rate: number; amount: number }>; totalAmount: number; reason?: string; syncedAt: string | null; }
 interface CustomerResult { name:string; customer_name:string; customer_group:string; mobile_no:string; email_id:string; tax_id:string; custom_legacy_customer_code?:string; }
 interface PaymentRow { method:string; amount:number; }
 
@@ -278,6 +279,7 @@ function showPosConfigurationSummary(summary: PosConfigurationSummary | null): v
   allowItemSearch = summary.allowItemSearch !== false;
   allowClearCart = summary.allowClearCart !== false;
   allowHeldSales = summary.allowHeldSales === true;
+  requireVoidReason = summary.requireVoidReason === true;
   isFoodpandaProfile = summary.isFoodpandaProfile === true;
   foodpandaCreditCustomer = summary.defaultCustomer.trim();
   foodpandaCreditMode = summary.foodpandaCreditMode.trim();
@@ -486,6 +488,8 @@ let allowItemSearch = true;
 let allowClearCart = true;
 // POS Profile.custom_allow_held_sales (missing/legacy bootstrap => false; opt-in).
 let allowHeldSales = false;
+// POS Profile.custom_require_void_reason (missing/legacy bootstrap => false). Retail skips the reason step.
+let requireVoidReason = false;
 // Foodpanda credit behavior comes entirely from the active cached POS Profile.
 let isFoodpandaProfile = false;
 let foodpandaCreditCustomer = "";
@@ -591,6 +595,7 @@ async function refreshItemSearchSetting(): Promise<void> {
   allowItemSearch = cfg?.allowItemSearch !== false;
   allowClearCart = cfg?.allowClearCart !== false;
   allowHeldSales = cfg?.allowHeldSales === true;
+  requireVoidReason = cfg?.requireVoidReason === true;
   updateCartSearchUi();
   updateClearCartUi();
   updateHeldSalesUi();
@@ -1723,6 +1728,7 @@ function updateCompleteSaleState():void{
 async function submitCurrentSale():Promise<void>{
   if(submissionInProgress)return;
   if(document.querySelector<HTMLDialogElement>("#receipt-dialog")?.open)return; // already submitted; awaiting receipt close
+  if(document.querySelector<HTMLDialogElement>("#void-reason-dialog")?.open)return; // a void is mid-decision; finish or cancel it first
   if(!cashierSession){cartMessage("Cashier login required.");await showCashierLogin("Cashier login required.");return;}
   if(cashierSession.offlineLogin&&!cashierSession.canOfflineSale){cartMessage("Cashier is not allowed to sell offline.");return;}
   let online=isOnline();
@@ -2147,7 +2153,10 @@ async function renderHeldSales():Promise<void>{
   }));
 }
 async function renameHeldSaleUi(id:number,current:string):Promise<void>{ const name=await promptName("Rename Held Sale","New name",current); if(!name||!name.trim())return; await window.posAPI.renameHeldSale(id,name.trim()); await renderHeldSales(); }
-async function deleteHeldSaleUi(id:number):Promise<void>{ if(!(await appConfirm("Delete this held draft? Submitted invoices are never affected.")))return; const held=await window.posAPI.getHeldSale(id).catch(()=>null); if(held&&Array.isArray(held.cart)&&held.cart.length){ const lines=(held.cart as Array<Record<string,unknown>>).map((l)=>({...l,quantity:Number(l.quantity)||0,sellingPrice:typeof l.sellingPrice==="number"?l.sellingPrice:0})) as unknown as CartLine[]; recordVoidEvent("held_sale_deleted",lines,cashierSession?.canVoidItems?"cashier_privilege":"supervisor_prompt",held.displayName||`Held #${id}`); } await window.posAPI.deleteHeldSale(id); await renderHeldSales(); }
+// Deleting a held draft never asks a supervisor, so it is always logged as the cashier's
+// own decision ("cashier_privilege"); logging it as "supervisor_prompt" would hide it
+// from the no-supervisor review in ERP.
+async function deleteHeldSaleUi(id:number):Promise<void>{ if(!(await appConfirm("Delete this held draft? Submitted invoices are never affected.")))return; const held=await window.posAPI.getHeldSale(id).catch(()=>null); const hasLines=Boolean(held&&Array.isArray(held.cart)&&held.cart.length); const reason=hasLines?await askVoidReason("delete this held sale"):""; if(reason===null)return; if(held&&hasLines){ const lines=(held.cart as Array<Record<string,unknown>>).map((l)=>({...l,quantity:Number(l.quantity)||0,sellingPrice:typeof l.sellingPrice==="number"?l.sellingPrice:0})) as unknown as CartLine[]; recordVoidEvent("held_sale_deleted",lines,"cashier_privilege",held.displayName||`Held #${id}`,reason); } await window.posAPI.deleteHeldSale(id); await renderHeldSales(); }
 
 async function resumeHeldSale(id:number):Promise<void>{
   if(cartLines.length&&!(await appConfirm("Replace the current cart with the held sale?")))return;
@@ -2278,7 +2287,7 @@ async function renderVoidHistory():Promise<void>{
   let result:Awaited<ReturnType<typeof window.posAPI.listVoidLog>>;
   try{result=await window.posAPI.listVoidLog({dateFrom:from?new Date(`${from}T00:00:00`).toISOString():"",dateTo:to?new Date(`${to}T23:59:59.999`).toISOString():""});}
   catch{if(msg)msg.textContent="Unable to load void log.";return;}
-  const events=search?result.events.filter((e)=>[e.cashierUser,e.cashierName,e.customer,...e.lines.flatMap((l)=>[l.itemCode,l.itemName])].join(" ").toLowerCase().includes(search)):result.events;
+  const events=search?result.events.filter((e)=>[e.cashierUser,e.cashierName,e.customer,e.reason??"",...e.lines.flatMap((l)=>[l.itemCode,l.itemName])].join(" ").toLowerCase().includes(search)):result.events;
   const total=events.reduce((sum,e)=>sum+e.totalAmount,0);
   if(msg){msg.textContent=result.pending?`${result.pending} void record(s) not yet sent to ERP — they stay saved on this till.`:"";msg.style.color=result.pending?"var(--color-warning)":"";}
   const summary=document.createElement("p"); summary.className="void-summary"; summary.textContent=`${events.length} void(s) · estimated ${fmtMoney(total)}`;
@@ -2293,6 +2302,7 @@ async function renderVoidHistory():Promise<void>{
     const meta=document.createElement("div"); meta.className="void-row-meta";
     meta.append(`${e.cashierName||e.cashierUser} · ${e.authorizedBy==="supervisor_prompt"?"supervisor approved":"cashier's own permission"}${e.openingEntry?` · ${e.openingEntry}`:""} · `);
     const sync=document.createElement("span"); sync.className="void-sync"; sync.textContent=e.syncedAt?"sent to ERP":"waiting to send"; meta.append(sync);
+    if(e.reason){const why=document.createElement("div"); why.className="void-row-meta"; why.textContent=`Reason: ${e.reason}`; row.append(head,items,why,meta); return row;}
     row.append(head,items,meta); return row;
   }));
 }
@@ -2947,11 +2957,64 @@ async function addToCart(item: CatalogSearchResult): Promise<void> { const index
 // the token here - not just trusting a locally successful dialog - is what
 // proves a real supervisor password was checked *now*, not merely at some
 // earlier moment for a different purpose.
+// Asks for a void reason only when the POS Profile requires one. Returns "" when not
+// required, the trimmed reason when given, or null when the cashier cancels (the void
+// must then not happen). Asked before any supervisor prompt so a cancelled reason never
+// burns a single-use supervisor authorization.
+function askVoidReason(actionLabel: string): Promise<string | null> {
+  if (!requireVoidReason) return Promise.resolve("");
+  const dialog = document.querySelector<HTMLDialogElement>("#void-reason-dialog");
+  const form = document.querySelector<HTMLFormElement>("#void-reason-form");
+  const title = document.querySelector<HTMLElement>("#void-reason-title");
+  const input = document.querySelector<HTMLTextAreaElement>("#void-reason-input");
+  const message = document.querySelector<HTMLElement>("#void-reason-message");
+  const cancelButton = document.querySelector<HTMLButtonElement>("#void-reason-cancel");
+  // Fail closed: if the dialog is missing the void is refused, never logged without its reason.
+  if (!dialog || !form || !title || !input || !message || !cancelButton) { cartMessage("A void reason is required but the reason form is unavailable."); return Promise.resolve(null); }
+  const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  title.textContent = `Reason: ${actionLabel}`;
+  input.value = "";
+  input.maxLength = 500;
+  message.textContent = "";
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (value: string | null): void => {
+      if (settled) return;
+      settled = true;
+      form.removeEventListener("submit", submit);
+      input.removeEventListener("keydown", enterKey);
+      input.removeEventListener("input", clearMessage);
+      cancelButton.removeEventListener("click", cancel);
+      dialog.removeEventListener("cancel", escape);
+      if (dialog.open) dialog.close();
+      previousFocus?.focus({ preventScroll: true });
+      resolve(value);
+    };
+    const submit = (event: Event): void => {
+      event.preventDefault();
+      const reason = input.value.trim();
+      if (!reason) { message.textContent = "Enter a reason to continue."; input.focus(); return; }
+      finish(reason);
+    };
+    const cancel = (): void => finish(null);
+    const escape = (event: Event): void => { event.preventDefault(); finish(null); };
+    // Enter submits (cashier speed); Shift+Enter keeps a line break.
+    const enterKey = (event: KeyboardEvent): void => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); form.requestSubmit(); } };
+    const clearMessage = (): void => { message.textContent = ""; };
+    input.addEventListener("keydown", enterKey);
+    input.addEventListener("input", clearMessage);
+    form.addEventListener("submit", submit);
+    cancelButton.addEventListener("click", cancel);
+    dialog.addEventListener("cancel", escape);
+    dialog.showModal();
+    window.setTimeout(() => input.focus(), 0);
+  });
+}
 // Every void is written to the local void log (and sent to ERP when it can be) so a removed line
 // leaves a trace. Fire-and-forget: a logging problem must never block the cashier or the cart.
-function recordVoidEvent(kind: VoidEventView["kind"], lines: CartLine[], authorizedBy: "supervisor_prompt" | "cashier_privilege", note = ""): void {
+function recordVoidEvent(kind: VoidEventView["kind"], lines: CartLine[], authorizedBy: "supervisor_prompt" | "cashier_privilege", note = "", reason = ""): void {
   void window.posAPI.recordVoid({
-    kind, authorizedBy, note,
+    kind, authorizedBy, note, reason,
     cashierUser: cashierSession?.user ?? "", cashierName: cashierSession?.fullName ?? "",
     customer: selectedCustomer?.name ?? "",
     lines: lines.map((l) => ({ itemCode: l.itemCode, itemName: l.itemName, uom: l.uom, qty: l.quantity, rate: l.sellingPrice ?? 0 }))
@@ -2959,6 +3022,12 @@ function recordVoidEvent(kind: VoidEventView["kind"], lines: CartLine[], authori
 }
 async function voidCartRow(index: number): Promise<void> {
   if (index < 0 || index >= cartLines.length) return;
+  const line = cartLines[index];
+  const reason = await askVoidReason(`remove ${line.itemName || line.itemCode}`);
+  if (reason === null) return;
+  // The cart may have changed while the reason dialog was open; void the same line or nothing.
+  index = cartLines.indexOf(line);
+  if (index < 0) return;
   const voidedBy = cashierSession?.canVoidItems ? "cashier_privilege" : "supervisor_prompt";
   if (!cashierSession?.canVoidItems) {
     const auth = await requestSupervisorActionAuthorization("void_item");
@@ -2966,7 +3035,9 @@ async function voidCartRow(index: number): Promise<void> {
     const consumed = await window.posAPI.consumeAdminAction({ token: auth.token, action: "void_item" });
     if (!consumed.ok) { cartMessage(consumed.error ?? "Supervisor authorization could not be verified."); return; }
   }
-  recordVoidEvent("line_void", [cartLines[index]], voidedBy);
+  index = cartLines.indexOf(line);
+  if (index < 0) return;
+  recordVoidEvent("line_void", [line], voidedBy, "", reason);
   cartLines.splice(index, 1);
   await afterCartMutation("Item voided");
 }
@@ -2982,6 +3053,8 @@ async function clearFullCart(): Promise<void> {
     return;
   }
   if (!(await appConfirm("Clear the full cart?"))) return;
+  const reason = await askVoidReason("clear the cart");
+  if (reason === null) return;
   const clearedBy = cashierSession?.canVoidItems ? "cashier_privilege" : "supervisor_prompt";
   if (!cashierSession?.canVoidItems) {
     const auth = await requestSupervisorActionAuthorization("clear_cart");
@@ -2989,7 +3062,7 @@ async function clearFullCart(): Promise<void> {
     const consumed = await window.posAPI.consumeAdminAction({ token: auth.token, action: "clear_cart" });
     if (!consumed.ok) { cartMessage(consumed.error ?? "Supervisor authorization could not be verified."); return; }
   }
-  recordVoidEvent("clear_cart", [...cartLines], clearedBy);
+  recordVoidEvent("clear_cart", [...cartLines], clearedBy, "", reason);
   await clearActiveSale("Cart cleared");
 }
 
@@ -4605,6 +4678,9 @@ function initializeRenderer(): void {
   document.addEventListener("keydown", (event) => {
     // Refund quantity inputs own their keystrokes — never let global POS shortcuts intercept typing/arrows there.
     if ((document.activeElement as HTMLElement | null)?.closest("#refund-items")) return;
+    // The void reason dialog owns every key while open: Delete/F8 must not start a second
+    // void, F9 must not submit the sale, "/" must not jump to search, Escape must cancel it.
+    if (document.querySelector<HTMLDialogElement>("#void-reason-dialog")?.open) return;
     // None of the shortcuts below intentionally use Alt/Meta - swallowing
     // those combos here was breaking Alt+F4 (main.ts's own before-input-event
     // handles that explicitly now, but this must get out of its way first,
