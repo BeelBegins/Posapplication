@@ -435,6 +435,9 @@ let localFbrTotals: Record<string, unknown> | null = null;
 // --- Receipt / submission state ---
 let lastSaleResponse: Record<string, unknown> | null = null; // authoritative submission response, stored before any cart reset
 let lastReceiptHtml: string | null = null;                   // server-rendered receipt HTML for printing
+interface ReceiptSnapshotLine { name: string; code: string; barcode: string; uom: string; qty: number; rate: number; amount: number; }
+interface ReceiptSnapshot { provisional: boolean; invoice: string; posting: string; cashier: string; customer: string; lines: ReceiptSnapshotLine[]; totals: FbrTotalsView; payments: PaymentRow[]; change: number; fbrStatus: string; fbrNumber: string; fbrApplicable: boolean; }
+let lastReceiptSnapshot: ReceiptSnapshot | null = null;      // sold-sale copy for the local (offline / server-unavailable) receipt
 let receiptInvoice = "";                                     // POS Invoice name for (re)printing
 let changeDue = 0;                                           // local estimate; server records gross cash tendered and returns authoritative change
 let resumedHeldId: number | null = null;                     // id of the held sale currently resumed (removed after successful submit)
@@ -1838,8 +1841,25 @@ async function openReceiptPreview(response:Record<string,unknown>,provisional=fa
   setCartText("#receipt-posting",pickString(response,["posting_datetime","posting_date","creation"])||new Date().toLocaleString());
   setCartText("#receipt-cashier",document.querySelector<HTMLElement>("#pos-cashier")?.textContent??"—");
   setCartText("#receipt-customer",selectedCustomer?(selectedCustomer.customer_name||selectedCustomer.name):"—");
+  const sortedLines=receiptSortedLines(cartLines);
   const itemsBox=document.querySelector<HTMLElement>("#receipt-items");
-  if(itemsBox)itemsBox.replaceChildren(...cartLines.map(line=>{const row=document.createElement("div");row.className="receipt-item";const amount=(line.sellingPrice??0)*line.quantity;[`${line.itemCode} — ${line.itemName}${line.barcode?`\nBarcode: ${line.barcode}`:""}`,String(line.quantity),(line.sellingPrice??0).toFixed(2),amount.toFixed(2)].forEach(text=>{const span=document.createElement("span");span.textContent=text;row.append(span);});return row;}));
+  if(itemsBox)itemsBox.replaceChildren(...sortedLines.map(line=>{const row=document.createElement("div");row.className="receipt-item";const amount=(line.sellingPrice??0)*line.quantity;[`${line.itemCode} — ${line.itemName}${line.barcode?`\nBarcode: ${line.barcode}`:""}`,String(line.quantity),(line.sellingPrice??0).toFixed(2),amount.toFixed(2)].forEach(text=>{const span=document.createElement("span");span.textContent=text;row.append(span);});return row;}));
+  // Snapshot the sale now: releaseSoldCartWorkspace() below empties cart/payments before the local receipt is built.
+  const fbrView=interpretFbr(response);
+  lastReceiptSnapshot={
+    provisional,
+    invoice:posInvoice||terminalInvoiceId,
+    posting:pickString(response,["posting_datetime","posting_date","creation"])||receiptNow(),
+    cashier:(document.querySelector<HTMLElement>("#pos-cashier")?.textContent??"").trim(),
+    customer:selectedCustomer?(selectedCustomer.customer_name||selectedCustomer.name):"",
+    lines:sortedLines.map(line=>({name:line.itemName||line.itemCode,code:line.itemCode,barcode:line.barcode??"",uom:line.uom,qty:line.quantity,rate:line.sellingPrice??0,amount:money2((line.sellingPrice??0)*line.quantity)})),
+    totals,
+    payments:paymentRows.map(row=>({method:row.method,amount:row.amount})),
+    change:changeDue,
+    fbrStatus:provisional?"Pending":fbrView.statusText,
+    fbrNumber:provisional?"":fbrView.invoiceNumber,
+    fbrApplicable:provisional||fbrView.applicable,
+  };
   setCartText("#receipt-before-tax",totals.saleBeforeTax.toFixed(2));
   setCartText("#receipt-sales-tax",totals.salesTax.toFixed(2));
   setCartText("#receipt-service-fee",totals.serviceFee.toFixed(2));
@@ -1911,18 +1931,93 @@ function receiptPrintCss():string{
     .rc-fbr-qr img,.receipt-qr-img{width:100px!important;height:100px!important;image-rendering:crisp-edges}.duplicate-copy,.return-copy{text-align:center!important;font:900 15px Calibri,Arial,sans-serif!important;border:2px solid #000!important;color:#000!important;background:#fff!important;padding:5px!important;margin:4px 0 6px!important;letter-spacing:1px!important;text-transform:uppercase!important}
   </style>`;
 }
+// Receipt lines print A-Z by item name (case-insensitive, like the server "POS 80x3276 v2" format);
+// Array.prototype.sort is stable, so duplicate names keep scan order.
+function receiptSortedLines(lines:CartLine[]):CartLine[]{
+  return [...lines].sort((a,b)=>(a.itemName||a.itemCode).localeCompare(b.itemName||b.itemCode,"en",{sensitivity:"base"}));
+}
+function receiptNow():string{
+  const d=new Date();const p=(n:number)=>String(n).padStart(2,"0");
+  return `${p(d.getDate())}-${p(d.getMonth()+1)}-${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+function receiptMoney(value:number):string{
+  return money2(value).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
+}
+function receiptQty(qty:number,uom:string):string{
+  const n=Number.isInteger(qty)?String(qty):String(Number(qty.toFixed(3)));
+  return uom&&uom!=="Nos"?`${n} ${uom}`:n;
+}
+function receiptEsc(value:string):string{
+  return String(value??"").replace(/[&<>"']/g,(c)=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]??c));
+}
+// Dedicated 80mm layout for the local receipt; independent of the on-screen dialog styles.
+function localReceiptCss():string{
+  return `<style>
+    @page{size:80mm auto;margin:2mm 0}
+    *{box-sizing:border-box}
+    html,body{margin:0;padding:0;background:#fff;color:#000}
+    .lr{width:80mm;max-width:80mm;margin:0 auto;padding:2mm 3mm 4mm;font:11px/1.3 Calibri,Arial,sans-serif;color:#000;font-variant-numeric:tabular-nums}
+    .lr-center{text-align:center}
+    .lr-company{font-size:17px;font-weight:900;text-align:center;letter-spacing:.3px}
+    .lr-branch{font-size:10.5px;font-weight:700;text-align:center;margin-top:1px}
+    .lr-banner{border:2px solid #000;margin:5px 0 4px;padding:3px 2px;text-align:center}
+    .lr-banner b{display:block;font-size:14px;font-weight:900;letter-spacing:1px}
+    .lr-banner span{display:block;font-size:9.5px;font-weight:700;margin-top:1px}
+    .lr-row{display:flex;justify-content:space-between;gap:6px;margin:1px 0}
+    .lr-row>span:first-child{font-weight:700;white-space:nowrap}
+    .lr-row>span:last-child{text-align:right;font-weight:800;overflow-wrap:anywhere}
+    .lr-meta{margin:3px 0 4px;font-size:10.5px}
+    .lr-cols,.lr-nums{display:grid;grid-template-columns:minmax(0,1fr) 13mm 16mm 18mm;gap:1mm}
+    .lr-cols span:not(:first-child),.lr-nums span:not(:first-child){text-align:right;white-space:nowrap}
+    .lr-cols{border-top:1.5px solid #000;border-bottom:1.5px solid #000;padding:2px 0;font-size:9.5px;font-weight:900;text-transform:uppercase}
+    .lr-item{padding:2.5px 0;border-bottom:1px dotted #777;break-inside:avoid;page-break-inside:avoid}
+    .lr-name{font-size:11px;font-weight:900;line-height:1.2;overflow-wrap:anywhere}
+    .lr-nums{font-size:10.5px;font-weight:700;margin-top:1px}
+    .lr-nums .lr-code{font-size:9px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .lr-count{display:flex;justify-content:space-between;font-size:10px;font-weight:800;padding:3px 0;border-bottom:1.5px solid #000}
+    .lr-totals{margin-top:3px;font-size:11.5px}
+    .lr-grand{border-top:2px solid #000;border-bottom:2px solid #000;margin:4px 0;padding:3px 0;font-size:16px}
+    .lr-grand>span{font-weight:900!important}
+    .lr-box{border:1px solid #000;margin-top:5px;padding:3px 4px;font-size:11px;break-inside:avoid;page-break-inside:avoid}
+    .lr-box-title{font-size:9.5px;font-weight:900;text-transform:uppercase;letter-spacing:.5px;text-align:center;border-bottom:1px solid #000;margin-bottom:2px;padding-bottom:1px}
+    .lr-note{font-size:9.5px;font-weight:700;text-align:center;margin-top:2px}
+    .lr-footer{border-top:1px dashed #000;margin-top:6px;padding-top:4px;font-size:10px;font-weight:700;text-align:center}
+  </style>`;
+}
 function buildLocalReceiptHtml(posInvoice:string):string{
-  const structured=document.querySelector<HTMLElement>("#receipt-structured")?.cloneNode(true) as HTMLElement | null;
-  if(structured){
-    structured.removeAttribute("id");
-    structured.querySelectorAll("[id]").forEach((el)=>el.removeAttribute("id"));
-    const esc=(value:string)=>value.replace(/[&<>]/g,(c)=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]??c));
-    const company=(sessionState.company||document.querySelector<HTMLElement>("#config-company")?.textContent||document.querySelector<HTMLInputElement>("#branch")?.value||"POS").trim();
-    const profile=(document.querySelector<HTMLSelectElement>("#pos-profile")?.value||sessionState.posProfile||"").trim();
-    return `<!doctype html><html><head><meta charset="utf-8">${receiptPrintCss()}</head><body><div class="thermal-receipt"><div class="receipt-company">${esc(company)}</div>${profile?`<div class="receipt-footer" style="border-top:0;margin-top:0;padding-top:0">${esc(profile)}</div>`:""}<div class="receipt-title">POS Receipt - Offline Queued</div>${structured.outerHTML}</div></body></html>`;
+  const s=lastReceiptSnapshot;
+  const company=(sessionState.company||document.querySelector<HTMLElement>("#config-company")?.textContent||document.querySelector<HTMLInputElement>("#branch")?.value||"POS").trim();
+  const profile=(document.querySelector<HTMLSelectElement>("#pos-profile")?.value||sessionState.posProfile||"").trim();
+  const row=(label:string,value:string)=>`<div class="lr-row"><span>${receiptEsc(label)}</span><span>${receiptEsc(value)}</span></div>`;
+  const head=`<div class="lr-company">${receiptEsc(company)}</div>${profile?`<div class="lr-branch">${receiptEsc(profile)}</div>`:""}`;
+  if(!s){
+    return `<!doctype html><html><head><meta charset="utf-8">${localReceiptCss()}</head><body><div class="lr">${head}<div class="lr-banner"><b>OFFLINE RECEIPT</b><span>FBR invoice pending</span></div><div class="lr-meta">${row("Invoice",posInvoice||terminalInvoiceId)}</div><div class="lr-note">Sale is saved and will be sent to ERP automatically when online.</div></div></body></html>`;
   }
-  const esc=(value:string)=>value.replace(/[&<>]/g,(c)=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]??c));
-  return `<!doctype html><html><head><meta charset="utf-8">${receiptPrintCss()}</head><body><div class="thermal-receipt"><div class="receipt-title">POS Receipt - Offline Queued</div><div class="receipt-meta"><div><span>Terminal Inv</span><strong>${esc(posInvoice||terminalInvoiceId)}</strong></div><div><span>FBR Status</span><strong>Awaiting internet availability</strong></div><div><span>FBR Invoice No</span><strong>Pending</strong></div><div><span>FBR Response</span><strong>Will submit automatically when ERP is online</strong></div></div></div></body></html>`;
+  const banner=s.provisional
+    ?`<div class="lr-banner"><b>OFFLINE RECEIPT</b><span>FBR invoice pending — submits automatically when online</span></div>`
+    :`<div class="lr-banner"><b>SALE RECEIPT</b><span>Local copy — reprint for the ERP receipt</span></div>`;
+  const meta=[row("Invoice",s.invoice||posInvoice||"—"),row("Date",s.posting),s.cashier?row("Cashier",s.cashier):"",s.customer?row("Customer",s.customer):""].join("");
+  const items=s.lines.map(l=>`<div class="lr-item"><div class="lr-name">${receiptEsc(l.name)}</div><div class="lr-nums"><span class="lr-code">${receiptEsc(l.barcode||l.code)}</span><span>${receiptEsc(receiptQty(l.qty,l.uom))}</span><span>${receiptMoney(l.rate)}</span><span>${receiptMoney(l.amount)}</span></div></div>`).join("");
+  const t=s.totals;
+  const totals=[
+    row("Sale Before Tax",receiptMoney(t.saleBeforeTax)),
+    t.salesTax>0?row("Sales Tax",receiptMoney(t.salesTax)):"",
+    t.serviceFee>0?row("FBR POS Service Fee",receiptMoney(t.serviceFee)):"",
+  ].join("");
+  const grand=`<div class="lr-row lr-grand"><span>GRAND TOTAL</span><span>${receiptMoney(t.grandTotal)}</span></div>`;
+  const deductions=[
+    t.loyaltyAmount>0?row("Loyalty Redeemed",`-${receiptMoney(t.loyaltyAmount)}`):"",
+    t.giftVoucherAmount>0?row("Gift Voucher",`-${receiptMoney(t.giftVoucherAmount)}`):"",
+    (t.loyaltyAmount>0||t.giftVoucherAmount>0)?row("Payable",receiptMoney(t.payable)):"",
+  ].join("");
+  const paid=s.payments.filter(p=>p.method);
+  const payments=paid.length||s.change>0
+    ?`<div class="lr-box"><div class="lr-box-title">Payment</div>${paid.map(p=>row(p.method,receiptMoney(p.amount))).join("")}${s.change>0?row("Change",receiptMoney(s.change)):""}</div>`
+    :"";
+  const fbr=s.fbrApplicable
+    ?`<div class="lr-box"><div class="lr-box-title">FBR</div>${row("Status",s.provisional?"Pending (offline)":s.fbrStatus)}${row("FBR Invoice No",s.fbrNumber||"Pending")}${s.provisional?`<div class="lr-note">Will be submitted to FBR automatically when the till is back online.</div>`:""}</div>`
+    :"";
+  return `<!doctype html><html><head><meta charset="utf-8">${localReceiptCss()}</head><body><div class="lr">${head}${banner}<div class="lr-meta">${meta}</div><div class="lr-cols"><span>Item</span><span>Qty</span><span>Rate</span><span>Amount</span></div>${items}<div class="lr-count"><span>Items: ${s.lines.length}</span></div><div class="lr-totals">${totals}${grand}${deductions}</div>${payments}${fbr}<div class="lr-footer">Thank you for shopping with us!</div></div></body></html>`;
 }
 
 function sanitizeReceiptHtml(html:string):string{
