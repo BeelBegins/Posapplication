@@ -656,6 +656,8 @@ dialog input:focus-visible,dialog select:focus-visible,dialog textarea:focus-vis
 .app-message-dialog h3 { margin: 0 0 12px; }
 .app-message-dialog #app-message-text { margin: 0 0 18px; white-space: pre-wrap; line-height: 1.5; color: var(--color-text); }
 .app-message-dialog .form-actions { justify-content: flex-end; }
+.void-reason-dialog textarea { display: block; width: 100%; margin-top: 7px; padding: 9px 12px; border: 1px solid var(--color-border-strong); border-radius: 8px; font: inherit; resize: vertical; }
+.void-reason-dialog #void-reason-message:empty { display: none; }
 
 @media (max-width: 720px) {
   .app-shell { padding: 48px 24px; }

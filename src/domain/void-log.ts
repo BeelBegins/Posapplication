@@ -25,6 +25,8 @@ export interface VoidEvent {
   /** Sum of qty x rate before tax (an estimate: the cart was never billed). */
   totalAmount: number;
   note: string;
+  /** Cashier's reason; only asked when POS Profile.custom_require_void_reason is on, else "". */
+  reason: string;
   syncedAt: string | null;
   attempts: number;
 }
@@ -32,11 +34,13 @@ export interface VoidEvent {
 export interface VoidEventInput {
   kind: VoidKind;
   cashierUser: string; cashierName?: string; posProfile?: string; terminalId?: string; hardwareId?: string;
-  openingEntry?: string; customer?: string; authorizedBy: VoidEvent["authorizedBy"]; note?: string;
+  openingEntry?: string; customer?: string; authorizedBy: VoidEvent["authorizedBy"]; note?: string; reason?: string;
   lines: Array<{ itemCode?: unknown; itemName?: unknown; uom?: unknown; qty?: unknown; rate?: unknown }>;
 }
 
 export const VOID_LOG_MAX_EVENTS = 5000;
+/** Same cap the server stores (POS Void Log.reason). */
+export const VOID_REASON_MAX_LENGTH = 500;
 const SYNCED_KEEP_DAYS = 90;
 const money = (n: number) => Math.round((Number.isFinite(n) ? n : 0) * 100) / 100;
 const num = (v: unknown) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
@@ -53,6 +57,7 @@ export function buildVoidEvent(input: VoidEventInput, now: Date = new Date(), ra
     posProfile: input.posProfile ?? "", terminalId: input.terminalId ?? "", hardwareId: input.hardwareId ?? "",
     openingEntry: input.openingEntry ?? "", customer: input.customer ?? "", authorizedBy: input.authorizedBy,
     lines, totalAmount: money(lines.reduce((sum, l) => sum + l.amount, 0)), note: input.note ?? "",
+    reason: String(input.reason ?? "").trim().slice(0, VOID_REASON_MAX_LENGTH),
     syncedAt: null, attempts: 0
   };
 }

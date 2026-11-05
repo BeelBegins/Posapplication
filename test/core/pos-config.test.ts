@@ -35,7 +35,7 @@ test("summarizePosConfiguration maps a synced configuration bundle", () => {
   assert.deepEqual(summary, {
     posProfile: "Main", company: "Test Co", branch: "Branch A", warehouse: "WH-A", defaultCustomer: "Walk-in",
     sellingPriceList: "Standard", currency: "PKR", taxTemplate: "Std Tax", taxRowsCount: 1, paymentMethodsCount: 2,
-    allowItemSearch: true, allowClearCart: true, allowHeldSales: false,
+    allowItemSearch: true, allowClearCart: true, allowHeldSales: false, requireVoidReason: false,
     isFoodpandaProfile: false, foodpandaCreditMode: "",
     lastSynced: "2026-01-01T00:00:00.000Z", cacheStatus: "Ready"
   });
@@ -174,4 +174,14 @@ test("previewCart sends the human cashier identity to the server", async () => {
   assert.equal(result.error, null);
   assert.equal(sentBodies[0]?.cashier_user, "smir@aimatic.tech");
   assert.equal(sentBodies[0]?.pos_profile, "S1GT Counter 1");
+});
+
+test("summarizePosConfiguration keeps the void reason step off unless the profile requires it", () => {
+  const deps = fakeDeps();
+  const core = createPosConfigCore(deps, createHttpCore(deps));
+  const profile = { name: "Main", company: "Test Co", warehouse: "WH-A", customer: "Walk-in", selling_price_list: "Standard", currency: "PKR" };
+  const summarize = (extra: Record<string, unknown>) => core.summarizePosConfiguration({ pos_profile: { ...profile, ...extra }, tax_template: null, payment_modes: [], synced_at: "2026-01-01T00:00:00.000Z" });
+  assert.equal(summarize({})?.requireVoidReason, false);
+  assert.equal(summarize({ custom_require_void_reason: 0 })?.requireVoidReason, false);
+  assert.equal(summarize({ custom_require_void_reason: 1 })?.requireVoidReason, true);
 });

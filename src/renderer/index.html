@@ -656,6 +656,18 @@
           <button id="app-message-cancel" type="button" class="secondary-button">Cancel</button>
         </div>
       </dialog>
+      <dialog id="void-reason-dialog" class="customer-dialog app-message-dialog void-reason-dialog">
+        <form id="void-reason-form">
+          <h3 id="void-reason-title">Reason</h3>
+          <p class="card-meta">This POS Profile records a reason for every void.</p>
+          <label>Reason<textarea id="void-reason-input" rows="3" maxlength="500" autocomplete="off"></textarea></label>
+          <p id="void-reason-message" class="settings-message error" role="alert"></p>
+          <div class="form-actions">
+            <button id="void-reason-confirm" type="submit">Continue</button>
+            <button id="void-reason-cancel" type="button" class="secondary-button">Cancel</button>
+          </div>
+        </form>
+      </dialog>
       <dialog id="settings-auth-dialog" class="customer-dialog admin-dialog">
         <form id="settings-auth-form">
           <h3>Settings Access</h3>
