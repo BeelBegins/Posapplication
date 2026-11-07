@@ -129,6 +129,17 @@ const MIGRATIONS: Migration[] = [
       "ALTER TABLE pos_customers ADD COLUMN custom_legacy_customer_code TEXT",
       "DELETE FROM app_meta WHERE key IN ('customers_last_sync', 'customers_last_full_sync')"
     ]
+  },
+  {
+    // v6 - before this, item prices were only ever UPSERTed, so an Item Price deleted on the
+    // server stayed in the cache forever and could win a lookup (szl 2026-11: a mistyped
+    // "Pcs = 2550" row deleted after a few hours kept flashing on the till as the scan price).
+    // Full syncs now replace the active list's prices; forcing the next item sync to be full
+    // purges such residue right after upgrade instead of up to 24h later.
+    version: 6,
+    sql: [
+      "DELETE FROM app_meta WHERE key = 'items_last_full_sync'"
+    ]
   }
 ];
 
@@ -630,6 +641,9 @@ export function upsertCatalog(data: {
   totals: CatalogTotals;
   replaceBarcodes: boolean;
   replaceConversions: boolean;
+  // Full sync only: the complete active price list was fetched, so cached rows for that list
+  // that the server no longer returns (deleted Item Prices) must go. Deltas never set this.
+  replacePrices?: boolean;
   // The single price list every row in `prices` was fetched for (the sync call already scopes
   // its Item Price fetch to `[["price_list", "=", priceList], ...]` - see catalog-sync.ts - so
   // every row in this batch belongs to the same list; stamped here rather than requested from
@@ -656,6 +670,7 @@ export function upsertCatalog(data: {
   const state = database.prepare("INSERT INTO catalog_sync_state VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value");
   database.transaction(() => {
     for (const row of data.items) item.run(text(row, "name"), text(row, "item_name"), text(row, "item_group"), text(row, "stock_uom"), bool(row, "is_stock_item"), bool(row, "is_sales_item"), bool(row, "disabled"), bool(row, "has_batch_no"), bool(row, "has_serial_no"), text(row, "modified"));
+    if (data.replacePrices && data.priceList) database!.prepare("DELETE FROM pos_item_prices WHERE price_list = ?").run(data.priceList);
     for (const row of data.prices) price.run(text(row, "name"), text(row, "item_code"), text(row, "uom"), number(row, "price_list_rate"), text(row, "currency"), text(row, "valid_from"), text(row, "valid_upto"), text(row, "modified"), data.priceList);
     // This terminal operates under one price list at a time (data.priceList); anything cached
     // under a different list - or NULL, from before this column existed - is stale residue that

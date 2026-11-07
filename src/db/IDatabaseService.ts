@@ -81,7 +81,7 @@ export interface IDatabaseService {
   upsertCatalog(data: {
     items: Record<string, unknown>[]; prices: Record<string, unknown>[]; stock: Record<string, unknown>[];
     barcodes: Record<string, unknown>[]; conversions: Record<string, unknown>[]; totals: CatalogTotals;
-    replaceBarcodes: boolean; replaceConversions: boolean; priceList: string;
+    replaceBarcodes: boolean; replaceConversions: boolean; replacePrices?: boolean; priceList: string;
   }): void;
   getCatalogTotals(): CatalogTotals;
   searchCatalog(query: string, warehouse: string, priceList: string): CatalogSearchResult[];
