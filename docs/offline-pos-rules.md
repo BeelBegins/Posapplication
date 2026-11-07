@@ -163,10 +163,27 @@ If sync fails:
 
 Never send `OFFLINE-*` as `opening_entry` to ERPNext APIs.
 
+## Offline Supervisor PIN (void and Clear Cart)
+
+Online, a cashier without void permission needs a supervisor's ERP password, checked by the
+server and consumed as a single-use token. Offline that cannot happen, so:
+
+- A POS Supervisor sets an Offline POS PIN (4-12 digits) on their ERP User page, next to the
+  password. ERP keeps only a scrypt hash (`POS Supervisor Offline PIN`).
+- Each catalog sync also pulls the hashes of the supervisors for this POS Profile's branch
+  (`aimatic.offline_pos.supervisor_pin.get_offline_supervisor_pins`), valid for 7 days.
+- Only while the till shows Offline, and only for item void and Clear Cart, the supervisor
+  dialog asks for username + Offline PIN instead of the password.
+- 5 wrong tries (wrong user or PIN) lock the PIN for 5 minutes on that till.
+- The void is logged with `authorizedBy = offline_supervisor_pin` and `approvedBy` = the
+  supervisor, and reaches ERP when the till reconnects.
+- Android POS keeps the online-only supervisor step-up.
+
 ## Still Online-Only
 
 - Refund
 - Close Shift
+- Supervisor approval for anything other than item void and Clear Cart
 - FBR final submission
 - Customer creation
 - Force sync/settings operations needing server

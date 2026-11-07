@@ -72,7 +72,9 @@ test("Clear Cart uses action-bound supervisor authorization", () => {
   const main = source("src/main.ts");
   const renderer = source("src/renderer/renderer.ts");
   assert.match(main, /type AdminAction = [^;]*"clear_cart"/);
-  assert.match(renderer, /async function clearFullCart\(\): Promise<void> \{[^]*?!cashierSession\?\.canVoidItems[^]*?requestSupervisorActionAuthorization\("clear_cart"\)[^]*?consumeAdminAction\(\{ token: auth\.token, action: "clear_cart" \}\)[^]*?clearActiveSale\("Cart cleared"\)/);
+  assert.match(renderer, /async function clearFullCart\(\): Promise<void> \{[^]*?approveCartRemoval\("clear_cart"\)[^]*?if \(!approval\) return;[^]*?clearActiveSale\("Cart cleared"\)/);
+  // Shared approval: own role, else offline PIN when offline, else online single-use token bound to the action.
+  assert.match(renderer, /async function approveCartRemoval\([^]*?cashierSession\?\.canVoidItems[^]*?requestOfflineSupervisorPin\(action\)[^]*?requestSupervisorActionAuthorization\(action\)[^]*?consumeAdminAction\(\{ token: auth\.token, action \}\)/);
   assert.match(renderer, /querySelector\("#cart-clear"\)[^]*?clearFullCart\(\)/);
 });
 
