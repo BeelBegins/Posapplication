@@ -28,7 +28,7 @@ after(() => {
 test("initDatabase runs the schema baseline and every migration to the latest version", () => {
   const status = db.getDatabaseStatus();
   assert.equal(status.isReady, true);
-  assert.equal(status.schemaVersion, "5");
+  assert.equal(status.schemaVersion, "6");
 });
 
 test("initDatabase is idempotent — calling it again does not throw or reset state", () => {
@@ -232,4 +232,25 @@ test("searchCustomers matches mobile_no and custom_legacy_customer_code", () => 
 
   const byMobile = db.searchCustomers("3335522339");
   assert.equal(byMobile.some((row) => row.name === "CUST-LEGACY-1"), true);
+});
+
+test("full catalog sync drops cached prices the server deleted; delta sync keeps them", () => {
+  const base = { items: [{ name: "MILK-1", item_name: "Milk 250ml", stock_uom: "Pcs", is_sales_item: 1, disabled: 0 }], stock: [], conversions: [{ item_code: "MILK-1", uom: "Box", conversion_factor: 27 }], totals: { items: 1, prices: 0, barcodes: 1, stockRows: 0, lastSynced: "2026-11-08T00:00:00Z" }, replaceConversions: false, priceList: "S2 Selling" };
+  // Cache picked up a mistyped Pcs row (newer modified) before it was deleted on the server.
+  db.upsertCatalog({ ...base, barcodes: [{ item_code: "MILK-1", barcode: "8961008022185", uom: "Pcs" }], replaceBarcodes: true, prices: [
+    { name: "P-PCS", item_code: "MILK-1", uom: "Pcs", price_list_rate: 98, currency: "PKR", modified: "2026-10-14 13:08:10" },
+    { name: "P-WRONG", item_code: "MILK-1", uom: "Pcs", price_list_rate: 2550, currency: "PKR", modified: "2026-10-18 16:11:36" }
+  ] });
+  assert.equal(db.lookupCatalog("8961008022185", "WH", "S2 Selling").exact?.sellingPrice, 2550, "reproduces the stale-row flash");
+
+  // A delta sync never sees deletions and must not destroy anything.
+  db.upsertCatalog({ ...base, barcodes: [], replaceBarcodes: false, prices: [], replacePrices: false });
+  assert.equal(db.lookupCatalog("8961008022185", "WH", "S2 Selling").exact?.sellingPrice, 2550);
+
+  // Full sync returns only what exists on the server: the deleted row disappears.
+  db.upsertCatalog({ ...base, barcodes: [], replaceBarcodes: false, replacePrices: true, prices: [
+    { name: "P-PCS", item_code: "MILK-1", uom: "Pcs", price_list_rate: 98, currency: "PKR", modified: "2026-10-14 13:08:10" },
+    { name: "P-BOX", item_code: "MILK-1", uom: "Box", price_list_rate: 2550, currency: "PKR", modified: "2026-10-18 22:00:07" }
+  ] });
+  assert.equal(db.lookupCatalog("8961008022185", "WH", "S2 Selling").exact?.sellingPrice, 98);
 });

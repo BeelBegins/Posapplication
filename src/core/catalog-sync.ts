@@ -191,8 +191,9 @@ export function createCatalogSyncCore(deps: PosCoreDeps, http: ReturnType<typeof
         barcodeError = error instanceof Error ? error.message : "Unable to sync Item Barcode.";
       }
       const totals = { items: items.length, prices: prices.length, barcodes: barcodes.length, stockRows: stock.length, lastSynced: new Date().toISOString() };
-      // Full → DELETE+INSERT (replace) for barcodes/conversions; delta → UPSERT only (no destructive replace).
-      deps.db.upsertCatalog({ items, prices, stock, barcodes, conversions, totals, replaceBarcodes: doFull && !barcodeError, replaceConversions: doFull && !conversionError, priceList });
+      // Full → DELETE+INSERT (replace) for barcodes/conversions/prices; delta → UPSERT only (no destructive replace).
+      // Prices are replaced only when the full fetch returned rows, so an empty response cannot wipe the cache.
+      deps.db.upsertCatalog({ items, prices, stock, barcodes, conversions, totals, replaceBarcodes: doFull && !barcodeError, replaceConversions: doFull && !conversionError, replacePrices: doFull && prices.length > 0, priceList });
       // Advance watermarks from the server-provided max(modified) — never regress on an empty delta or a failed fetch.
       const itemsWatermark = maxModified(items, prices, stock, conversionError ? [] : conversions);
       if (itemsWatermark) deps.db.setMeta("items_last_sync", itemsWatermark);

@@ -173,7 +173,10 @@ export const mobileDatabase: IDatabaseService = {
   findCustomerByNormalizedMobile(mobile) { return Object.values(state.customers).find(x=>normalizeMobile(String(x.mobile_no??""))===mobile)??null; },
   cacheCustomer(name,data) { state.customerCache[name]=data;persist(); },
   getCachedCustomer(name) { return state.customerCache[name]??null; },
-  upsertCatalog(data) { for(const x of data.items){const k=rowText(x,"name");if(k)state.items[k]={...state.items[k],...x};}for(const x of data.prices){const k=rowText(x,"name")||`${rowText(x,"item_code")}:${rowText(x,"uom")}`;if(k)state.prices[k]={...state.prices[k],...x,price_list:data.priceList};}
+  upsertCatalog(data) { for(const x of data.items){const k=rowText(x,"name");if(k)state.items[k]={...state.items[k],...x};}
+    // Full sync fetched the whole active list: drop its cached rows first so server-deleted prices go.
+    if(data.replacePrices&&data.priceList){state.prices=Object.fromEntries(Object.entries(state.prices).filter(([,v])=>rowText(v,"price_list")!==data.priceList));}
+    for(const x of data.prices){const k=rowText(x,"name")||`${rowText(x,"item_code")}:${rowText(x,"uom")}`;if(k)state.prices[k]={...state.prices[k],...x,price_list:data.priceList};}
     // Drop any cached row tagged with a different (or, from before this field existed, no) price
     // list - same reasoning as database.ts's equivalent cleanup: a stale row from a previously
     // configured price list must not still be eligible to win a lookup for this item.

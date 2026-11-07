@@ -47,6 +47,19 @@ test("Android catalogue lookup is indexed and cart saves exclude the large catal
   const oldListNowStale = mobileDatabase.lookupCatalog("123456789", "STORE - TC", "Standard Selling");
   assert.equal(oldListNowStale.exact?.sellingPrice, null, "old price list's cached rate must not still be reachable");
 
+  // Full sync replaces the active list, so a price deleted on the server stops winning lookups.
+  mobileDatabase.upsertCatalog({
+    items: [],
+    prices: [{ name: "PRICE-3", item_code: "ITEM-1", uom: "Nos", price_list_rate: 111, currency: "PKR", modified: "2026-07-10 00:00:00" }],
+    stock: [], barcodes: [], conversions: [],
+    totals: { items: 1, prices: 1, barcodes: 1, stockRows: 1, lastSynced: "2026-07-17T00:00:00Z" },
+    replaceBarcodes: false,
+    replaceConversions: false,
+    replacePrices: true,
+    priceList: "Foodpanda Price List"
+  });
+  assert.equal(mobileDatabase.lookupCatalog("123456789", "STORE - TC", "Foodpanda Price List").exact?.sellingPrice, 111, "deleted PRICE-2 must be gone after a full sync");
+
   const operational = JSON.parse(values.get("aimatic-pos-mobile") ?? "{}") as Record<string, unknown>;
   const catalogue = JSON.parse(values.get("aimatic-pos-mobile-catalog") ?? "{}") as Record<string, unknown>;
   assert.equal("items" in operational, false);
