@@ -99,6 +99,7 @@ interface PosAPI {
   installRelease: (input: Record<string, unknown>) => Promise<{ ok: boolean; error: string | null }>;
   authorizeAdminAction: (input: Record<string, unknown>) => Promise<{ ok: boolean; token: string; error: string | null }>;
   consumeAdminAction: (input: Record<string, unknown>) => Promise<{ ok: boolean; error: string | null }>;
+  verifyOfflineSupervisorPin: (input: Record<string, unknown>) => Promise<{ ok: boolean; user: string; fullName: string; error: string | null }>;
   resetCashierOfflinePin: (input: Record<string, unknown>) => Promise<{ ok: boolean; error: string | null }>;
   pushCustomerDisplay: (payload: Record<string, unknown>) => void;
   previewCustomerDisplay: () => Promise<"opened-fullscreen" | "opened-windowed" | "focused" | "no-second-display">;
@@ -182,7 +183,7 @@ interface PosSessionSummary {
 interface CatalogTotals { items: number; prices: number; barcodes: number; stockRows: number; lastSynced: string | null; }
 interface CatalogSearchResult { itemCode: string; itemName: string; barcode: string | null; uom: string; conversionFactor: number; sellingPrice: number | null; currency: string | null; actualStock: number | null; warehouse: string | null; mrp: number | null; }
 interface CartLine extends CatalogSearchResult { quantity: number; }
-interface VoidEventView { eventId: string; kind: "line_void" | "clear_cart" | "held_sale_deleted"; createdAt: string; cashierUser: string; cashierName: string; openingEntry: string; customer: string; authorizedBy: string; lines: Array<{ itemCode: string; itemName: string; uom: string; qty: number; rate: number; amount: number }>; totalAmount: number; reason?: string; syncedAt: string | null; }
+interface VoidEventView { eventId: string; kind: "line_void" | "clear_cart" | "held_sale_deleted"; createdAt: string; cashierUser: string; cashierName: string; openingEntry: string; customer: string; authorizedBy: string; approvedBy?: string; lines: Array<{ itemCode: string; itemName: string; uom: string; qty: number; rate: number; amount: number }>; totalAmount: number; reason?: string; syncedAt: string | null; }
 interface CustomerResult { name:string; customer_name:string; customer_group:string; mobile_no:string; email_id:string; tax_id:string; custom_legacy_customer_code?:string; }
 interface PaymentRow { method:string; amount:number; }
 
@@ -2412,7 +2413,7 @@ async function renderVoidHistory():Promise<void>{
     head.append(title,when);
     const items=document.createElement("div"); items.className="void-row-meta"; items.textContent=e.lines.map((l)=>`${l.itemName||l.itemCode} × ${l.qty} ${l.uom}`).join(", ")||"—";
     const meta=document.createElement("div"); meta.className="void-row-meta";
-    meta.append(`${e.cashierName||e.cashierUser} · ${e.authorizedBy==="supervisor_prompt"?"supervisor approved":"cashier's own permission"}${e.openingEntry?` · ${e.openingEntry}`:""} · `);
+    meta.append(`${e.cashierName||e.cashierUser} · ${e.authorizedBy==="supervisor_prompt"?`supervisor approved${e.approvedBy?` (${e.approvedBy})`:""}`:e.authorizedBy==="offline_supervisor_pin"?`offline supervisor PIN${e.approvedBy?` (${e.approvedBy})`:""}`:"cashier's own permission"}${e.openingEntry?` · ${e.openingEntry}`:""} · `);
     const sync=document.createElement("span"); sync.className="void-sync"; sync.textContent=e.syncedAt?"sent to ERP":"waiting to send"; meta.append(sync);
     if(e.reason){const why=document.createElement("div"); why.className="void-row-meta"; why.textContent=`Reason: ${e.reason}`; row.append(head,items,why,meta); return row;}
     row.append(head,items,meta); return row;
@@ -3124,13 +3125,28 @@ function askVoidReason(actionLabel: string): Promise<string | null> {
 }
 // Every void is written to the local void log (and sent to ERP when it can be) so a removed line
 // leaves a trace. Fire-and-forget: a logging problem must never block the cashier or the cart.
-function recordVoidEvent(kind: VoidEventView["kind"], lines: CartLine[], authorizedBy: "supervisor_prompt" | "cashier_privilege", note = "", reason = ""): void {
+type VoidAuthorizedBy = "supervisor_prompt" | "cashier_privilege" | "offline_supervisor_pin";
+function recordVoidEvent(kind: VoidEventView["kind"], lines: CartLine[], authorizedBy: VoidAuthorizedBy, note = "", reason = "", approvedBy = ""): void {
   void window.posAPI.recordVoid({
-    kind, authorizedBy, note, reason,
+    kind, authorizedBy, approvedBy, note, reason,
     cashierUser: cashierSession?.user ?? "", cashierName: cashierSession?.fullName ?? "",
     customer: selectedCustomer?.name ?? "",
     lines: lines.map((l) => ({ itemCode: l.itemCode, itemName: l.itemName, uom: l.uom, qty: l.quantity, rate: l.sellingPrice ?? 0 }))
   }).then(() => { if (isOnline()) void window.posAPI.syncVoidLog().catch(() => undefined); }).catch(() => undefined);
+}
+// Who may remove cart lines: the cashier's own role, else a supervisor - by ERP password online
+// (single-use server token), or by Offline POS PIN when the till is offline. null = not approved.
+async function approveCartRemoval(action: "void_item" | "clear_cart"): Promise<{ authorizedBy: VoidAuthorizedBy; approvedBy: string } | null> {
+  if (cashierSession?.canVoidItems) return { authorizedBy: "cashier_privilege", approvedBy: "" };
+  if (!navigator.onLine || !isOnline()) {
+    const supervisor = await requestOfflineSupervisorPin(action);
+    return supervisor ? { authorizedBy: "offline_supervisor_pin", approvedBy: supervisor } : null;
+  }
+  const auth = await requestSupervisorActionAuthorization(action);
+  if (!auth.ok) return null;
+  const consumed = await window.posAPI.consumeAdminAction({ token: auth.token, action });
+  if (!consumed.ok) { cartMessage(consumed.error ?? "Supervisor authorization could not be verified."); return null; }
+  return { authorizedBy: "supervisor_prompt", approvedBy: auth.user };
 }
 async function voidCartRow(index: number): Promise<void> {
   if (index < 0 || index >= cartLines.length) return;
@@ -3140,16 +3156,11 @@ async function voidCartRow(index: number): Promise<void> {
   // The cart may have changed while the reason dialog was open; void the same line or nothing.
   index = cartLines.indexOf(line);
   if (index < 0) return;
-  const voidedBy = cashierSession?.canVoidItems ? "cashier_privilege" : "supervisor_prompt";
-  if (!cashierSession?.canVoidItems) {
-    const auth = await requestSupervisorActionAuthorization("void_item");
-    if (!auth.ok) return;
-    const consumed = await window.posAPI.consumeAdminAction({ token: auth.token, action: "void_item" });
-    if (!consumed.ok) { cartMessage(consumed.error ?? "Supervisor authorization could not be verified."); return; }
-  }
+  const approval = await approveCartRemoval("void_item");
+  if (!approval) return;
   index = cartLines.indexOf(line);
   if (index < 0) return;
-  recordVoidEvent("line_void", [line], voidedBy, "", reason);
+  recordVoidEvent("line_void", [line], approval.authorizedBy, "", reason, approval.approvedBy);
   cartLines.splice(index, 1);
   await afterCartMutation("Item voided");
 }
@@ -3167,14 +3178,9 @@ async function clearFullCart(): Promise<void> {
   if (!(await appConfirm("Clear the full cart?"))) return;
   const reason = await askVoidReason("clear the cart");
   if (reason === null) return;
-  const clearedBy = cashierSession?.canVoidItems ? "cashier_privilege" : "supervisor_prompt";
-  if (!cashierSession?.canVoidItems) {
-    const auth = await requestSupervisorActionAuthorization("clear_cart");
-    if (!auth.ok) return;
-    const consumed = await window.posAPI.consumeAdminAction({ token: auth.token, action: "clear_cart" });
-    if (!consumed.ok) { cartMessage(consumed.error ?? "Supervisor authorization could not be verified."); return; }
-  }
-  recordVoidEvent("clear_cart", [...cartLines], clearedBy, "", reason);
+  const approval = await approveCartRemoval("clear_cart");
+  if (!approval) return;
+  recordVoidEvent("clear_cart", [...cartLines], approval.authorizedBy, "", reason, approval.approvedBy);
   await clearActiveSale("Cart cleared");
 }
 
@@ -4335,18 +4341,18 @@ const SUPERVISOR_ACTION_COPY: Record<"close_shift" | "void_item" | "clear_cart" 
   clear_cart: { title: "Supervisor Authorization — Clear Cart", note: "This cashier is not permitted to clear the full cart. A POS Supervisor must enter their ERP credentials to authorize abandoning this bill." },
   refund: { title: "Supervisor Authorization — Refund", note: "This cashier is not permitted to refund. A POS Supervisor must enter their ERP credentials to authorize this return." },
 };
-async function requestSupervisorActionAuthorization(action: "close_shift" | "void_item" | "clear_cart" | "refund"): Promise<{ ok: boolean; token: string }> {
+async function requestSupervisorActionAuthorization(action: "close_shift" | "void_item" | "clear_cart" | "refund"): Promise<{ ok: boolean; token: string; user: string }> {
   const dialog = document.querySelector<HTMLDialogElement>("#supervisor-action-dialog");
   const form = document.querySelector<HTMLFormElement>("#supervisor-action-form");
-  if (!dialog || !form) return { ok: false, token: "" };
-  if (!navigator.onLine) { await appAlert("Online connection required for supervisor authorization."); return { ok: false, token: "" }; }
+  if (!dialog || !form) return { ok: false, token: "", user: "" };
+  if (!navigator.onLine) { await appAlert("Online connection required for supervisor authorization."); return { ok: false, token: "", user: "" }; }
   const copy = SUPERVISOR_ACTION_COPY[action];
   setText("#supervisor-action-title", copy.title);
   setText("#supervisor-action-note", copy.note);
   prepareSupervisorCredentialFields("#supervisor-action-user", "#supervisor-action-password");
   adminMessage("#supervisor-action-message", "");
   return new Promise((resolve) => {
-    const cleanup = () => { form.onsubmit = null; resolve({ ok: false, token: "" }); };
+    const cleanup = () => { form.onsubmit = null; resolve({ ok: false, token: "", user: "" }); };
     document.querySelector<HTMLButtonElement>("#supervisor-action-cancel")!.onclick = () => { dialog.close(); cleanup(); };
     form.onsubmit = async (event) => {
       event.preventDefault();
@@ -4360,7 +4366,43 @@ async function requestSupervisorActionAuthorization(action: "close_shift" | "voi
       saveLastSupervisorUser(username);
       dialog.close();
       form.onsubmit = null;
-      resolve({ ok: true, token: auth.token });
+      resolve({ ok: true, token: auth.token, user: username });
+    };
+    dialog.showModal();
+  });
+}
+
+// Offline twin of the supervisor dialog: same form, but checks the supervisor's Offline POS PIN
+// against hashes synced from ERP. Resolves the approving supervisor's user, or "" when cancelled.
+async function requestOfflineSupervisorPin(action: "void_item" | "clear_cart"): Promise<string> {
+  const dialog = document.querySelector<HTMLDialogElement>("#supervisor-action-dialog");
+  const form = document.querySelector<HTMLFormElement>("#supervisor-action-form");
+  const secretLabel = document.querySelector<HTMLInputElement>("#supervisor-action-password")?.closest("label");
+  if (!dialog || !form) return "";
+  const labelText = secretLabel?.firstChild;
+  const restoreLabel = () => { if (labelText) labelText.textContent = "ERP Password"; };
+  if (labelText) labelText.textContent = "Offline Supervisor PIN";
+  setText("#supervisor-action-title", action === "void_item" ? "Offline Supervisor PIN — Void Item" : "Offline Supervisor PIN — Clear Cart");
+  setText("#supervisor-action-note", "ERP is offline. A POS Supervisor must enter their username and Offline POS PIN (set on their ERP User page).");
+  prepareSupervisorCredentialFields("#supervisor-action-user", "#supervisor-action-password");
+  adminMessage("#supervisor-action-message", "");
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (user: string) => { if (settled) return; settled = true; form.onsubmit = null; restoreLabel(); resolve(user); };
+    // Escape closes the dialog without the Cancel button; still restore the label and resolve.
+    dialog.addEventListener("close", () => finish(""), { once: true });
+    document.querySelector<HTMLButtonElement>("#supervisor-action-cancel")!.onclick = () => { dialog.close(); finish(""); };
+    form.onsubmit = async (event) => {
+      event.preventDefault();
+      const username = document.querySelector<HTMLInputElement>("#supervisor-action-user")?.value.trim() ?? "";
+      const pinInput = document.querySelector<HTMLInputElement>("#supervisor-action-password");
+      const pin = pinInput?.value.trim() ?? "";
+      if (pinInput) pinInput.value = "";
+      const result = await window.posAPI.verifyOfflineSupervisorPin({ username, pin, action });
+      if (!result.ok) { adminMessage("#supervisor-action-message", result.error ?? "Offline supervisor PIN was not accepted."); return; }
+      saveLastSupervisorUser(username);
+      finish(result.user);
+      dialog.close();
     };
     dialog.showModal();
   });

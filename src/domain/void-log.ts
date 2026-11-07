@@ -19,8 +19,10 @@ export interface VoidEvent {
   hardwareId: string;
   openingEntry: string;
   customer: string;
-  /** "supervisor_prompt": a supervisor password was entered for this void. "cashier_privilege": cashier's own role allows voids, nobody else approved it. */
-  authorizedBy: "supervisor_prompt" | "cashier_privilege";
+  /** "supervisor_prompt": a supervisor password was entered for this void. "cashier_privilege": cashier's own role allows voids, nobody else approved it. "offline_supervisor_pin": the till was offline and a supervisor entered their Offline POS PIN. */
+  authorizedBy: "supervisor_prompt" | "cashier_privilege" | "offline_supervisor_pin";
+  /** Supervisor user who approved it (blank for cashier_privilege). */
+  approvedBy?: string;
   lines: VoidLine[];
   /** Sum of qty x rate before tax (an estimate: the cart was never billed). */
   totalAmount: number;
@@ -34,7 +36,7 @@ export interface VoidEvent {
 export interface VoidEventInput {
   kind: VoidKind;
   cashierUser: string; cashierName?: string; posProfile?: string; terminalId?: string; hardwareId?: string;
-  openingEntry?: string; customer?: string; authorizedBy: VoidEvent["authorizedBy"]; note?: string; reason?: string;
+  openingEntry?: string; customer?: string; authorizedBy: VoidEvent["authorizedBy"]; approvedBy?: string; note?: string; reason?: string;
   lines: Array<{ itemCode?: unknown; itemName?: unknown; uom?: unknown; qty?: unknown; rate?: unknown }>;
 }
 
@@ -56,6 +58,7 @@ export function buildVoidEvent(input: VoidEventInput, now: Date = new Date(), ra
     cashierUser: input.cashierUser, cashierName: input.cashierName ?? input.cashierUser,
     posProfile: input.posProfile ?? "", terminalId: input.terminalId ?? "", hardwareId: input.hardwareId ?? "",
     openingEntry: input.openingEntry ?? "", customer: input.customer ?? "", authorizedBy: input.authorizedBy,
+    approvedBy: String(input.approvedBy ?? "").trim().slice(0, 140),
     lines, totalAmount: money(lines.reduce((sum, l) => sum + l.amount, 0)), note: input.note ?? "",
     reason: String(input.reason ?? "").trim().slice(0, VOID_REASON_MAX_LENGTH),
     syncedAt: null, attempts: 0

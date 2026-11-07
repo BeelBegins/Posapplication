@@ -41,6 +41,7 @@ import {
   ,clearSiteScopedCache
   ,getOrCreateHardwareId
 } from "./db/database";
+import { checkOfflineSupervisorPin, parseLock, parseSupervisorPinCache, parseSupervisorPinResponse } from "./domain/offline-supervisor-pin";
 import type { ShiftHistoryRow } from "./db/database";
 import type { CashierLoginResult } from "./core/types";
 import * as database from "./db/database";
@@ -651,6 +652,48 @@ async function consumePosAdminAction(input: Record<string, unknown>): Promise<{ 
   }
 }
 
+// Offline Supervisor PIN: hashes synced from ERP (aimatic.offline_pos.supervisor_pin), checked
+// here while the till is offline. Logic lives in src/domain/offline-supervisor-pin.ts.
+const OFFLINE_SUPERVISOR_PINS_KEY = "offline_supervisor_pins_v1";
+const OFFLINE_SUPERVISOR_PIN_LOCK_KEY = "offline_supervisor_pin_lock_v1";
+
+async function syncOfflineSupervisorPins(): Promise<{ ok: boolean; count: number; error: string | null }> {
+  const settings = loadSettings();
+  if (!settings.erpnextUrl || !settings.apiKey || !settings.apiSecret || !settings.posProfile) return { ok: false, count: 0, error: "Terminal settings are required." };
+  let base: URL;
+  try { base = new URL(normalizeErpnextUrl(settings.erpnextUrl)); } catch { return { ok: false, count: 0, error: "ERP URL is invalid." }; }
+  if (base.protocol !== "https:" && !ALLOW_HTTP_SUPERVISOR_AUTH) return { ok: false, count: 0, error: "Supervisor PIN sync requires HTTPS ERP URL." };
+  const query = new URLSearchParams({ pos_profile: settings.posProfile });
+  try {
+    const response = await fetch(`${base.toString().replace(/\/+$/, "")}/api/method/aimatic.offline_pos.supervisor_pin.get_offline_supervisor_pins?${query.toString()}`, {
+      headers: { Authorization: `token ${settings.apiKey}:${settings.apiSecret}` }
+    });
+    // Older servers (404) or refusals keep whatever was cached; it still expires on its own.
+    if (!response.ok) return { ok: false, count: 0, error: `HTTP ${response.status}` };
+    const body = await response.json() as { message?: unknown };
+    const cache = parseSupervisorPinResponse(body.message, settings.posProfile);
+    if (!cache) return { ok: false, count: 0, error: "Unexpected supervisor PIN response." };
+    setMeta(OFFLINE_SUPERVISOR_PINS_KEY, JSON.stringify(cache));
+    return { ok: true, count: cache.supervisors.length, error: null };
+  } catch (error) {
+    return { ok: false, count: 0, error: error instanceof Error ? error.message : "Supervisor PIN sync failed." };
+  }
+}
+
+function verifyOfflineSupervisorPin(input: Record<string, unknown>): { ok: boolean; user: string; fullName: string; error: string | null } {
+  const result = checkOfflineSupervisorPin({
+    cache: parseSupervisorPinCache(getMeta(OFFLINE_SUPERVISOR_PINS_KEY)),
+    posProfile: loadSettings().posProfile,
+    username: textValue(input, "username"),
+    pin: textValue(input, "pin"),
+    action: textValue(input, "action"),
+    lock: parseLock(getMeta(OFFLINE_SUPERVISOR_PIN_LOCK_KEY)),
+    verify: verifyPinHash
+  });
+  setMeta(OFFLINE_SUPERVISOR_PIN_LOCK_KEY, JSON.stringify(result.lock));
+  return { ok: result.ok, user: result.user, fullName: result.fullName, error: result.error };
+}
+
 function consumeCashierPinResetAuthorization(token: string, cashierUser: string): { ok: boolean; error: string | null } {
   const pending = pendingAdminAuthorization;
   pendingAdminAuthorization = null;
@@ -915,7 +958,12 @@ app.whenReady().then(() => {
   ipcMain.handle("pos-session:get-cached", () => core.getCachedSessionSummary());
   ipcMain.handle("pos-session:active", (_event, input) => core.getActivePosSession(asRecord(input) ?? {}));
   ipcMain.handle("pos-session:start", (_event,input) => core.startPosSession(asRecord(input)??{}));
-  ipcMain.handle("catalog:sync", (event, mode) => core.syncItemCatalog((message) => event.sender.send("catalog:progress", message), mode === "full" ? "full" : "auto"));
+  ipcMain.handle("catalog:sync", async (event, mode) => {
+    const result = await core.syncItemCatalog((message) => event.sender.send("catalog:progress", message), mode === "full" ? "full" : "auto");
+    // Piggy-back on the regular catalog cadence; never let it fail the catalog sync.
+    if (result.success) void syncOfflineSupervisorPins().catch(() => undefined);
+    return result;
+  });
   ipcMain.handle("catalog:sync-barcodes", (event, mode) => core.syncBarcodesOnly((message) => event.sender.send("catalog:progress", message), mode === "auto" ? "auto" : "full"));
   ipcMain.handle("catalog:resolve", (_event, query) => core.resolveCatalogItem(String(query ?? "")));
   ipcMain.handle("catalog:get-totals", () => getCatalogTotals());
@@ -994,6 +1042,7 @@ app.whenReady().then(() => {
   ipcMain.handle("releases:install", (_event, input) => installRelease(asRecord(input) ?? {}));
   ipcMain.handle("admin:authorize-action", (_event, input) => authorizePosAdminAction(asRecord(input) ?? {}));
   ipcMain.handle("admin:consume-action", (_event, input) => consumePosAdminAction(asRecord(input) ?? {}));
+  ipcMain.handle("admin:offline-supervisor-pin", (_event, input) => verifyOfflineSupervisorPin(asRecord(input) ?? {}));
   ipcMain.handle("cashier:reset-pin-with-authorization", (_event, input) => resetCashierOfflinePinWithAuthorization(asRecord(input) ?? {}));
   createMainWindow();
   createCustomerDisplayWindow();
