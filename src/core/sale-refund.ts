@@ -4,6 +4,7 @@ import type { createPosSessionCore } from "./pos-session";
 import { asRecord, textValue, formatResponseError, getResponseError } from "./http";
 import { authFetch, hasUsableCredentials } from "./auth-fetch";
 import type { HeldSaleInput, SalesHistoryFilter } from "../db/database";
+import { clampRejectedNonCashPayment, parseNonCashOverpayRejection, type SalePaymentRow } from "../domain/non-cash-overpay";
 
 function isCashierPermissionSyncError(message: string): boolean {
   return /cashier|user|employee|permission|disabled|not allowed|not permitted|pos profile/i.test(message);
@@ -196,11 +197,31 @@ export function createSaleRefundCore(
         if (opening.error || !opening.openingEntry) { failed += 1; error = opening.error || "Unable to prepare POS Opening Entry for queued sale."; break; }
         if (posSession.isOfflineBatchId(opening.openingEntry)) { failed += 1; error = "Offline batch ID could not be converted to a real POS Opening Entry."; break; }
         payload.opening_entry = opening.openingEntry;
-        const response = await authFetch(deps, `${base}/api/method/aimatic.offline_pos.api.submit_online_sale`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
-        const rawBody = await response.text();
+        // A card/bank row left above the bill after a void is rejected by the
+        // server with its exact remaining payable. The customer was only charged
+        // the real bill, so lower that row and replay (bounded; never raises a
+        // payment or touches cash). Original rows stay in local sale history.
+        const originalPayments = Array.isArray(payload.payments) ? (payload.payments as SalePaymentRow[]).map((row) => ({ ...row })) : [];
+        const paymentAdjustments: { mode: string; from: number; to: number }[] = [];
+        let response!: Response;
+        let rawBody = "";
+        for (let attempt = 0; ; attempt += 1) {
+          response = await authFetch(deps, `${base}/api/method/aimatic.offline_pos.api.submit_online_sale`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+          rawBody = await response.text();
+          if (response.ok || response.status !== 417 || attempt >= originalPayments.length) break;
+          const rejection = parseNonCashOverpayRejection(formatResponseError(response.status, response.statusText, rawBody));
+          const current = Array.isArray(payload.payments) ? payload.payments as SalePaymentRow[] : [];
+          const adjusted = rejection ? clampRejectedNonCashPayment(current, rejection) : null;
+          if (!rejection || !adjusted) break;
+          paymentAdjustments.push({ mode: rejection.mode, from: rejection.amount, to: Math.max(0, rejection.remaining) });
+          payload.payments = adjusted;
+        }
         let parsed: { message?: unknown; data?: unknown } = {};
         try { parsed = JSON.parse(rawBody) as { message?: unknown; data?: unknown }; } catch { /* non-JSON */ }
         const result = asRecord(parsed.message) ?? asRecord(parsed.data) ?? {};
+        if (response.ok && paymentAdjustments.length) {
+          result.client_payment_adjustment = { reason: "non_cash_exceeded_bill", original_payments: originalPayments, adjustments: paymentAdjustments };
+        }
         if (!response.ok) {
           failed += 1;
           error = formatResponseError(response.status, response.statusText, rawBody);

@@ -1576,6 +1576,20 @@ function refreshCashTenderHint():void{
   const payable=payableAmount(),remaining=remainingAmount(),method=paymentMethods[selectedPaymentMethodIndex]??"";
   hint.textContent=((paymentMethodTypes[method]??"").toLowerCase()==="cash")?`Remaining: ${remaining.toFixed(2)} · Cash limit: ${maxCashTender(payable).toFixed(2)}`:`Remaining: ${remaining.toFixed(2)}`;
 }
+// Same row-order rule as the server (and src/domain/non-cash-overpay.ts): a card/bank
+// row may never exceed what is still payable after the rows before it. Catches a card
+// amount left above the bill after a void/quantity change, which the server rejects.
+function nonCashOverpayMessage():string|null{
+  const payable=payableAmount();let paid=0;
+  for(const row of paymentRows){
+    if((paymentMethodTypes[row.method]??"").toLowerCase()!=="cash"&&!(row.amount===0&&row.method===foodpandaCreditMode)){
+      const remaining=money2(payable-paid);
+      if(row.amount>remaining+0.005)return `${row.method} ${row.amount.toFixed(2)} is more than the bill (${Math.max(0,remaining).toFixed(2)} payable). Edit the payment.`;
+    }
+    paid=money2(paid+row.amount);
+  }
+  return null;
+}
 function paidAmount():number{return paymentRows.reduce((s,x)=>s+x.amount,0);}
 function remainingAmount():number{return Math.max(0,money2(payableAmount()-paidAmount()));}
 // Lightweight refresh of the Payable / Tendered / Paid / Remaining / Change figures (no row rebuild).
@@ -1631,6 +1645,8 @@ async function completePaymentAllocation():Promise<void>{
   const msg=document.querySelector<HTMLElement>("#payment-message");
   if(input?.value.trim()){if(msg)msg.textContent="Press Enter or Add to save this amount first, then Complete Payment.";input.focus();return;}
   if(remainingAmount()>0.0001){if(msg)msg.textContent="Remaining amount must be zero.";return;}
+  const overpay=nonCashOverpayMessage();
+  if(overpay){if(msg)msg.textContent=overpay;return;}
   const cashError=validateCashTenderRows();
   if(cashError){if(msg)msg.textContent=cashError;return;}
   await finalizePaymentReady();
@@ -1712,6 +1728,7 @@ function blockedSaleReason():string|null{
     :(!creditReady&&remainingAmount()>0.0001)?"Payment is incomplete"
     :paymentPreparedVersion!==currentCartVersion?"Payment not prepared for current cart"
     :paymentsOutdated?"Payment draft is outdated"
+    :(!creditReady&&nonCashOverpayMessage())?(nonCashOverpayMessage() as string)
     :!terminal?"Missing Terminal ID — assign a Terminal ID to this POS Profile on the server"
     :!profile?"Missing POS Profile"
     :!selectedCustomer?"Missing Customer"
@@ -4834,6 +4851,16 @@ function initializeRenderer(): void {
         return;
       }
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closePaymentDialog(); return; }
+      // The cart must not change under an open payment: a void/quantity change here left a
+      // card amount above the new bill. Close Payment (Esc) first, then edit the cart.
+      if (["Delete","F8","F4","F10","+","*","-"].includes(event.key) || (event.ctrlKey && event.key.toLowerCase() === "h")) {
+        // Inside the amount field Delete/- keep their normal text-editing meaning (no void either way).
+        if ((event.key === "-" || event.key === "Delete") && isEditableElement(document.activeElement)) return;
+        event.preventDefault(); event.stopPropagation();
+        const payMsg = document.querySelector<HTMLElement>("#payment-message");
+        if (payMsg) payMsg.textContent = "Close Payment (Esc) before changing the cart.";
+        return;
+      }
     }
     if (event.ctrlKey && event.key.toLowerCase() === "h") { event.preventDefault(); event.stopPropagation(); if (!allowHeldSales) { cartMessage("Hold Sale is disabled for this POS Profile"); return; } void holdCurrentSale(); }
     else if (event.key === "F2") { event.preventDefault(); event.stopPropagation(); focusCart(); }

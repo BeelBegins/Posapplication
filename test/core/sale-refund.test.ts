@@ -141,3 +141,43 @@ test("getInvoiceForRefund sends an exact cross-terminal bill reference", async (
   assert.match(requestedUrl, /invoice_reference=FBR-2026-00001/);
   assert.equal(result.data?.original_invoice, "ACC-PSINV-2026-00001");
 });
+
+test("syncSaleQueue lowers a card row left above the bill after a void and replays once", async () => {
+  const fake = freshFake();
+  const posted: Record<string, unknown>[] = [];
+  const fetchImpl = (async (url: string, init?: RequestInit) => {
+    if (!String(url).includes("submit_online_sale")) return new Response(JSON.stringify({ message: "terminal@example.com" }), { status: 200 });
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    posted.push(body);
+    const card = (body.payments as { amount: number }[])[0].amount;
+    if (card > 405) return new Response(JSON.stringify({ exception: `frappe.exceptions.ValidationError: Non-cash payment 'Credit Card' of ${card} exceeds remaining payable 405.0` }), { status: 417 });
+    return new Response(JSON.stringify({ message: { pos_invoice: "ACC-PSINV-1", grand_total: 405 } }), { status: 200 });
+  }) as unknown as typeof fetch;
+  const deps = fakeDeps(fake, fetchImpl);
+  const queued = [{ terminalInvoiceId: "TI-1", createdAt: "", response: null, payload: { terminal_invoice_id: "TI-1", opening_entry: "POS-OPE-1", payments: [{ mode_of_payment: "Credit Card", amount: 500 }] } }];
+  (deps.db as unknown as { getQueuedSales: () => unknown[] }).getQueuedSales = () => queued;
+  const core = createSaleRefundCore(deps, createHttpCore(deps), createPosSessionCore(deps));
+  const result = await core.syncSaleQueue();
+  assert.equal(result.synced, 1);
+  assert.equal(result.failed, 0);
+  assert.deepEqual(posted.map((p) => (p.payments as { amount: number }[])[0].amount), [500, 405]);
+  const saved = fake.saleHistory.get("TI-1");
+  assert.equal(saved?.status, "Submitted");
+  assert.deepEqual((saved?.response?.client_payment_adjustment as { adjustments: unknown[] }).adjustments, [{ mode: "Credit Card", from: 500, to: 405 }]);
+});
+
+test("syncSaleQueue does not touch payments for any other rejection", async () => {
+  const fake = freshFake();
+  let calls = 0;
+  const fetchImpl = (async (url: string) => {
+    if (!String(url).includes("submit_online_sale")) return new Response(JSON.stringify({ message: "terminal@example.com" }), { status: 200 });
+    calls += 1;
+    return new Response(JSON.stringify({ exception: "frappe.exceptions.ValidationError: Total payments 100 are less than the payable amount 200" }), { status: 417 });
+  }) as unknown as typeof fetch;
+  const deps = fakeDeps(fake, fetchImpl);
+  (deps.db as unknown as { getQueuedSales: () => unknown[] }).getQueuedSales = () => [{ terminalInvoiceId: "TI-2", createdAt: "", response: null, payload: { terminal_invoice_id: "TI-2", opening_entry: "POS-OPE-1", payments: [{ mode_of_payment: "Credit Card", amount: 100 }] } }];
+  const core = createSaleRefundCore(deps, createHttpCore(deps), createPosSessionCore(deps));
+  const result = await core.syncSaleQueue();
+  assert.equal(result.failed, 1);
+  assert.equal(calls, 1);
+});
