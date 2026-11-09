@@ -58,6 +58,9 @@ export interface CatalogSearchResult {
   actualStock: number | null;
   warehouse: string | null;
   mrp: number | null;
+  /** Set only when the scan was a scale label: the weight/count to sell, in this row's UOM. */
+  scaleQuantity?: number;
+  scaleLabel?: string;
 }
 
 export interface CartState { cartKey: string; lines: unknown[]; }

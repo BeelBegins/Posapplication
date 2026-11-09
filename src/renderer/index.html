@@ -140,6 +140,21 @@
                 <option value="teal-professional">Teal Professional</option>
               </select>
             </label>
+            <fieldset id="scale-settings" class="scale-settings">
+              <legend>Weighing scale labels</legend>
+              <p class="card-meta">A label is read as: prefix + item digits + weight/price digits (+ check digit). Add one rule per scale layout; the item is found in Item Barcode as "ERP barcode starts with" + its item digits (e.g. SC + 10001 = SC10001), so scale items never clash with normal barcodes.</p>
+              <div id="scale-rules" class="scale-rules"></div>
+              <div class="form-actions">
+                <button id="scale-add-rule" type="button" class="secondary-button">Add rule</button>
+                <button id="scale-save-rules" type="button" class="secondary-button">Save scale rules</button>
+                <p id="scale-message" class="settings-message" role="status"></p>
+              </div>
+              <div class="scale-test">
+                <label>Test a label barcode<input id="scale-test-input" type="text" inputmode="numeric" autocomplete="off" placeholder="Scan or type a scale label" /></label>
+                <button id="scale-test-run" type="button" class="secondary-button">Test</button>
+                <p id="scale-test-result" class="card-meta" role="status"></p>
+              </div>
+            </fieldset>
             <div class="settings-panel-nav">
               <button type="button" class="secondary-button" data-settings-back>Back</button>
               <span class="settings-panel-nav-spacer"></span>
