@@ -3,6 +3,7 @@ import type { createHttpCore } from "./http";
 import { asRecord, textValue, getResponseError } from "./http";
 import { authFetch, hasUsableCredentials } from "./auth-fetch";
 import { calculateFbrInvoice, calculateFbrItem } from "../domain/fbr-calculation";
+import { applyErpScaleRules } from "./scale-lookup";
 
 type FbrCalculatedRow =
   | { success: true; item_code: string; quantity: number; inclusiveAmount: number; taxRate: number; salesTax: number; valueExcludingTax: number; retailPrice: number; isThirdSchedule: boolean }
@@ -199,11 +200,22 @@ export function createCatalogSyncCore(deps: PosCoreDeps, http: ReturnType<typeof
       if (itemsWatermark) deps.db.setMeta("items_last_sync", itemsWatermark);
       if (!barcodeError) { const bw = maxModified(barcodes); if (bw) deps.db.setMeta("barcodes_last_sync", bw); }
       if (doFull) deps.db.setMeta("items_last_full_sync", new Date().toISOString());
+      await syncScaleRules(baseUrl);
       sendProgress("Catalog sync complete.");
       return { success: true, totals: deps.db.getCatalogTotals(), barcodeError: [barcodeError, conversionError].filter(Boolean).join(" | ") || null, error: null };
     } catch (error) {
       return { success: false, totals: deps.db.getCatalogTotals(), barcodeError: null, error: error instanceof Error ? error.message : "Catalog sync failed." };
     }
+  }
+
+  // Best effort: an older server without the method, or a failed fetch, keeps the last rules.
+  async function syncScaleRules(baseUrl: string): Promise<void> {
+    try {
+      const response = await authFetch(deps, `${baseUrl}/api/method/aimatic.offline_pos.api.get_weighing_scale_rules`);
+      if (!response.ok) return;
+      const body = await response.json() as { message?: unknown };
+      applyErpScaleRules(deps.db, body.message);
+    } catch { /* keep last rules */ }
   }
 
   // Full barcode table replace only — items/prices/stock untouched. Used by the 30m idle
