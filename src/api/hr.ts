@@ -20,5 +20,8 @@ export function createHrApi(client: ApiClient) {
     submitAttendance: (body: Record<string, unknown>) => post("submit_attendance", body),
     createLeaveApplication: (body: Record<string, unknown>) => post("create_leave_application", body),
     createAttendanceRequest: (body: Record<string, unknown>) => post("create_attendance_request", body),
+    getFacePolicy: () => post("get_face_policy"),
+    enrollFace: (body: Record<string, unknown>) => post("enroll_face", body),
+    revokeFace: (body: Record<string, unknown>) => post("revoke_face", body),
   };
 }
