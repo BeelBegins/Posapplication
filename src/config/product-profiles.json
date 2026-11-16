@@ -53,5 +53,16 @@
     "storageNamespace": "aimatic-stock-receiving",
     "authentication": "user-session",
     "features": ["stock-receiving", "barcode-input", "local-reminders"]
+  },
+  "hr": {
+    "id": "hr",
+    "name": "Ai Matic HR",
+    "enabled": true,
+    "platforms": ["capacitor"],
+    "androidAppId": "com.beelbegins.aimatichr",
+    "androidOrientation": "sensorPortrait",
+    "storageNamespace": "aimatic-hr",
+    "authentication": "user-session",
+    "features": ["hr-attendance", "face-checkin", "leave", "payslips"]
   }
 }

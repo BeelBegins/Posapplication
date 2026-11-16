@@ -40,7 +40,11 @@
     "build:stock-receiving:android:web": "cross-env AI_MATIC_PRODUCT=stock-receiving npm run build:android:web",
     "android:stock-receiving:sync": "cross-env AI_MATIC_PRODUCT=stock-receiving npm run android:sync",
     "android:stock-receiving:apk": "cross-env AI_MATIC_PRODUCT=stock-receiving npm run android:apk",
-    "android:stock-receiving:aab": "cross-env AI_MATIC_PRODUCT=stock-receiving npm run android:aab"
+    "android:stock-receiving:aab": "cross-env AI_MATIC_PRODUCT=stock-receiving npm run android:aab",
+    "build:hr:android:web": "cross-env AI_MATIC_PRODUCT=hr npm run build:android:web",
+    "android:hr:sync": "cross-env AI_MATIC_PRODUCT=hr npm run android:sync",
+    "android:hr:apk": "cross-env AI_MATIC_PRODUCT=hr npm run android:apk",
+    "android:hr:aab": "cross-env AI_MATIC_PRODUCT=hr npm run android:aab"
   },
   "devDependencies": {
     "@capacitor/cli": "^8.4.2",
