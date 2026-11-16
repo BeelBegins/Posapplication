@@ -68,9 +68,39 @@ export function livenessPrompt(challenge: string): string {
 
 export const FACE_CONSENT_VERSION = "aimatichr-face-consent-v1";
 
+export const ENROLL_CAPTURE_PROMPTS = [
+  "Look straight at the camera — center your face in the oval",
+  "Turn slightly left, then return to centre",
+  "Turn slightly right, then return to centre",
+  "Look up a little, then return to centre",
+  "Blink once, then hold still",
+] as const;
+
 export function canManageFaceEnrollment(roles: unknown): boolean {
   const set = new Set(Array.isArray(roles) ? roles.map(String) : []);
   return set.has("HR Manager") || set.has("System Manager");
+}
+
+export function enrollmentPromptForIndex(index: number): string {
+  return ENROLL_CAPTURE_PROMPTS[Math.max(0, Math.min(index, ENROLL_CAPTURE_PROMPTS.length - 1))];
+}
+
+export function canSubmitEnrollment(input: { employee: string; images: string[]; consent: boolean; busy?: boolean }): boolean {
+  return Boolean(input.employee.trim()) && input.images.length >= 3 && input.images.length <= 5 && input.consent && !input.busy;
+}
+
+export function cameraPermissionDeniedMessage(error: unknown): string | null {
+  const text = error instanceof Error ? error.message : String(error || "");
+  if (/NotAllowedError|Permission denied|permission-denied|denied by user/i.test(text)) {
+    return "Camera permission is off. Open Android Settings → Apps → Ai Matic HR → Permissions → Camera, enable it, then tap Retry camera.";
+  }
+  if (/NotFoundError|DevicesNotFound|Requested device not found/i.test(text)) {
+    return "No front camera was found on this device.";
+  }
+  if (/NotReadableError|TrackStartError|Could not start video source/i.test(text)) {
+    return "The camera is busy in another app. Close it and tap Retry camera.";
+  }
+  return null;
 }
 
 export function enrollFaceRequest(input: {

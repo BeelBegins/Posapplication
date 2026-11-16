@@ -1,3 +1,4 @@
+import { App } from "@capacitor/app";
 import { Geolocation } from "@capacitor/geolocation";
 import { createHrApi } from "../../api/hr";
 import { createApiClient } from "../../api/client";
@@ -10,8 +11,11 @@ import {
   FACE_CONSENT_VERSION,
   attendanceCorrectionRequest,
   attendanceRequest,
+  cameraPermissionDeniedMessage,
   canManageFaceEnrollment,
+  canSubmitEnrollment,
   enrollFaceRequest,
+  enrollmentPromptForIndex,
   leaveRequest,
   livenessPrompt,
 } from "./domain";
@@ -46,6 +50,12 @@ let enrollEmployee = "";
 let enrollQuery = "";
 let enrollCaptures: string[] = [];
 let enrollConsent = false;
+let enrollBusy = false;
+let enrollSearching = false;
+let cameraOpen = false;
+let cameraStarting = false;
+let activeStream: MediaStream | null = null;
+let backListenerReady = false;
 
 const text = (row: Row | undefined, ...keys: string[]) => {
   for (const key of keys) if (row?.[key] != null && row[key] !== "") return String(row[key]);
@@ -54,12 +64,49 @@ const text = (row: Row | undefined, ...keys: string[]) => {
 const list = (value: unknown): Row[] => Array.isArray(value) ? value.filter((entry): entry is Row => Boolean(entry) && typeof entry === "object") : [];
 const money = (value: unknown) => formatMoney(value, "PKR");
 const isManager = () => canManageFaceEnrollment(context.roles);
+const offline = () => typeof navigator !== "undefined" && navigator.onLine === false;
 
 async function payload(response: Response): Promise<Row> {
   const raw = await response.json().catch(() => ({})) as Row;
   const value = (raw.message && typeof raw.message === "object" ? raw.message : raw) as Row;
   if (!response.ok) throw new Error(normalizeErpDisplayText(text(value, "message", "exception") || `Server error ${response.status}`));
   return value;
+}
+
+function stopCamera(): void {
+  activeStream?.getTracks().forEach((track) => track.stop());
+  activeStream = null;
+  cameraOpen = false;
+  cameraStarting = false;
+}
+
+async function ensureBackHandler(): Promise<void> {
+  if (backListenerReady) return;
+  backListenerReady = true;
+  try {
+    await App.addListener("backButton", () => {
+      if (cameraOpen || cameraStarting) {
+        stopCamera();
+        message = "Camera closed";
+        tone = "warning";
+        render("enroll");
+        return;
+      }
+      if (screen === "enroll") {
+        message = "";
+        tone = "";
+        render("home");
+        return;
+      }
+      if (screen !== "home") {
+        render("home");
+        return;
+      }
+      void App.exitApp();
+    });
+  } catch {
+    // Browser / non-Capacitor shells have no native back hook.
+  }
 }
 
 async function configure(baseUrl: string) {
@@ -73,6 +120,7 @@ async function configure(baseUrl: string) {
 }
 
 function setup(error = "") {
+  stopCamera();
   root.innerHTML = `<section class="setup"><div class="setup-card"><div class="mark">HR</div><p class="eyebrow">Employee app</p><h1>Ai Matic HR</h1><p>Sign in with your ERP employee account. Attendance, leave and pay stay on the server.</p>${error ? `<p class="alert danger">${esc(error)}</p>` : ""}<form id="setup"><label>ERP URL<input id="url" type="url" required placeholder="https://erp.example.com" autocomplete="url"></label><button class="primary">Continue</button></form><small>v${esc(__APP_VERSION__)} · No API key or secret</small></div></section>`;
   document.querySelector<HTMLFormElement>("#setup")!.onsubmit = async (event) => {
     event.preventDefault();
@@ -82,6 +130,7 @@ function setup(error = "") {
 }
 
 function signIn() {
+  stopCamera();
   root.innerHTML = `<section class="setup"><div class="setup-card"><div class="mark">HR</div><p class="eyebrow">Secure access</p><h1>Employee sign in</h1><p>Use your own ERP account. The app cannot choose another employee.</p>${message ? `<p class="alert danger">${esc(message)}</p>` : ""}<button id="login" class="primary">Sign in with ERP</button><button id="change-server" class="secondary">Change ERP server</button></div></section>`;
   document.querySelector<HTMLButtonElement>("#login")!.onclick = async () => {
     try { await credentials!.login(); await loadContext(); }
@@ -104,6 +153,7 @@ async function loadContext() {
 async function refresh() {
   if (!api) return;
   try {
+    if (offline()) throw new Error("You appear offline. Reconnect, then refresh.");
     const tasks: Array<Promise<Row | Row[]>> = [
       api.getLeaveSummary().then(payload),
       api.getPayslips().then(payload),
@@ -154,7 +204,7 @@ function home() {
 }
 
 function attendance() {
-  return `<section class="stack"><article class="tile"><p class="eyebrow">Live attendance</p><h2>Check in or out</h2><p>The server records the time, employee and face result. This phone only sends location, a one-time challenge and a camera frame.</p>${previewUrl ? `<img class="camera" alt="Live face preview" src="${esc(previewUrl)}">` : ""}<p id="liveness"></p><div class="actions"><button class="primary" data-log="IN">Check in</button><button class="secondary" data-log="OUT">Check out</button></div></article>${rows(checkins, (row) => `${text(row, "log_type") || "Log"} · ${text(row, "time")}`, (row) => text(row, "shift") || "Recorded by ERP")}</section>`;
+  return `<section class="stack"><article class="tile"><p class="eyebrow">Live attendance</p><h2>Check in or out</h2><p>The server records the time, employee and face result. This phone only sends location, a one-time challenge and a camera frame.</p>${previewUrl ? `<img class="camera" alt="Live face preview" src="${esc(previewUrl)}">` : ""}<p id="liveness" class="prompt" hidden></p><div class="actions"><button class="primary" data-log="IN">Check in</button><button class="secondary" data-log="OUT">Check out</button></div></article>${rows(checkins, (row) => `${text(row, "log_type") || "Log"} · ${text(row, "time")}`, (row) => text(row, "shift") || "Recorded by ERP")}</section>`;
 }
 
 function leave() {
@@ -174,19 +224,65 @@ function enroll() {
   const picks = directory.slice(0, 40).map((row) => {
     const id = text(row, "name");
     const active = id === enrollEmployee ? " active" : "";
-    return `<button type="button" class="row pick${active}" data-employee="${esc(id)}"><strong>${esc(text(row, "employee_name") || id)}</strong><small>${esc([id, text(row, "designation"), text(row, "department")].filter(Boolean).join(" · "))}</small></button>`;
+    return `<button type="button" class="row pick${active}" data-employee="${esc(id)}" aria-pressed="${id === enrollEmployee ? "true" : "false"}"><strong>${esc(text(row, "employee_name") || id)}</strong><small>${esc([id, text(row, "designation"), text(row, "department")].filter(Boolean).join(" · "))}</small></button>`;
   }).join("");
-  const thumbs = enrollCaptures.map((image, index) => `<img class="camera thumb" alt="Capture ${index + 1}" src="${esc(image)}">`).join("");
+  const thumbs = enrollCaptures.map((image, index) => `
+    <div class="thumb-wrap">
+      <img class="thumb" alt="Capture ${index + 1}" src="${esc(image)}">
+      <div class="thumb-actions"><button type="button" data-retake="${index}" aria-label="Remove photo ${index + 1}">Remove</button></div>
+    </div>`).join("");
   const policyVersion = text(facePolicy, "consent_version") || FACE_CONSENT_VERSION;
-  return `<section class="stack"><article class="tile"><p class="eyebrow">HR enrollment</p><h2>Enroll face template</h2><p>Capture 3 to 5 live photos. Raw images are not stored after the server builds the encrypted template. Completing enrollment also finishes an existing Pending record for the same employee.</p>
-    <form id="enroll-search" class="stack"><label>Find employee<input id="enroll-query" value="${esc(enrollQuery)}" placeholder="Name or department" autocomplete="off"></label><button class="secondary">Search directory</button></form>
-    <div class="stack picks">${picks || emptyState(icon("search", 28), "No employees", "Search the directory to pick who to enroll.")}</div>
-    ${selected ? `<p class="eyebrow">Selected</p><strong>${esc(text(selected, "employee_name"))}</strong><small> ${esc(text(selected, "name"))}</small>` : ""}
-    <div class="actions"><button class="secondary" id="capture-enroll" ${enrollCaptures.length >= 5 ? "disabled" : ""}>Capture photo (${enrollCaptures.length}/5)</button><button class="secondary" id="clear-enroll" ${enrollCaptures.length ? "" : "disabled"}>Clear photos</button></div>
-    <div class="grid thumbs">${thumbs}</div>
-    <label class="consent"><input id="enroll-consent" type="checkbox" ${enrollConsent ? "checked" : ""}> Employee consent recorded for policy <code>${esc(policyVersion)}</code>. Attendance face check uses an encrypted template only; photos are not kept; HR can revoke and wipe later.</label>
-    <button class="primary" id="submit-enroll">Submit enrollment</button>
-  </article></section>`;
+  const ready = canSubmitEnrollment({ employee: enrollEmployee, images: enrollCaptures, consent: enrollConsent, busy: enrollBusy });
+  const prompt = enrollmentPromptForIndex(enrollCaptures.length);
+  const stage = cameraOpen || cameraStarting
+    ? `<div class="stage" aria-live="polite">
+        <video id="enroll-video" playsinline muted autoplay></video>
+        <div class="oval" aria-hidden="true"></div>
+        <div class="stage-meta"><span>${esc(prompt)}</span><span>${enrollCaptures.length}/5</span></div>
+      </div>`
+    : previewUrl
+      ? `<div class="stage"><img class="preview" alt="Last capture preview" src="${esc(previewUrl)}"><div class="oval" aria-hidden="true"></div></div>`
+      : `<div class="stage"><div class="stage-meta"><span>Camera closed</span><span>${enrollCaptures.length}/5</span></div></div>`;
+
+  return `<section class="stack ${enrollBusy ? "busy" : ""}">
+    <article class="tile">
+      <p class="eyebrow">HR enrollment</p>
+      <h2>Enroll face template</h2>
+      <p>Use the live camera only. Completing enrollment also finishes an existing Pending record for the same employee (for example HR-EMP-00063).</p>
+      <ul class="tips">
+        <li>Face a light source; avoid strong backlight.</li>
+        <li>Keep the camera at eye level and center your face in the oval.</li>
+        <li>Remove glare glasses if they hide the eyes.</li>
+        <li>Capture 3 to 5 live photos. Raw images are not kept after the encrypted template is saved.</li>
+      </ul>
+      <form id="enroll-search" class="stack">
+        <label for="enroll-query">Find employee</label>
+        <input id="enroll-query" value="${esc(enrollQuery)}" placeholder="Name, code, or department" autocomplete="off">
+        <button class="secondary" ${enrollSearching || enrollBusy ? "disabled" : ""}>${enrollSearching ? "Searching…" : "Search directory"}</button>
+      </form>
+      <div class="stack picks">${picks || emptyState(icon("search", 28), "No employees yet", "Search the directory, then tap an employee to enroll.")}</div>
+      ${selected ? `<p class="eyebrow">Selected</p><strong>${esc(text(selected, "employee_name"))}</strong><small>${esc(text(selected, "name"))}</small>` : `<p class="alert warning">Pick an employee before capturing photos.</p>`}
+      <p class="prompt" id="liveness">${esc(prompt)}</p>
+      ${stage}
+      <div class="actions">
+        <button class="secondary" id="open-camera" ${enrollBusy || !enrollEmployee || enrollCaptures.length >= 5 ? "disabled" : ""}>${cameraOpen || cameraStarting ? "Camera on" : "Open camera"}</button>
+        <button class="primary" id="capture-enroll" ${enrollBusy || !cameraOpen || enrollCaptures.length >= 5 ? "disabled" : ""}>Take photo (${enrollCaptures.length}/5)</button>
+      </div>
+      <div class="actions">
+        <button class="secondary" id="retake-last" ${enrollBusy || !enrollCaptures.length ? "disabled" : ""}>Remove last</button>
+        <button class="secondary" id="clear-enroll" ${enrollBusy || !enrollCaptures.length ? "disabled" : ""}>Clear all</button>
+      </div>
+      <div class="thumbs">${thumbs || `<p class="alert">No photos yet. Open the camera and take at least 3.</p>`}</div>
+      <button type="button" class="consent-row" id="enroll-consent-toggle" aria-pressed="${enrollConsent ? "true" : "false"}">
+        <span class="consent-box" aria-hidden="true">${enrollConsent ? "✓" : ""}</span>
+        <span>I confirm the employee consented to face verification for attendance check-in/out under policy <code>${esc(policyVersion)}</code>.
+          <small>Only an encrypted template is stored. Raw photos are not kept. An HR manager can revoke and wipe later.</small>
+        </span>
+      </button>
+      <button class="primary" id="submit-enroll" ${ready ? "" : "disabled"}>${enrollBusy ? "Enrolling…" : "Complete enrollment"}</button>
+      <button class="secondary" id="close-camera" ${cameraOpen || cameraStarting ? "" : "disabled"}>Close camera</button>
+    </article>
+  </section>`;
 }
 
 function profile() {
@@ -201,6 +297,7 @@ function profile() {
 }
 
 function render(next: Screen = screen) {
+  if (next !== "enroll" && (cameraOpen || cameraStarting)) stopCamera();
   screen = next;
   if (loading) {
     root.innerHTML = `<section class="setup"><div class="setup-card"><p>${esc(loading)}</p></div></section>`;
@@ -216,13 +313,30 @@ function render(next: Screen = screen) {
     { id: "profile", label: "Profile", icon: icon("user", 22) },
   ];
   if (!isManager() && screen === "enroll") screen = "home";
-  root.innerHTML = `<section class="shell"><header class="top"><div><strong>Ai Matic HR</strong><small>${esc(text(context, "employee_name") || "Not signed in")}</small></div></header><main class="page">${message ? `<p class="alert ${esc(tone)}">${esc(message)}</p>` : ""}${pages[screen]()}</main>${bottomNavigation("HR", screen, nav)}</section>`;
+  root.innerHTML = `<section class="shell"><header class="top"><div><strong>Ai Matic HR</strong><small>${esc(text(context, "employee_name") || "Not signed in")}</small></div></header><main class="page">${message ? `<p class="alert ${esc(tone || "warning")}" role="status">${esc(message)}</p>` : ""}${pages[screen]()}</main>${bottomNavigation("HR", screen, nav)}</section>`;
   bind();
+  if (screen === "enroll" && cameraOpen && activeStream) attachPreview(activeStream);
+  void ensureBackHandler();
+}
+
+function attachPreview(stream: MediaStream): void {
+  const video = document.querySelector<HTMLVideoElement>("#enroll-video");
+  if (!video) return;
+  video.srcObject = stream;
+  void video.play().catch(() => {
+    message = "Could not start the live preview. Tap Open camera again.";
+    tone = "danger";
+  });
 }
 
 function bind() {
   document.querySelectorAll<HTMLButtonElement>("[data-screen]").forEach((button) => {
-    button.onclick = () => { message = ""; render(button.dataset.screen as Screen); };
+    button.onclick = () => {
+      message = "";
+      tone = "";
+      if (button.dataset.screen !== "enroll") stopCamera();
+      render(button.dataset.screen as Screen);
+    };
   });
   document.querySelector<HTMLButtonElement>("#refresh")?.addEventListener("click", () => void refresh());
   document.querySelectorAll<HTMLButtonElement>("[data-log]").forEach((button) => {
@@ -234,22 +348,51 @@ function bind() {
   document.querySelectorAll<HTMLButtonElement>("[data-employee]").forEach((button) => {
     button.onclick = () => {
       enrollEmployee = button.dataset.employee || "";
-      message = "";
-      tone = "";
+      message = `Selected ${enrollEmployee}`;
+      tone = "success";
       render("enroll");
     };
   });
-  document.querySelector<HTMLInputElement>("#enroll-consent")?.addEventListener("change", (event) => {
-    enrollConsent = (event.currentTarget as HTMLInputElement).checked;
+  document.querySelector<HTMLButtonElement>("#enroll-consent-toggle")?.addEventListener("click", () => {
+    enrollConsent = !enrollConsent;
+    render("enroll");
+  });
+  document.querySelector<HTMLButtonElement>("#open-camera")?.addEventListener("click", () => void openEnrollmentCamera());
+  document.querySelector<HTMLButtonElement>("#close-camera")?.addEventListener("click", () => {
+    stopCamera();
+    message = "Camera closed";
+    tone = "warning";
+    render("enroll");
   });
   document.querySelector<HTMLButtonElement>("#capture-enroll")?.addEventListener("click", () => void captureEnrollmentPhoto());
+  document.querySelector<HTMLButtonElement>("#retake-last")?.addEventListener("click", () => {
+    enrollCaptures = enrollCaptures.slice(0, -1);
+    previewUrl = enrollCaptures[enrollCaptures.length - 1] || "";
+    message = enrollCaptures.length ? `Removed last photo. ${enrollCaptures.length}/5 kept.` : "All photos cleared.";
+    tone = "warning";
+    render("enroll");
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-retake]").forEach((button) => {
+    button.onclick = () => {
+      const index = Number(button.dataset.retake);
+      if (!Number.isInteger(index)) return;
+      enrollCaptures = enrollCaptures.filter((_, i) => i !== index);
+      previewUrl = enrollCaptures[enrollCaptures.length - 1] || "";
+      message = `Removed photo ${index + 1}. ${enrollCaptures.length}/5 kept.`;
+      tone = "warning";
+      render("enroll");
+    };
+  });
   document.querySelector<HTMLButtonElement>("#clear-enroll")?.addEventListener("click", () => {
     enrollCaptures = [];
     previewUrl = "";
+    message = "All enrollment photos cleared.";
+    tone = "warning";
     render("enroll");
   });
   document.querySelector<HTMLButtonElement>("#submit-enroll")?.addEventListener("click", () => void submitEnrollment());
   document.querySelector<HTMLButtonElement>("#sign-out")?.addEventListener("click", () => {
+    stopCamera();
     void credentials?.clear();
     credentials = null;
     api = null;
@@ -263,16 +406,20 @@ function bind() {
 
 async function searchDirectory(event: Event) {
   event.preventDefault();
-  if (!api || !isManager()) return;
+  if (!api || !isManager() || enrollBusy) return;
   enrollQuery = document.querySelector<HTMLInputElement>("#enroll-query")?.value.trim() || "";
+  enrollSearching = true;
+  render("enroll");
   try {
+    if (offline()) throw new Error("You appear offline. Reconnect, then search again.");
     directory = list(await payload(await api.getDirectory(enrollQuery)));
     message = directory.length ? `Found ${directory.length} employee${directory.length === 1 ? "" : "s"}` : "No employees matched";
-    tone = directory.length ? "success" : "danger";
-    render("enroll");
+    tone = directory.length ? "success" : "warning";
   } catch (error) {
     message = error instanceof Error ? error.message : "Directory search failed";
     tone = "danger";
+  } finally {
+    enrollSearching = false;
     render("enroll");
   }
 }
@@ -280,9 +427,88 @@ async function searchDirectory(event: Event) {
 async function captureLocation() {
   let permission = await Geolocation.checkPermissions();
   if (permission.location !== "granted") permission = await Geolocation.requestPermissions({ permissions: ["location"] });
-  if (permission.location !== "granted") throw new Error("Precise location permission is required.");
+  if (permission.location !== "granted") throw new Error("Precise location permission is required. Enable Location for Ai Matic HR in Android Settings, then retry.");
   const position = await Geolocation.getCurrentPosition({ enableHighAccuracy: true, timeout: 20_000, maximumAge: 0 });
   return { latitude: position.coords.latitude, longitude: position.coords.longitude };
+}
+
+function frameQualityIssue(canvas: HTMLCanvasElement): string | null {
+  const context2d = canvas.getContext("2d");
+  if (!context2d) return "Camera capture failed.";
+  const { data } = context2d.getImageData(0, 0, canvas.width, canvas.height);
+  let sum = 0;
+  let count = 0;
+  for (let i = 0; i < data.length; i += 64) {
+    sum += 0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2];
+    count += 1;
+  }
+  const average = sum / Math.max(count, 1);
+  if (average < 28) return "Photo looks too dark. Face a light source and retry.";
+  if (average > 245) return "Photo looks overexposed. Avoid strong backlight and retry.";
+  return null;
+}
+
+async function openEnrollmentCamera(): Promise<void> {
+  if (!enrollEmployee) {
+    message = "Pick an employee before opening the camera.";
+    tone = "warning";
+    render("enroll");
+    return;
+  }
+  if (enrollCaptures.length >= 5) return;
+  cameraStarting = true;
+  message = "This app needs the camera to capture live enrollment photos.";
+  tone = "warning";
+  render("enroll");
+  try {
+    stopCamera();
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: "user" }, width: { ideal: 720 }, height: { ideal: 960 } },
+      audio: false,
+    });
+    activeStream = stream;
+    cameraOpen = true;
+    cameraStarting = false;
+    message = enrollmentPromptForIndex(enrollCaptures.length);
+    tone = "success";
+    render("enroll");
+  } catch (error) {
+    stopCamera();
+    message = cameraPermissionDeniedMessage(error) || (error instanceof Error ? error.message : "Camera could not start");
+    tone = "danger";
+    render("enroll");
+  }
+}
+
+async function captureStillFromStream(prompt: string): Promise<string> {
+  if (!activeStream) throw new Error("Open the camera first.");
+  const video = document.querySelector<HTMLVideoElement>("#enroll-video");
+  if (!video) throw new Error("Live preview is not ready yet.");
+  const note = document.querySelector("#liveness");
+  if (note) note.textContent = prompt;
+  if (video.readyState < 2) {
+    await new Promise<void>((resolve, reject) => {
+      const onReady = () => { cleanup(); resolve(); };
+      const onError = () => { cleanup(); reject(new Error("Live preview failed.")); };
+      const cleanup = () => {
+        video.removeEventListener("loadeddata", onReady);
+        video.removeEventListener("error", onError);
+      };
+      video.addEventListener("loadeddata", onReady, { once: true });
+      video.addEventListener("error", onError, { once: true });
+    });
+  }
+  await new Promise((resolve) => window.setTimeout(resolve, 350));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(480, video.videoWidth || 480);
+  canvas.height = Math.max(640, video.videoHeight || 640);
+  const context2d = canvas.getContext("2d");
+  if (!context2d) throw new Error("Camera capture failed.");
+  context2d.drawImage(video, 0, 0, canvas.width, canvas.height);
+  const quality = frameQualityIssue(canvas);
+  if (quality) throw new Error(quality);
+  previewUrl = canvas.toDataURL("image/jpeg", 0.86);
+  return previewUrl;
 }
 
 async function captureFace(prompt: string): Promise<string> {
@@ -290,16 +516,22 @@ async function captureFace(prompt: string): Promise<string> {
   try {
     const video = document.createElement("video");
     video.srcObject = stream;
+    video.setAttribute("playsinline", "true");
     await video.play();
-    const note = document.querySelector("#liveness");
-    if (note) note.textContent = prompt;
-    await new Promise((resolve) => window.setTimeout(resolve, 1200));
+    const note = document.querySelector<HTMLElement>("#liveness");
+    if (note) {
+      note.hidden = false;
+      note.textContent = prompt;
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 900));
     const canvas = document.createElement("canvas");
     canvas.width = 480;
     canvas.height = 640;
     const context2d = canvas.getContext("2d");
     if (!context2d) throw new Error("Camera capture failed.");
     context2d.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const quality = frameQualityIssue(canvas);
+    if (quality) throw new Error(quality);
     previewUrl = canvas.toDataURL("image/jpeg", 0.82);
     return previewUrl;
   } finally {
@@ -308,51 +540,48 @@ async function captureFace(prompt: string): Promise<string> {
 }
 
 async function captureEnrollmentPhoto() {
-  if (enrollCaptures.length >= 5) return;
+  if (enrollCaptures.length >= 5 || enrollBusy) return;
   try {
-    const prompts = [
-      "Look straight at the camera",
-      "Turn slightly left, then centre",
-      "Turn slightly right, then centre",
-      "Look up a little, then centre",
-      "Blink once, then hold still",
-    ];
-    const image = await captureFace(prompts[enrollCaptures.length] || prompts[0]);
+    const image = await captureStillFromStream(enrollmentPromptForIndex(enrollCaptures.length));
     enrollCaptures = [...enrollCaptures, image];
-    message = `Captured photo ${enrollCaptures.length} of 5`;
+    message = `Captured photo ${enrollCaptures.length} of 5. ${enrollCaptures.length < 3 ? "Take at least 3." : "You can submit when consent is checked."}`;
     tone = "success";
+    if (enrollCaptures.length >= 5) stopCamera();
     render("enroll");
   } catch (error) {
-    message = error instanceof Error ? error.message : "Camera capture failed";
+    message = cameraPermissionDeniedMessage(error) || (error instanceof Error ? error.message : "Camera capture failed");
     tone = "danger";
     render("enroll");
   }
 }
 
 async function submitEnrollment() {
-  if (!api || !isManager()) return;
-  enrollConsent = Boolean(document.querySelector<HTMLInputElement>("#enroll-consent")?.checked);
+  if (!api || !isManager() || enrollBusy) return;
   try {
+    if (offline()) throw new Error("You appear offline. Enrollment was not sent.");
     const body = enrollFaceRequest({
       employee: enrollEmployee,
       images: enrollCaptures,
       consent: enrollConsent,
       consentVersion: text(facePolicy, "consent_version") || FACE_CONSENT_VERSION,
     });
-    message = "Submitting enrollment to ERP";
-    tone = "";
+    enrollBusy = true;
+    stopCamera();
+    message = "Submitting enrollment to ERP…";
+    tone = "warning";
     render("enroll");
     const saved = await payload(await api.enrollFace(body));
     enrollCaptures = [];
     enrollConsent = false;
     previewUrl = "";
-    message = `Enrolled ${text(saved, "name") || enrollEmployee} · ${text(saved, "status") || "Enrolled"}`;
+    message = `Enrollment complete for ${enrollEmployee}. Status: ${text(saved, "status") || "Enrolled"} (${text(saved, "name") || "saved"}).`;
     tone = "success";
     context = await payload(await api.getContext());
-    render("enroll");
   } catch (error) {
     message = error instanceof Error ? error.message : "Enrollment failed";
     tone = "danger";
+  } finally {
+    enrollBusy = false;
     render("enroll");
   }
 }
@@ -363,6 +592,7 @@ async function submitLog(logType: "IN" | "OUT") {
   tone = "";
   render("attendance");
   try {
+    if (offline()) throw new Error("You appear offline. Attendance was not recorded.");
     const challenge = text(await payload(await api.requestCheckinChallenge()), "challenge");
     const location = await captureLocation();
     const image = await captureFace(livenessPrompt(challenge));
@@ -372,7 +602,7 @@ async function submitLog(logType: "IN" | "OUT") {
     tone = "success";
     await refresh();
   } catch (error) {
-    message = error instanceof Error ? error.message : "Attendance was not recorded";
+    message = cameraPermissionDeniedMessage(error) || (error instanceof Error ? error.message : "Attendance was not recorded");
     tone = "danger";
     render("attendance");
   }
