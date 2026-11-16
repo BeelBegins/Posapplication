@@ -13,7 +13,7 @@ const includePlugins = ["@capacitor/app"];
 if (productId === "pos" || productId === "sales" || productId === "stock-receiving") {
   includePlugins.push("@capacitor/barcode-scanner");
 }
-if (productId === "sales") {
+if (productId === "sales" || productId === "hr") {
   includePlugins.push("@capacitor/geolocation");
 }
 if (productId === "stock-receiving") includePlugins.push("@capacitor/local-notifications");

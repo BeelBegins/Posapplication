@@ -4,11 +4,14 @@ import { getProductProfile, listProductProfiles, requireBuildableProfile } from 
 
 test("all enabled product profiles are independently buildable", () => {
   const enabled = listProductProfiles().filter((profile) => profile.enabled).map((profile) => profile.id);
-  assert.deepEqual(enabled, ["pos", "restaurant", "sales", "shopping", "stock-receiving"]);
+  assert.deepEqual(enabled, ["pos", "restaurant", "sales", "shopping", "stock-receiving", "hr"]);
   assert.equal(requireBuildableProfile("pos", "electron").name, "Ai Matic POS");
   assert.equal(requireBuildableProfile("pos", "capacitor").androidAppId, "com.beelbegins.aimaticpos");
   assert.equal(requireBuildableProfile("pos", "capacitor").androidOrientation, "sensorPortrait");
   assert.equal(requireBuildableProfile("stock-receiving", "capacitor").androidAppId, "com.beelbegins.aimaticstockreceiving");
+  assert.equal(requireBuildableProfile("hr", "capacitor").androidAppId, "com.beelbegins.aimatichr");
+  assert.equal(requireBuildableProfile("hr", "capacitor").authentication, "user-session");
+  assert.throws(() => requireBuildableProfile("hr", "electron"), /does not support electron/);
 });
 
 test("Sales and Shopping remain isolated from Electron", () => {
