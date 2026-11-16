@@ -6,7 +6,7 @@ import { normalizeErpDisplayText } from "../../core/display-branding";
 import { capacitorOAuthBrowser } from "../../mobile/capacitor-oauth-browser";
 import { OAuthPkceCredentialProvider, type OAuthPublicClientConfig } from "../../mobile/credential-provider";
 import { androidSecureStorage } from "../../mobile/secure-storage";
-import { bottomNavigation, emptyState, escapeHtml as esc, formatMoney, icon } from "../shared/ui";
+import { bottomNavigation, emptyState, escapeHtml as esc, formatMoney, icon, loadingSkeleton, statusBadge } from "../shared/ui";
 import {
   FACE_CONSENT_VERSION,
   attendanceCorrectionRequest,
@@ -23,18 +23,25 @@ import {
 declare const __APP_VERSION__: string;
 type Row = Record<string, unknown>;
 type Screen = "home" | "attendance" | "leave" | "pay" | "enroll" | "profile";
+type PreviewScreen = Screen | "setup" | "signin";
+type EnrollStep = "pick" | "consent" | "capture" | "review";
 type HrApi = ReturnType<typeof createHrApi>;
+type Tone = "" | "success" | "warn" | "danger" | "info";
 
 const root = document.querySelector<HTMLElement>("#app")!;
 const fetcher = globalThis.fetch.bind(globalThis);
 const configKey = "aimatic-hr-config-v1";
+const previewMode = new URLSearchParams(location.search).get("uiPreview") === "1";
+const previewScreen = (new URLSearchParams(location.search).get("screen") || "home") as PreviewScreen;
+const previewTheme = new URLSearchParams(location.search).get("theme") || "";
+
 let config: OAuthPublicClientConfig | null = null;
 let credentials: OAuthPkceCredentialProvider | null = null;
 let api: HrApi | null = null;
 let context: Row = {};
 let screen: Screen = "home";
 let message = "";
-let tone = "";
+let tone: Tone = "";
 let loading = "";
 let leaveRows: Row[] = [];
 let balances: Row = {};
@@ -52,10 +59,12 @@ let enrollCaptures: string[] = [];
 let enrollConsent = false;
 let enrollBusy = false;
 let enrollSearching = false;
+let enrollStep: EnrollStep = "pick";
 let cameraOpen = false;
 let cameraStarting = false;
 let activeStream: MediaStream | null = null;
 let backListenerReady = false;
+let toastTimer = 0;
 
 const text = (row: Row | undefined, ...keys: string[]) => {
   for (const key of keys) if (row?.[key] != null && row[key] !== "") return String(row[key]);
@@ -65,6 +74,7 @@ const list = (value: unknown): Row[] => Array.isArray(value) ? value.filter((ent
 const money = (value: unknown) => formatMoney(value, "PKR");
 const isManager = () => canManageFaceEnrollment(context.roles);
 const offline = () => typeof navigator !== "undefined" && navigator.onLine === false;
+const initials = (name: string) => name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase() || "").join("") || "?";
 
 async function payload(response: Response): Promise<Row> {
   const raw = await response.json().catch(() => ({})) as Row;
@@ -80,33 +90,56 @@ function stopCamera(): void {
   cameraStarting = false;
 }
 
+function setToast(next: string, nextTone: Tone = "info"): void {
+  message = next;
+  tone = nextTone;
+  window.clearTimeout(toastTimer);
+  if (next) toastTimer = window.setTimeout(() => { message = ""; tone = ""; const host = document.querySelector(".toast-host"); if (host) host.innerHTML = ""; }, 4200);
+}
+
+function toastHtml(): string {
+  if (!message) return `<div class="toast-host" aria-live="polite"></div>`;
+  return `<div class="toast-host" aria-live="polite"><div class="toast ${esc(tone || "info")}" role="status">${esc(message)}</div></div>`;
+}
+
+function btn(label: string, opts: { id?: string; kind?: "primary" | "secondary" | "text" | "danger"; block?: boolean; disabled?: boolean; attrs?: string } = {}): string {
+  const kind = opts.kind || "primary";
+  return `<button type="button" class="btn btn-${kind}${opts.block ? " btn-block" : ""}" ${opts.id ? `id="${opts.id}"` : ""} ${opts.disabled ? "disabled" : ""} ${opts.attrs || ""}>${label}</button>`;
+}
+
+function field(label: string, control: string): string {
+  return `<div class="field"><label>${esc(label)}</label>${control}</div>`;
+}
+
+function avatar(name: string): string {
+  return `<span class="avatar" aria-hidden="true">${esc(initials(name))}</span>`;
+}
+
+function appBar(subtitle: string, trailing = ""): string {
+  return `<header class="app-bar"><div class="brand"><strong>Ai Matic HR</strong><small>${esc(subtitle || "Not signed in")}</small></div>${trailing}</header>`;
+}
+
 async function ensureBackHandler(): Promise<void> {
-  if (backListenerReady) return;
+  if (backListenerReady || previewMode) return;
   backListenerReady = true;
   try {
     await App.addListener("backButton", () => {
       if (cameraOpen || cameraStarting) {
         stopCamera();
-        message = "Camera closed";
-        tone = "warning";
+        setToast("Camera closed", "warn");
         render("enroll");
         return;
       }
-      if (screen === "enroll") {
-        message = "";
-        tone = "";
-        render("home");
+      if (screen === "enroll" && enrollStep !== "pick") {
+        enrollStep = enrollStep === "review" ? "capture" : enrollStep === "capture" ? "consent" : "pick";
+        render("enroll");
         return;
       }
-      if (screen !== "home") {
-        render("home");
-        return;
-      }
+      if (screen === "enroll") { render("home"); return; }
+      if (screen !== "home") { render("home"); return; }
       void App.exitApp();
     });
-  } catch {
-    // Browser / non-Capacitor shells have no native back hook.
-  }
+  } catch { /* browser */ }
 }
 
 async function configure(baseUrl: string) {
@@ -121,7 +154,16 @@ async function configure(baseUrl: string) {
 
 function setup(error = "") {
   stopCamera();
-  root.innerHTML = `<section class="setup"><div class="setup-card"><div class="mark">HR</div><p class="eyebrow">Employee app</p><h1>Ai Matic HR</h1><p>Sign in with your ERP employee account. Attendance, leave and pay stay on the server.</p>${error ? `<p class="alert danger">${esc(error)}</p>` : ""}<form id="setup"><label>ERP URL<input id="url" type="url" required placeholder="https://erp.example.com" autocomplete="url"></label><button class="primary">Continue</button></form><small>v${esc(__APP_VERSION__)} · No API key or secret</small></div></section>`;
+  root.innerHTML = `${toastHtml()}<section class="setup"><div class="setup-card">
+    <div class="mark">HR</div>
+    <div class="stack-sm"><p class="t-label">Employee workspace</p><h1 class="t-display">Ai Matic HR</h1><p class="t-meta">Connect to your ERP, then sign in with your own employee account. Attendance, leave and pay stay on the server.</p></div>
+    ${error ? `<div class="banner danger">${esc(error)}</div>` : ""}
+    <form id="setup" class="stack">
+      ${field("ERP URL", `<input id="url" type="url" required placeholder="https://siezal.aimatic.tech" autocomplete="url">`)}
+      ${btn("Continue", { kind: "primary", block: true, attrs: 'type="submit"' })}
+    </form>
+    <p class="t-meta">v${esc(__APP_VERSION__)} · Public OAuth · No API secret</p>
+  </div></section>`;
   document.querySelector<HTMLFormElement>("#setup")!.onsubmit = async (event) => {
     event.preventDefault();
     try { await configure(document.querySelector<HTMLInputElement>("#url")!.value); signIn(); }
@@ -131,12 +173,53 @@ function setup(error = "") {
 
 function signIn() {
   stopCamera();
-  root.innerHTML = `<section class="setup"><div class="setup-card"><div class="mark">HR</div><p class="eyebrow">Secure access</p><h1>Employee sign in</h1><p>Use your own ERP account. The app cannot choose another employee.</p>${message ? `<p class="alert danger">${esc(message)}</p>` : ""}<button id="login" class="primary">Sign in with ERP</button><button id="change-server" class="secondary">Change ERP server</button></div></section>`;
+  root.innerHTML = `${toastHtml()}<section class="setup"><div class="setup-card">
+    <div class="mark">${icon("shield", 28)}</div>
+    <div class="stack-sm"><p class="t-label">Secure access</p><h1 class="t-display">Sign in</h1><p class="t-meta">Use your ERP account. The app cannot choose another employee.</p></div>
+    ${message ? `<div class="banner danger">${esc(message)}</div>` : ""}
+    ${btn(`${icon("log-in", 18)} Sign in with ERP`, { id: "login", kind: "primary", block: true })}
+    ${btn("Change ERP server", { id: "change-server", kind: "secondary", block: true })}
+  </div></section>`;
   document.querySelector<HTMLButtonElement>("#login")!.onclick = async () => {
     try { await credentials!.login(); await loadContext(); }
     catch (error) { message = error instanceof Error ? error.message : "Sign in failed"; signIn(); }
   };
   document.querySelector<HTMLButtonElement>("#change-server")!.onclick = () => { localStorage.removeItem(configKey); config = null; setup(); };
+}
+
+function seedPreview(): void {
+  context = {
+    employee: "HR-EMP-00063",
+    employee_name: "Ahmed Nabeel",
+    designation: "Systems Lead",
+    department: "Technology",
+    company: "Siezal Supermarket",
+    face_enrolled: false,
+    verifier_ready: true,
+    mobile_checkin_enabled: true,
+    roles: ["Employee", "HR Manager", "System Manager"],
+    face_policy: { consent_version: FACE_CONSENT_VERSION, purpose: "attendance-checkin-checkout", stores_raw_images: false },
+  };
+  facePolicy = context.face_policy as Row;
+  checkins = [
+    { log_type: "IN", time: "2026-11-17 09:02:11", shift: "General" },
+    { log_type: "OUT", time: "2026-11-16 18:11:04", shift: "General" },
+  ];
+  leaveRows = [{ leave_type: "Casual Leave", status: "Open", from_date: "2026-11-20", to_date: "2026-11-20" }];
+  balances = { "Casual Leave": { balance_leaves: 6 }, "Annual Leave": { balance_leaves: 12 } };
+  payslips = [{ name: "Sal Slip/Nov/0001", net_pay: 185000, start_date: "2026-11-01", end_date: "2026-11-30" }];
+  team = [{ employee_name: "Sara Khan", designation: "HR Executive", department: "People" }];
+  directory = [
+    { name: "HR-EMP-00063", employee_name: "Ahmed Nabeel", designation: "Systems Lead", department: "Technology" },
+    { name: "HR-EMP-00012", employee_name: "Sara Khan", designation: "HR Executive", department: "People" },
+  ];
+  enrollEmployee = "HR-EMP-00063";
+  enrollQuery = "Nabeel";
+  enrollConsent = previewScreen === "enroll";
+  enrollCaptures = previewScreen === "enroll" ? ["data:image/jpeg;base64,/9j/4AAQ", "data:image/jpeg;base64,/9j/4AAQ", "data:image/jpeg;base64,/9j/4AAQ"] : [];
+  enrollStep = (new URLSearchParams(location.search).get("step") as EnrollStep) || "pick";
+  options = { leave_types: ["Casual Leave", "Annual Leave"] };
+  requests = { attendance: [], expenses: [], shifts: [] };
 }
 
 async function loadContext() {
@@ -145,13 +228,13 @@ async function loadContext() {
   context = await payload(await api!.getContext());
   facePolicy = (context.face_policy && typeof context.face_policy === "object" ? context.face_policy : {}) as Row;
   loading = "";
-  message = "";
+  setToast("");
   render("home");
   void refresh();
 }
 
 async function refresh() {
-  if (!api) return;
+  if (!api || previewMode) return;
   try {
     if (offline()) throw new Error("You appear offline. Reconnect, then refresh.");
     const tasks: Array<Promise<Row | Row[]>> = [
@@ -181,106 +264,206 @@ async function refresh() {
     }
     if (!loading) render(screen);
   } catch (error) {
-    message = error instanceof Error ? error.message : "Could not refresh HR data";
-    tone = "danger";
+    setToast(error instanceof Error ? error.message : "Could not refresh HR data", "danger");
     render(screen);
   }
 }
 
-function rows(items: Row[], title: (row: Row) => string, detail: (row: Row) => string) {
-  if (!items.length) return emptyState(icon("list", 28), "Nothing here yet", "Records from ERP will appear after the server returns them.");
-  return `<div class="stack">${items.map((row) => `<article class="row"><strong>${esc(title(row))}</strong><small>${esc(detail(row))}</small></article>`).join("")}</div>`;
-}
-
 function home() {
+  const hour = new Date().getHours();
+  const greet = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+  const latest = checkins[0];
   const balanceCards = Object.entries(balances).slice(0, 4).map(([name, value]) => {
     const row = value && typeof value === "object" ? value as Row : {};
-    return `<article class="tile"><strong>${esc(name)}</strong><small>${esc(row.balance_leaves ?? "-")} days left</small></article>`;
+    return `<article class="card-flat"><p class="t-label">${esc(name)}</p><strong class="t-subtitle">${esc(row.balance_leaves ?? "-")}</strong><p class="t-meta">days left</p></article>`;
   }).join("");
-  const managerCue = isManager()
-    ? `<button class="secondary" data-screen="enroll">Enroll employee face</button>`
-    : "";
-  return `<section class="stack"><article class="tile"><p class="eyebrow">Today</p><h2>${esc(text(context, "employee_name") || "Employee")}</h2><small>${esc([text(context, "designation"), text(context, "department")].filter(Boolean).join(" · "))}</small><p>${context.verifier_ready ? "Face verification is ready." : "Face verification is required and not configured yet. Check-in will stay blocked."}</p><button class="primary" data-screen="attendance">Open attendance</button>${managerCue}</article><div class="grid">${balanceCards || `<article class="tile"><strong>Leave</strong><small>No balance returned</small></article>`}<article class="tile"><strong>${esc(String(team.length))}</strong><small>People reporting to you</small></article></div><button class="secondary" id="refresh">Refresh</button></section>`;
+  return `<section class="stack">
+    <article class="card hero-card stack">
+      <p class="t-label">${esc(greet)}</p>
+      <h1 class="t-display">${esc(text(context, "employee_name") || "Employee")}</h1>
+      <p class="t-meta">${esc([text(context, "designation"), text(context, "department")].filter(Boolean).join(" · "))}</p>
+      <div class="row-between">
+        <span class="chip ${context.verifier_ready ? "success" : "warn"}">${context.verifier_ready ? "Face ready" : "Face not ready"}</span>
+        <span class="chip ${context.face_enrolled ? "success" : "warn"}">${context.face_enrolled ? "Enrolled" : "Not enrolled"}</span>
+      </div>
+      <div class="card-flat hero-attend">
+        <p class="t-label">Today’s attendance</p>
+        <strong>${latest ? `${esc(text(latest, "log_type"))} · ${esc(text(latest, "time"))}` : "No check-in yet today"}</strong>
+      </div>
+    </article>
+    <div class="qa">
+      <button class="qa-btn" data-screen="attendance"><span class="icon">${icon("log-in", 18)}</span><strong>Check in / out</strong><span class="t-meta">Face + GPS</span></button>
+      <button class="qa-btn" data-screen="leave"><span class="icon">${icon("calendar", 18)}</span><strong>Request leave</strong><span class="t-meta">Send to ERP</span></button>
+      ${isManager() ? `<button class="qa-btn" data-screen="enroll"><span class="icon">${icon("camera", 18)}</span><strong>Enroll face</strong><span class="t-meta">Managers</span></button>` : ""}
+      <button class="qa-btn" data-screen="profile"><span class="icon">${icon("user", 18)}</span><strong>Profile</strong><span class="t-meta">Team & requests</span></button>
+    </div>
+    <div class="grid-2">${balanceCards || `<article class="card-flat"><strong>Leave</strong><p class="t-meta">No balance returned</p></article>`}<article class="card-flat"><p class="t-label">Direct reports</p><strong class="t-subtitle">${esc(String(team.length))}</strong></article></div>
+    ${btn(`${icon("refresh", 16)} Refresh`, { id: "refresh", kind: "secondary", block: true })}
+  </section>`;
 }
 
 function attendance() {
-  return `<section class="stack"><article class="tile"><p class="eyebrow">Live attendance</p><h2>Check in or out</h2><p>The server records the time, employee and face result. This phone only sends location, a one-time challenge and a camera frame.</p>${previewUrl ? `<img class="camera" alt="Live face preview" src="${esc(previewUrl)}">` : ""}<p id="liveness" class="prompt" hidden></p><div class="actions"><button class="primary" data-log="IN">Check in</button><button class="secondary" data-log="OUT">Check out</button></div></article>${rows(checkins, (row) => `${text(row, "log_type") || "Log"} · ${text(row, "time")}`, (row) => text(row, "shift") || "Recorded by ERP")}</section>`;
+  const history = checkins.length
+    ? `<div class="list">${checkins.map((row) => `<article class="list-row"><span class="icon-btn" style="width:40px;height:40px;display:grid;place-items:center;background:var(--surface-2);border-radius:12px">${icon(text(row, "log_type") === "OUT" ? "log-out" : "log-in", 18)}</span><div class="grow"><strong>${esc(text(row, "log_type") || "Log")}</strong><span class="t-meta">${esc(text(row, "time"))}</span></div>${statusBadge(text(row, "shift") || "ERP", "info")}</article>`).join("")}</div>`
+    : emptyState(icon("clock", 28), "No recent check-ins", "Successful check-ins from ERP will appear here.");
+  return `<section class="stack">
+    <article class="card stack">
+      <p class="t-label">Live attendance</p>
+      <h2 class="t-title">Check in or out</h2>
+      <p class="t-meta">The server owns employee, time and face match. This phone sends GPS, a challenge and one live frame.</p>
+      ${previewUrl ? `<div class="stage"><img class="preview" alt="Capture preview" src="${esc(previewUrl)}"><div class="oval" aria-hidden="true"></div></div>` : ""}
+      <p class="banner" id="liveness" hidden></p>
+      <div class="grid-2">
+        ${btn(`${icon("log-in", 16)} Check in`, { kind: "primary", block: true, attrs: 'data-log="IN"' })}
+        ${btn(`${icon("log-out", 16)} Check out`, { kind: "secondary", block: true, attrs: 'data-log="OUT"' })}
+      </div>
+    </article>
+    <div class="stack-sm"><h3 class="t-subtitle">History</h3>${history}</div>
+  </section>`;
 }
 
 function leave() {
   const typeOptions = (Array.isArray(options.leave_types) ? options.leave_types : []).map((entry) => `<option>${esc(String(entry))}</option>`).join("");
-  return `<section class="stack"><form id="leave" class="tile"><p class="eyebrow">Request leave</p><label>Leave type<select name="leaveType" required>${typeOptions || "<option value=''>No allocated leave</option>"}</select></label><label>From<input name="fromDate" type="date" required></label><label>To<input name="toDate" type="date" required></label><label>Note<textarea name="description"></textarea></label><button class="primary">Submit to ERP</button></form>${rows(leaveRows, (row) => `${text(row, "leave_type")} · ${text(row, "status")}`, (row) => `${text(row, "from_date")} to ${text(row, "to_date")}`)}</section>`;
+  const rows = leaveRows.length
+    ? `<div class="list">${leaveRows.map((row) => `<article class="list-row"><div class="grow"><strong>${esc(text(row, "leave_type"))}</strong><span class="t-meta">${esc(text(row, "from_date"))} → ${esc(text(row, "to_date"))}</span></div>${statusBadge(text(row, "status") || "Open", "info")}</article>`).join("")}</div>`
+    : emptyState(icon("calendar", 28), "No leave applications", "Submitted leave will show here.");
+  return `<section class="stack">
+    <form id="leave" class="card stack">
+      <p class="t-label">Request leave</p>
+      <h2 class="t-title">New application</h2>
+      ${field("Leave type", `<select name="leaveType" required>${typeOptions || "<option value=''>No allocated leave</option>"}</select>`)}
+      <div class="grid-2">
+        ${field("From", `<input name="fromDate" type="date" required>`)}
+        ${field("To", `<input name="toDate" type="date" required>`)}
+      </div>
+      ${field("Note", `<textarea name="description" placeholder="Optional note"></textarea>`)}
+      ${btn("Submit to ERP", { kind: "primary", block: true, attrs: 'type="submit"' })}
+    </form>
+    ${rows}
+  </section>`;
 }
 
 function pay() {
-  return rows(payslips, (row) => `${text(row, "name")} · ${money(row.net_pay)}`, (row) => `${text(row, "start_date")} to ${text(row, "end_date")}`);
+  if (!payslips.length) return emptyState(icon("credit-card", 28), "No payslips", "Posted salary slips will appear here.");
+  return `<section class="stack"><h2 class="t-title">Payslips</h2><div class="list">${payslips.map((row) => `<article class="list-row"><div class="grow"><strong>${esc(text(row, "name"))}</strong><span class="t-meta">${esc(text(row, "start_date"))} → ${esc(text(row, "end_date"))}</span></div><strong>${esc(money(row.net_pay))}</strong></article>`).join("")}</div></section>`;
+}
+
+function enrollStepper(): string {
+  const steps: Array<{ id: EnrollStep; label: string }> = [
+    { id: "pick", label: "Employee" },
+    { id: "consent", label: "Consent" },
+    { id: "capture", label: "Capture" },
+    { id: "review", label: "Review" },
+  ];
+  const order = steps.map((step) => step.id);
+  const current = order.indexOf(enrollStep);
+  return `<div class="stepper" aria-label="Enrollment steps">${steps.map((step, index) => {
+    const state = index < current ? "done" : index === current ? "active" : "";
+    return `<div class="step ${state}"><span class="dot">${index < current ? icon("check", 14) : index + 1}</span><span>${step.label}</span></div>`;
+  }).join("")}</div>`;
 }
 
 function enroll() {
-  if (!isManager()) {
-    return emptyState(icon("user", 28), "Managers only", "Face enrollment is limited to HR Manager or System Manager.");
-  }
+  if (!isManager()) return emptyState(icon("shield", 28), "Managers only", "Face enrollment is limited to HR Manager or System Manager.");
   const selected = directory.find((row) => text(row, "name") === enrollEmployee);
+  const policyVersion = text(facePolicy, "consent_version") || FACE_CONSENT_VERSION;
   const picks = directory.slice(0, 40).map((row) => {
     const id = text(row, "name");
-    const active = id === enrollEmployee ? " active" : "";
-    return `<button type="button" class="row pick${active}" data-employee="${esc(id)}" aria-pressed="${id === enrollEmployee ? "true" : "false"}"><strong>${esc(text(row, "employee_name") || id)}</strong><small>${esc([id, text(row, "designation"), text(row, "department")].filter(Boolean).join(" · "))}</small></button>`;
+    return `<button type="button" class="list-row ${id === enrollEmployee ? "active" : ""}" data-employee="${esc(id)}" aria-pressed="${id === enrollEmployee}">${avatar(text(row, "employee_name") || id)}<div class="grow"><strong>${esc(text(row, "employee_name") || id)}</strong><span class="t-meta">${esc([id, text(row, "designation"), text(row, "department")].filter(Boolean).join(" · "))}</span></div></button>`;
   }).join("");
-  const thumbs = enrollCaptures.map((image, index) => `
-    <div class="thumb-wrap">
-      <img class="thumb" alt="Capture ${index + 1}" src="${esc(image)}">
-      <div class="thumb-actions"><button type="button" data-retake="${index}" aria-label="Remove photo ${index + 1}">Remove</button></div>
-    </div>`).join("");
-  const policyVersion = text(facePolicy, "consent_version") || FACE_CONSENT_VERSION;
-  const ready = canSubmitEnrollment({ employee: enrollEmployee, images: enrollCaptures, consent: enrollConsent, busy: enrollBusy });
-  const prompt = enrollmentPromptForIndex(enrollCaptures.length);
-  const stage = cameraOpen || cameraStarting
-    ? `<div class="stage" aria-live="polite">
-        <video id="enroll-video" playsinline muted autoplay></video>
-        <div class="oval" aria-hidden="true"></div>
-        <div class="stage-meta"><span>${esc(prompt)}</span><span>${enrollCaptures.length}/5</span></div>
-      </div>`
-    : previewUrl
-      ? `<div class="stage"><img class="preview" alt="Last capture preview" src="${esc(previewUrl)}"><div class="oval" aria-hidden="true"></div></div>`
-      : `<div class="stage"><div class="stage-meta"><span>Camera closed</span><span>${enrollCaptures.length}/5</span></div></div>`;
 
-  return `<section class="stack ${enrollBusy ? "busy" : ""}">
-    <article class="tile">
-      <p class="eyebrow">HR enrollment</p>
-      <h2>Enroll face template</h2>
-      <p>Use the live camera only. Completing enrollment also finishes an existing Pending record for the same employee (for example HR-EMP-00063).</p>
-      <ul class="tips">
-        <li>Face a light source; avoid strong backlight.</li>
-        <li>Keep the camera at eye level and center your face in the oval.</li>
-        <li>Remove glare glasses if they hide the eyes.</li>
-        <li>Capture 3 to 5 live photos. Raw images are not kept after the encrypted template is saved.</li>
-      </ul>
-      <form id="enroll-search" class="stack">
-        <label for="enroll-query">Find employee</label>
-        <input id="enroll-query" value="${esc(enrollQuery)}" placeholder="Name, code, or department" autocomplete="off">
-        <button class="secondary" ${enrollSearching || enrollBusy ? "disabled" : ""}>${enrollSearching ? "Searching…" : "Search directory"}</button>
-      </form>
-      <div class="stack picks">${picks || emptyState(icon("search", 28), "No employees yet", "Search the directory, then tap an employee to enroll.")}</div>
-      ${selected ? `<p class="eyebrow">Selected</p><strong>${esc(text(selected, "employee_name"))}</strong><small>${esc(text(selected, "name"))}</small>` : `<p class="alert warning">Pick an employee before capturing photos.</p>`}
-      <p class="prompt" id="liveness">${esc(prompt)}</p>
-      ${stage}
-      <div class="actions">
-        <button class="secondary" id="open-camera" ${enrollBusy || !enrollEmployee || enrollCaptures.length >= 5 ? "disabled" : ""}>${cameraOpen || cameraStarting ? "Camera on" : "Open camera"}</button>
-        <button class="primary" id="capture-enroll" ${enrollBusy || !cameraOpen || enrollCaptures.length >= 5 ? "disabled" : ""}>Take photo (${enrollCaptures.length}/5)</button>
+  if (enrollStep === "pick") {
+    return `<section class="stack">
+      ${enrollStepper()}
+      <article class="card stack">
+        <p class="t-label">Manager enrollment</p>
+        <h2 class="t-title">Choose employee</h2>
+        <p class="t-meta">Completing this flow also finishes an existing Pending record for the same employee.</p>
+        <form id="enroll-search" class="stack">
+          ${field("Search directory", `<input id="enroll-query" value="${esc(enrollQuery)}" placeholder="Name, code, or department" autocomplete="off">`)}
+          ${btn(enrollSearching ? "Searching…" : `${icon("search", 16)} Search`, { kind: "secondary", block: true, disabled: enrollSearching || enrollBusy, attrs: 'type="submit"' })}
+        </form>
+        <div class="list">${picks || emptyState(icon("users", 28), "No employees yet", "Search the directory, then select who to enroll.")}</div>
+        ${selected ? `<div class="banner success">Selected ${esc(text(selected, "employee_name"))} (${esc(text(selected, "name"))})</div>` : `<div class="banner warn">Pick an employee to continue.</div>`}
+        ${btn("Continue to consent", { id: "enroll-next", kind: "primary", block: true, disabled: !enrollEmployee })}
+      </article>
+    </section>`;
+  }
+
+  if (enrollStep === "consent") {
+    return `<section class="stack">
+      ${enrollStepper()}
+      <article class="card stack">
+        <p class="t-label">Consent</p>
+        <h2 class="t-title">Record employee consent</h2>
+        <p class="t-meta">Policy <code>${esc(policyVersion)}</code> · attendance check-in/out only.</p>
+        <ul class="t-meta" style="margin:0;padding-left:18px;display:grid;gap:6px">
+          <li>Encrypted face template is stored. Raw photos are not kept.</li>
+          <li>No commercial face API is used.</li>
+          <li>An HR manager can revoke and wipe later.</li>
+        </ul>
+        <button type="button" class="consent" id="enroll-consent-toggle" aria-pressed="${enrollConsent ? "true" : "false"}">
+          <span class="box" aria-hidden="true">${enrollConsent ? icon("check", 14) : ""}</span>
+          <span>I confirm the employee consented under <strong>${esc(policyVersion)}</strong>.
+            <small>Required before camera capture.</small>
+          </span>
+        </button>
+        <div class="grid-2">
+          ${btn("Back", { id: "enroll-back", kind: "secondary", block: true })}
+          ${btn("Continue to capture", { id: "enroll-next", kind: "primary", block: true, disabled: !enrollConsent })}
+        </div>
+      </article>
+    </section>`;
+  }
+
+  if (enrollStep === "capture") {
+    const prompt = enrollmentPromptForIndex(enrollCaptures.length);
+    const stage = cameraOpen || cameraStarting
+      ? `<div class="stage"><video id="enroll-video" playsinline muted autoplay></video><div class="oval" aria-hidden="true"></div><div class="stage-meta"><span>${esc(prompt)}</span><span>${enrollCaptures.length}/5</span></div></div>`
+      : previewUrl
+        ? `<div class="stage"><img class="preview" alt="Last capture" src="${esc(previewUrl)}"><div class="oval" aria-hidden="true"></div></div>`
+        : `<div class="stage"><div class="stage-meta"><span>Camera closed</span><span>${enrollCaptures.length}/5</span></div></div>`;
+    const thumbs = enrollCaptures.map((image, index) => `<div class="thumb-wrap"><img class="thumb" alt="Capture ${index + 1}" src="${esc(image)}"><button type="button" class="btn-icon" data-retake="${index}" aria-label="Remove photo ${index + 1}">${icon("x", 16)}</button></div>`).join("");
+    return `<section class="stack">
+      ${enrollStepper()}
+      <article class="card stack">
+        <p class="t-label">Capture</p>
+        <h2 class="t-title">Live face photos</h2>
+        <p class="t-meta">Center the face in the oval. Face a light source. Avoid backlight. Take 3 to 5 photos.</p>
+        <div class="banner">${esc(prompt)}</div>
+        ${stage}
+        <div class="grid-2">
+          ${btn(cameraOpen ? "Camera on" : `${icon("camera", 16)} Open camera`, { id: "open-camera", kind: "secondary", block: true, disabled: enrollBusy || enrollCaptures.length >= 5 })}
+          ${btn(`Take photo (${enrollCaptures.length}/5)`, { id: "capture-enroll", kind: "primary", block: true, disabled: enrollBusy || !cameraOpen || enrollCaptures.length >= 5 })}
+        </div>
+        <div class="grid-2">
+          ${btn("Remove last", { id: "retake-last", kind: "text", block: true, disabled: !enrollCaptures.length || enrollBusy })}
+          ${btn("Clear all", { id: "clear-enroll", kind: "text", block: true, disabled: !enrollCaptures.length || enrollBusy })}
+        </div>
+        <div class="thumbs">${thumbs || `<div class="banner warn">No photos yet.</div>`}</div>
+        <div class="grid-2">
+          ${btn("Back", { id: "enroll-back", kind: "secondary", block: true })}
+          ${btn("Review photos", { id: "enroll-next", kind: "primary", block: true, disabled: enrollCaptures.length < 3 })}
+        </div>
+        ${btn("Close camera", { id: "close-camera", kind: "secondary", block: true, disabled: !(cameraOpen || cameraStarting) })}
+      </article>
+    </section>`;
+  }
+
+  const ready = canSubmitEnrollment({ employee: enrollEmployee, images: enrollCaptures, consent: enrollConsent, busy: enrollBusy });
+  const thumbs = enrollCaptures.map((image, index) => `<div class="thumb-wrap"><img class="thumb" alt="Capture ${index + 1}" src="${esc(image)}"><button type="button" class="btn-icon" data-retake="${index}" aria-label="Remove photo ${index + 1}">${icon("x", 16)}</button></div>`).join("");
+  return `<section class="stack">
+    ${enrollStepper()}
+    <article class="card stack">
+      <p class="t-label">Review & submit</p>
+      <h2 class="t-title">Complete enrollment</h2>
+      <div class="list-row">${avatar(text(selected, "employee_name") || enrollEmployee)}<div class="grow"><strong>${esc(text(selected, "employee_name") || enrollEmployee)}</strong><span class="t-meta">${esc(enrollEmployee)} · consent ${esc(policyVersion)} · ${enrollCaptures.length} photos</span></div></div>
+      <div class="thumbs">${thumbs}</div>
+      <div class="banner">Submitting will create or update the HR Face Enrollment row, including Pending records such as 8bni3r68lh.</div>
+      <div class="grid-2">
+        ${btn("Back to capture", { id: "enroll-back", kind: "secondary", block: true, disabled: enrollBusy })}
+        ${btn(enrollBusy ? "Enrolling…" : "Submit enrollment", { id: "submit-enroll", kind: "primary", block: true, disabled: !ready })}
       </div>
-      <div class="actions">
-        <button class="secondary" id="retake-last" ${enrollBusy || !enrollCaptures.length ? "disabled" : ""}>Remove last</button>
-        <button class="secondary" id="clear-enroll" ${enrollBusy || !enrollCaptures.length ? "disabled" : ""}>Clear all</button>
-      </div>
-      <div class="thumbs">${thumbs || `<p class="alert">No photos yet. Open the camera and take at least 3.</p>`}</div>
-      <button type="button" class="consent-row" id="enroll-consent-toggle" aria-pressed="${enrollConsent ? "true" : "false"}">
-        <span class="consent-box" aria-hidden="true">${enrollConsent ? "✓" : ""}</span>
-        <span>I confirm the employee consented to face verification for attendance check-in/out under policy <code>${esc(policyVersion)}</code>.
-          <small>Only an encrypted template is stored. Raw photos are not kept. An HR manager can revoke and wipe later.</small>
-        </span>
-      </button>
-      <button class="primary" id="submit-enroll" ${ready ? "" : "disabled"}>${enrollBusy ? "Enrolling…" : "Complete enrollment"}</button>
-      <button class="secondary" id="close-camera" ${cameraOpen || cameraStarting ? "" : "disabled"}>Close camera</button>
     </article>
   </section>`;
 }
@@ -288,32 +471,45 @@ function enroll() {
 function profile() {
   const requestCards = ["attendance", "expenses", "shifts"].map((key) => {
     const items = list(requests[key]);
-    return `<article class="tile"><strong>${esc(key)}</strong><small>${items.length} record${items.length === 1 ? "" : "s"}</small></article>`;
+    return `<article class="card-flat"><p class="t-label">${esc(key)}</p><strong class="t-subtitle">${items.length}</strong><p class="t-meta">open records</p></article>`;
   }).join("");
-  const enrollHint = isManager()
-    ? `<button class="secondary" data-screen="enroll">Open face enrollment</button>`
-    : `<p>Face enrolled: ${context.face_enrolled ? "yes" : "no"}. A manager enrolls the template in this app. Enrollment photos are not stored on the phone.</p>`;
-  return `<section class="stack"><article class="tile"><h2>${esc(text(context, "employee_name"))}</h2><small>${esc(text(context, "employee"))} · ${esc(text(context, "company"))}</small>${enrollHint}<button id="sign-out" class="secondary">Sign out</button></article><div class="grid">${requestCards}</div><h2>Team</h2>${rows(team, (row) => text(row, "employee_name"), (row) => text(row, "designation") || text(row, "department"))}<form id="correction" class="tile"><p class="eyebrow">Attendance request</p><label>Reason<select name="reason"><option>Work From Home</option><option>On Duty</option></select></label><label>From<input name="fromDate" type="date" required></label><label>To<input name="toDate" type="date" required></label><label>Explanation<textarea name="explanation"></textarea></label><button class="primary">Send request</button></form></section>`;
+  return `<section class="stack">
+    <article class="card stack">
+      <div class="list-row" style="border:0;padding:0;box-shadow:none">${avatar(text(context, "employee_name"))}<div class="grow"><h2 class="t-title">${esc(text(context, "employee_name"))}</h2><p class="t-meta">${esc(text(context, "employee"))} · ${esc(text(context, "company"))}</p></div></div>
+      ${isManager() ? btn(`${icon("camera", 16)} Open face enrollment`, { kind: "secondary", block: true, attrs: 'data-screen="enroll"' }) : `<p class="t-meta">Face enrolled: ${context.face_enrolled ? "yes" : "no"}.</p>`}
+      ${btn(`${icon("log-out", 16)} Sign out`, { id: "sign-out", kind: "danger", block: true })}
+    </article>
+    <div class="grid-2">${requestCards}</div>
+    <div class="stack-sm"><h3 class="t-subtitle">Team</h3>${team.length ? `<div class="list">${team.map((row) => `<article class="list-row">${avatar(text(row, "employee_name"))}<div class="grow"><strong>${esc(text(row, "employee_name"))}</strong><span class="t-meta">${esc(text(row, "designation") || text(row, "department"))}</span></div></article>`).join("")}</div>` : emptyState(icon("users", 28), "No direct reports", "People who report to you will appear here.")}</div>
+    <form id="correction" class="card stack">
+      <p class="t-label">Attendance request</p>
+      ${field("Reason", `<select name="reason"><option>Work From Home</option><option>On Duty</option></select>`)}
+      <div class="grid-2">${field("From", `<input name="fromDate" type="date" required>`)}${field("To", `<input name="toDate" type="date" required>`)}</div>
+      ${field("Explanation", `<textarea name="explanation"></textarea>`)}
+      ${btn("Send request", { kind: "primary", block: true, attrs: 'type="submit"' })}
+    </form>
+  </section>`;
 }
 
 function render(next: Screen = screen) {
   if (next !== "enroll" && (cameraOpen || cameraStarting)) stopCamera();
   screen = next;
+  if (previewTheme === "light" || previewTheme === "dark") document.documentElement.dataset.theme = previewTheme;
   if (loading) {
-    root.innerHTML = `<section class="setup"><div class="setup-card"><p>${esc(loading)}</p></div></section>`;
+    root.innerHTML = `${toastHtml()}<section class="setup"><div class="setup-card"><p class="t-label">Loading</p><div class="skeleton" aria-busy="true">${loadingSkeleton(4)}</div><p class="t-meta">${esc(loading)}</p></div></section>`;
     return;
   }
   const pages: Record<Screen, () => string> = { home, attendance, leave, pay, enroll, profile };
   const nav = [
     { id: "home", label: "Home", icon: icon("home", 22) },
     { id: "attendance", label: "Attend", icon: icon("map-pin", 22) },
-    { id: "leave", label: "Leave", icon: icon("list", 22) },
+    { id: "leave", label: "Leave", icon: icon("calendar", 22) },
     { id: "pay", label: "Pay", icon: icon("credit-card", 22) },
-    ...(isManager() ? [{ id: "enroll", label: "Enroll", icon: icon("user", 22) }] : []),
+    ...(isManager() ? [{ id: "enroll", label: "Enroll", icon: icon("camera", 22) }] : []),
     { id: "profile", label: "Profile", icon: icon("user", 22) },
   ];
   if (!isManager() && screen === "enroll") screen = "home";
-  root.innerHTML = `<section class="shell"><header class="top"><div><strong>Ai Matic HR</strong><small>${esc(text(context, "employee_name") || "Not signed in")}</small></div></header><main class="page">${message ? `<p class="alert ${esc(tone || "warning")}" role="status">${esc(message)}</p>` : ""}${pages[screen]()}</main>${bottomNavigation("HR", screen, nav)}</section>`;
+  root.innerHTML = `${toastHtml()}<section class="shell">${appBar(text(context, "employee_name") || "Employee")}<main class="page">${pages[screen]()}</main>${bottomNavigation("HR", screen, nav)}</section>`;
   bind();
   if (screen === "enroll" && cameraOpen && activeStream) attachPreview(activeStream);
   void ensureBackHandler();
@@ -323,18 +519,15 @@ function attachPreview(stream: MediaStream): void {
   const video = document.querySelector<HTMLVideoElement>("#enroll-video");
   if (!video) return;
   video.srcObject = stream;
-  void video.play().catch(() => {
-    message = "Could not start the live preview. Tap Open camera again.";
-    tone = "danger";
-  });
+  void video.play().catch(() => setToast("Could not start the live preview.", "danger"));
 }
 
 function bind() {
   document.querySelectorAll<HTMLButtonElement>("[data-screen]").forEach((button) => {
     button.onclick = () => {
-      message = "";
-      tone = "";
+      setToast("");
       if (button.dataset.screen !== "enroll") stopCamera();
+      if (button.dataset.screen === "enroll") enrollStep = "pick";
       render(button.dataset.screen as Screen);
     };
   });
@@ -348,8 +541,7 @@ function bind() {
   document.querySelectorAll<HTMLButtonElement>("[data-employee]").forEach((button) => {
     button.onclick = () => {
       enrollEmployee = button.dataset.employee || "";
-      message = `Selected ${enrollEmployee}`;
-      tone = "success";
+      setToast(`Selected ${enrollEmployee}`, "success");
       render("enroll");
     };
   });
@@ -357,19 +549,25 @@ function bind() {
     enrollConsent = !enrollConsent;
     render("enroll");
   });
-  document.querySelector<HTMLButtonElement>("#open-camera")?.addEventListener("click", () => void openEnrollmentCamera());
-  document.querySelector<HTMLButtonElement>("#close-camera")?.addEventListener("click", () => {
-    stopCamera();
-    message = "Camera closed";
-    tone = "warning";
+  document.querySelector<HTMLButtonElement>("#enroll-next")?.addEventListener("click", () => {
+    if (enrollStep === "pick" && enrollEmployee) enrollStep = "consent";
+    else if (enrollStep === "consent" && enrollConsent) enrollStep = "capture";
+    else if (enrollStep === "capture" && enrollCaptures.length >= 3) { stopCamera(); enrollStep = "review"; }
     render("enroll");
   });
+  document.querySelector<HTMLButtonElement>("#enroll-back")?.addEventListener("click", () => {
+    if (enrollStep === "consent") enrollStep = "pick";
+    else if (enrollStep === "capture") { stopCamera(); enrollStep = "consent"; }
+    else if (enrollStep === "review") enrollStep = "capture";
+    render("enroll");
+  });
+  document.querySelector<HTMLButtonElement>("#open-camera")?.addEventListener("click", () => void openEnrollmentCamera());
+  document.querySelector<HTMLButtonElement>("#close-camera")?.addEventListener("click", () => { stopCamera(); setToast("Camera closed", "warn"); render("enroll"); });
   document.querySelector<HTMLButtonElement>("#capture-enroll")?.addEventListener("click", () => void captureEnrollmentPhoto());
   document.querySelector<HTMLButtonElement>("#retake-last")?.addEventListener("click", () => {
     enrollCaptures = enrollCaptures.slice(0, -1);
     previewUrl = enrollCaptures[enrollCaptures.length - 1] || "";
-    message = enrollCaptures.length ? `Removed last photo. ${enrollCaptures.length}/5 kept.` : "All photos cleared.";
-    tone = "warning";
+    setToast(enrollCaptures.length ? `Removed last photo. ${enrollCaptures.length}/5 kept.` : "All photos cleared.", "warn");
     render("enroll");
   });
   document.querySelectorAll<HTMLButtonElement>("[data-retake]").forEach((button) => {
@@ -378,16 +576,14 @@ function bind() {
       if (!Number.isInteger(index)) return;
       enrollCaptures = enrollCaptures.filter((_, i) => i !== index);
       previewUrl = enrollCaptures[enrollCaptures.length - 1] || "";
-      message = `Removed photo ${index + 1}. ${enrollCaptures.length}/5 kept.`;
-      tone = "warning";
+      setToast(`Removed photo ${index + 1}.`, "warn");
       render("enroll");
     };
   });
   document.querySelector<HTMLButtonElement>("#clear-enroll")?.addEventListener("click", () => {
     enrollCaptures = [];
     previewUrl = "";
-    message = "All enrollment photos cleared.";
-    tone = "warning";
+    setToast("All enrollment photos cleared.", "warn");
     render("enroll");
   });
   document.querySelector<HTMLButtonElement>("#submit-enroll")?.addEventListener("click", () => void submitEnrollment());
@@ -400,24 +596,26 @@ function bind() {
     enrollEmployee = "";
     enrollCaptures = [];
     enrollConsent = false;
+    enrollStep = "pick";
     setup();
   });
 }
 
 async function searchDirectory(event: Event) {
   event.preventDefault();
-  if (!api || !isManager() || enrollBusy) return;
+  if (!api || !isManager() || enrollBusy || previewMode) {
+    if (previewMode) { setToast("Preview directory ready", "success"); render("enroll"); }
+    return;
+  }
   enrollQuery = document.querySelector<HTMLInputElement>("#enroll-query")?.value.trim() || "";
   enrollSearching = true;
   render("enroll");
   try {
     if (offline()) throw new Error("You appear offline. Reconnect, then search again.");
     directory = list(await payload(await api.getDirectory(enrollQuery)));
-    message = directory.length ? `Found ${directory.length} employee${directory.length === 1 ? "" : "s"}` : "No employees matched";
-    tone = directory.length ? "success" : "warning";
+    setToast(directory.length ? `Found ${directory.length} employee${directory.length === 1 ? "" : "s"}` : "No employees matched", directory.length ? "success" : "warn");
   } catch (error) {
-    message = error instanceof Error ? error.message : "Directory search failed";
-    tone = "danger";
+    setToast(error instanceof Error ? error.message : "Directory search failed", "danger");
   } finally {
     enrollSearching = false;
     render("enroll");
@@ -449,16 +647,10 @@ function frameQualityIssue(canvas: HTMLCanvasElement): string | null {
 }
 
 async function openEnrollmentCamera(): Promise<void> {
-  if (!enrollEmployee) {
-    message = "Pick an employee before opening the camera.";
-    tone = "warning";
-    render("enroll");
-    return;
-  }
+  if (!enrollEmployee) { setToast("Pick an employee before opening the camera.", "warn"); render("enroll"); return; }
   if (enrollCaptures.length >= 5) return;
   cameraStarting = true;
-  message = "This app needs the camera to capture live enrollment photos.";
-  tone = "warning";
+  setToast("Camera is needed for live enrollment photos.", "warn");
   render("enroll");
   try {
     stopCamera();
@@ -469,13 +661,11 @@ async function openEnrollmentCamera(): Promise<void> {
     activeStream = stream;
     cameraOpen = true;
     cameraStarting = false;
-    message = enrollmentPromptForIndex(enrollCaptures.length);
-    tone = "success";
+    setToast(enrollmentPromptForIndex(enrollCaptures.length), "success");
     render("enroll");
   } catch (error) {
     stopCamera();
-    message = cameraPermissionDeniedMessage(error) || (error instanceof Error ? error.message : "Camera could not start");
-    tone = "danger";
+    setToast(cameraPermissionDeniedMessage(error) || (error instanceof Error ? error.message : "Camera could not start"), "danger");
     render("enroll");
   }
 }
@@ -490,10 +680,7 @@ async function captureStillFromStream(prompt: string): Promise<string> {
     await new Promise<void>((resolve, reject) => {
       const onReady = () => { cleanup(); resolve(); };
       const onError = () => { cleanup(); reject(new Error("Live preview failed.")); };
-      const cleanup = () => {
-        video.removeEventListener("loadeddata", onReady);
-        video.removeEventListener("error", onError);
-      };
+      const cleanup = () => { video.removeEventListener("loadeddata", onReady); video.removeEventListener("error", onError); };
       video.addEventListener("loadeddata", onReady, { once: true });
       video.addEventListener("error", onError, { once: true });
     });
@@ -519,10 +706,7 @@ async function captureFace(prompt: string): Promise<string> {
     video.setAttribute("playsinline", "true");
     await video.play();
     const note = document.querySelector<HTMLElement>("#liveness");
-    if (note) {
-      note.hidden = false;
-      note.textContent = prompt;
-    }
+    if (note) { note.hidden = false; note.textContent = prompt; }
     await new Promise((resolve) => window.setTimeout(resolve, 900));
     const canvas = document.createElement("canvas");
     canvas.width = 480;
@@ -544,19 +728,20 @@ async function captureEnrollmentPhoto() {
   try {
     const image = await captureStillFromStream(enrollmentPromptForIndex(enrollCaptures.length));
     enrollCaptures = [...enrollCaptures, image];
-    message = `Captured photo ${enrollCaptures.length} of 5. ${enrollCaptures.length < 3 ? "Take at least 3." : "You can submit when consent is checked."}`;
-    tone = "success";
+    setToast(`Captured photo ${enrollCaptures.length} of 5.`, "success");
     if (enrollCaptures.length >= 5) stopCamera();
     render("enroll");
   } catch (error) {
-    message = cameraPermissionDeniedMessage(error) || (error instanceof Error ? error.message : "Camera capture failed");
-    tone = "danger";
+    setToast(cameraPermissionDeniedMessage(error) || (error instanceof Error ? error.message : "Camera capture failed"), "danger");
     render("enroll");
   }
 }
 
 async function submitEnrollment() {
-  if (!api || !isManager() || enrollBusy) return;
+  if (!api || !isManager() || enrollBusy || previewMode) {
+    if (previewMode) setToast("Preview mode — enrollment not sent.", "warn");
+    return;
+  }
   try {
     if (offline()) throw new Error("You appear offline. Enrollment was not sent.");
     const body = enrollFaceRequest({
@@ -567,19 +752,17 @@ async function submitEnrollment() {
     });
     enrollBusy = true;
     stopCamera();
-    message = "Submitting enrollment to ERP…";
-    tone = "warning";
+    setToast("Submitting enrollment to ERP…", "warn");
     render("enroll");
     const saved = await payload(await api.enrollFace(body));
     enrollCaptures = [];
     enrollConsent = false;
     previewUrl = "";
-    message = `Enrollment complete for ${enrollEmployee}. Status: ${text(saved, "status") || "Enrolled"} (${text(saved, "name") || "saved"}).`;
-    tone = "success";
+    enrollStep = "pick";
+    setToast(`Enrollment complete for ${enrollEmployee}. Status: ${text(saved, "status") || "Enrolled"}.`, "success");
     context = await payload(await api.getContext());
   } catch (error) {
-    message = error instanceof Error ? error.message : "Enrollment failed";
-    tone = "danger";
+    setToast(error instanceof Error ? error.message : "Enrollment failed", "danger");
   } finally {
     enrollBusy = false;
     render("enroll");
@@ -587,9 +770,11 @@ async function submitEnrollment() {
 }
 
 async function submitLog(logType: "IN" | "OUT") {
-  if (!api) return;
-  message = "Requesting a server challenge";
-  tone = "";
+  if (!api || previewMode) {
+    if (previewMode) setToast(`Preview ${logType}`, "success");
+    return;
+  }
+  setToast("Requesting a server challenge", "info");
   render("attendance");
   try {
     if (offline()) throw new Error("You appear offline. Attendance was not recorded.");
@@ -598,19 +783,17 @@ async function submitLog(logType: "IN" | "OUT") {
     const image = await captureFace(livenessPrompt(challenge));
     const body = attendanceRequest({ logType, ...location, challenge, image });
     const saved = await payload(await api.submitAttendance(body));
-    message = `Recorded ${text(saved, "name")}`;
-    tone = "success";
+    setToast(`Recorded ${text(saved, "name")}`, "success");
     await refresh();
   } catch (error) {
-    message = cameraPermissionDeniedMessage(error) || (error instanceof Error ? error.message : "Attendance was not recorded");
-    tone = "danger";
+    setToast(cameraPermissionDeniedMessage(error) || (error instanceof Error ? error.message : "Attendance was not recorded"), "danger");
     render("attendance");
   }
 }
 
 async function submitLeave(event: Event) {
   event.preventDefault();
-  if (!api) return;
+  if (!api || previewMode) return;
   const form = event.currentTarget as HTMLFormElement;
   const data = new FormData(form);
   try {
@@ -621,19 +804,17 @@ async function submitLeave(event: Event) {
       description: String(data.get("description") || ""),
     });
     const saved = await payload(await api.createLeaveApplication(body));
-    message = `Leave ${text(saved, "name")} sent to ERP`;
-    tone = "success";
+    setToast(`Leave ${text(saved, "name")} sent to ERP`, "success");
     await refresh();
   } catch (error) {
-    message = error instanceof Error ? error.message : "Leave was not submitted";
-    tone = "danger";
+    setToast(error instanceof Error ? error.message : "Leave was not submitted", "danger");
     render("leave");
   }
 }
 
 async function submitCorrection(event: Event) {
   event.preventDefault();
-  if (!api) return;
+  if (!api || previewMode) return;
   const data = new FormData(event.currentTarget as HTMLFormElement);
   try {
     const body = attendanceCorrectionRequest({
@@ -643,17 +824,31 @@ async function submitCorrection(event: Event) {
       explanation: String(data.get("explanation") || ""),
     });
     const saved = await payload(await api.createAttendanceRequest(body));
-    message = `Request ${text(saved, "name")} sent to ERP`;
-    tone = "success";
+    setToast(`Request ${text(saved, "name")} sent to ERP`, "success");
     await refresh();
   } catch (error) {
-    message = error instanceof Error ? error.message : "Request was not submitted";
-    tone = "danger";
+    setToast(error instanceof Error ? error.message : "Request was not submitted", "danger");
     render("profile");
   }
 }
 
 async function start() {
+  if (previewMode) {
+    if (previewTheme === "light" || previewTheme === "dark") document.documentElement.dataset.theme = previewTheme;
+    if (previewScreen === "setup") {
+      setup();
+      return;
+    }
+    if (previewScreen === "signin") {
+      message = "";
+      config = { baseUrl: "https://siezal.aimatic.tech", clientId: "preview", redirectUri: "aimatic-hr://oauth", scope: "all" };
+      signIn();
+      return;
+    }
+    seedPreview();
+    render(previewScreen);
+    return;
+  }
   const raw = localStorage.getItem(configKey);
   if (!raw) return setup();
   try {
