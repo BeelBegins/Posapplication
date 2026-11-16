@@ -6,11 +6,19 @@ import { capacitorOAuthBrowser } from "../../mobile/capacitor-oauth-browser";
 import { OAuthPkceCredentialProvider, type OAuthPublicClientConfig } from "../../mobile/credential-provider";
 import { androidSecureStorage } from "../../mobile/secure-storage";
 import { bottomNavigation, emptyState, escapeHtml as esc, formatMoney, icon } from "../shared/ui";
-import { attendanceCorrectionRequest, attendanceRequest, leaveRequest, livenessPrompt } from "./domain";
+import {
+  FACE_CONSENT_VERSION,
+  attendanceCorrectionRequest,
+  attendanceRequest,
+  canManageFaceEnrollment,
+  enrollFaceRequest,
+  leaveRequest,
+  livenessPrompt,
+} from "./domain";
 
 declare const __APP_VERSION__: string;
 type Row = Record<string, unknown>;
-type Screen = "home" | "attendance" | "leave" | "pay" | "profile";
+type Screen = "home" | "attendance" | "leave" | "pay" | "enroll" | "profile";
 type HrApi = ReturnType<typeof createHrApi>;
 
 const root = document.querySelector<HTMLElement>("#app")!;
@@ -31,7 +39,13 @@ let requests: Row = {};
 let team: Row[] = [];
 let checkins: Row[] = [];
 let options: Row = {};
+let directory: Row[] = [];
+let facePolicy: Row = {};
 let previewUrl = "";
+let enrollEmployee = "";
+let enrollQuery = "";
+let enrollCaptures: string[] = [];
+let enrollConsent = false;
 
 const text = (row: Row | undefined, ...keys: string[]) => {
   for (const key of keys) if (row?.[key] != null && row[key] !== "") return String(row[key]);
@@ -39,6 +53,7 @@ const text = (row: Row | undefined, ...keys: string[]) => {
 };
 const list = (value: unknown): Row[] => Array.isArray(value) ? value.filter((entry): entry is Row => Boolean(entry) && typeof entry === "object") : [];
 const money = (value: unknown) => formatMoney(value, "PKR");
+const isManager = () => canManageFaceEnrollment(context.roles);
 
 async function payload(response: Response): Promise<Row> {
   const raw = await response.json().catch(() => ({})) as Row;
@@ -79,6 +94,7 @@ async function loadContext() {
   loading = "Loading your HR workspace";
   render();
   context = await payload(await api!.getContext());
+  facePolicy = (context.face_policy && typeof context.face_policy === "object" ? context.face_policy : {}) as Row;
   loading = "";
   message = "";
   render("home");
@@ -88,14 +104,20 @@ async function loadContext() {
 async function refresh() {
   if (!api) return;
   try {
-    const [leave, pay, requestRows, teamRows, logs, formOptions] = await Promise.all([
-      payload(await api.getLeaveSummary()),
-      payload(await api.getPayslips()),
-      payload(await api.getRequests()),
-      payload(await api.getTeam()),
-      payload(await api.getRecentCheckins()),
-      payload(await api.getFormOptions()),
-    ]);
+    const tasks: Array<Promise<Row | Row[]>> = [
+      api.getLeaveSummary().then(payload),
+      api.getPayslips().then(payload),
+      api.getRequests().then(payload),
+      api.getTeam().then(payload),
+      api.getRecentCheckins().then(payload),
+      api.getFormOptions().then(payload),
+    ];
+    if (isManager()) {
+      tasks.push(api.getDirectory(enrollQuery).then(payload));
+      tasks.push(api.getFacePolicy().then(payload));
+    }
+    const results = await Promise.all(tasks);
+    const [leave, pay, requestRows, teamRows, logs, formOptions] = results as Row[];
     leaveRows = list(leave.applications);
     balances = (leave.balances && typeof leave.balances === "object" ? leave.balances : {}) as Row;
     payslips = list(pay);
@@ -103,6 +125,10 @@ async function refresh() {
     team = list(teamRows);
     checkins = list(logs);
     options = formOptions;
+    if (isManager()) {
+      directory = list(results[6]);
+      facePolicy = (results[7] && typeof results[7] === "object" ? results[7] as Row : facePolicy);
+    }
     if (!loading) render(screen);
   } catch (error) {
     message = error instanceof Error ? error.message : "Could not refresh HR data";
@@ -121,7 +147,10 @@ function home() {
     const row = value && typeof value === "object" ? value as Row : {};
     return `<article class="tile"><strong>${esc(name)}</strong><small>${esc(row.balance_leaves ?? "-")} days left</small></article>`;
   }).join("");
-  return `<section class="stack"><article class="tile"><p class="eyebrow">Today</p><h2>${esc(text(context, "employee_name") || "Employee")}</h2><small>${esc([text(context, "designation"), text(context, "department")].filter(Boolean).join(" · "))}</small><p>${context.verifier_ready ? "Face verification is ready." : "Face verification is required and not configured yet. Check-in will stay blocked."}</p><button class="primary" data-screen="attendance">Open attendance</button></article><div class="grid">${balanceCards || `<article class="tile"><strong>Leave</strong><small>No balance returned</small></article>`}<article class="tile"><strong>${esc(String(team.length))}</strong><small>People reporting to you</small></article></div><button class="secondary" id="refresh">Refresh</button></section>`;
+  const managerCue = isManager()
+    ? `<button class="secondary" data-screen="enroll">Enroll employee face</button>`
+    : "";
+  return `<section class="stack"><article class="tile"><p class="eyebrow">Today</p><h2>${esc(text(context, "employee_name") || "Employee")}</h2><small>${esc([text(context, "designation"), text(context, "department")].filter(Boolean).join(" · "))}</small><p>${context.verifier_ready ? "Face verification is ready." : "Face verification is required and not configured yet. Check-in will stay blocked."}</p><button class="primary" data-screen="attendance">Open attendance</button>${managerCue}</article><div class="grid">${balanceCards || `<article class="tile"><strong>Leave</strong><small>No balance returned</small></article>`}<article class="tile"><strong>${esc(String(team.length))}</strong><small>People reporting to you</small></article></div><button class="secondary" id="refresh">Refresh</button></section>`;
 }
 
 function attendance() {
@@ -129,7 +158,7 @@ function attendance() {
 }
 
 function leave() {
-  const typeOptions = (Array.isArray(options.leave_types) ? options.leave_types : []).map((entry) => `<option>${esc(entry)}</option>`).join("");
+  const typeOptions = (Array.isArray(options.leave_types) ? options.leave_types : []).map((entry) => `<option>${esc(String(entry))}</option>`).join("");
   return `<section class="stack"><form id="leave" class="tile"><p class="eyebrow">Request leave</p><label>Leave type<select name="leaveType" required>${typeOptions || "<option value=''>No allocated leave</option>"}</select></label><label>From<input name="fromDate" type="date" required></label><label>To<input name="toDate" type="date" required></label><label>Note<textarea name="description"></textarea></label><button class="primary">Submit to ERP</button></form>${rows(leaveRows, (row) => `${text(row, "leave_type")} · ${text(row, "status")}`, (row) => `${text(row, "from_date")} to ${text(row, "to_date")}`)}</section>`;
 }
 
@@ -137,12 +166,38 @@ function pay() {
   return rows(payslips, (row) => `${text(row, "name")} · ${money(row.net_pay)}`, (row) => `${text(row, "start_date")} to ${text(row, "end_date")}`);
 }
 
+function enroll() {
+  if (!isManager()) {
+    return emptyState(icon("user", 28), "Managers only", "Face enrollment is limited to HR Manager or System Manager.");
+  }
+  const selected = directory.find((row) => text(row, "name") === enrollEmployee);
+  const picks = directory.slice(0, 40).map((row) => {
+    const id = text(row, "name");
+    const active = id === enrollEmployee ? " active" : "";
+    return `<button type="button" class="row pick${active}" data-employee="${esc(id)}"><strong>${esc(text(row, "employee_name") || id)}</strong><small>${esc([id, text(row, "designation"), text(row, "department")].filter(Boolean).join(" · "))}</small></button>`;
+  }).join("");
+  const thumbs = enrollCaptures.map((image, index) => `<img class="camera thumb" alt="Capture ${index + 1}" src="${esc(image)}">`).join("");
+  const policyVersion = text(facePolicy, "consent_version") || FACE_CONSENT_VERSION;
+  return `<section class="stack"><article class="tile"><p class="eyebrow">HR enrollment</p><h2>Enroll face template</h2><p>Capture 3 to 5 live photos. Raw images are not stored after the server builds the encrypted template. Completing enrollment also finishes an existing Pending record for the same employee.</p>
+    <form id="enroll-search" class="stack"><label>Find employee<input id="enroll-query" value="${esc(enrollQuery)}" placeholder="Name or department" autocomplete="off"></label><button class="secondary">Search directory</button></form>
+    <div class="stack picks">${picks || emptyState(icon("search", 28), "No employees", "Search the directory to pick who to enroll.")}</div>
+    ${selected ? `<p class="eyebrow">Selected</p><strong>${esc(text(selected, "employee_name"))}</strong><small> ${esc(text(selected, "name"))}</small>` : ""}
+    <div class="actions"><button class="secondary" id="capture-enroll" ${enrollCaptures.length >= 5 ? "disabled" : ""}>Capture photo (${enrollCaptures.length}/5)</button><button class="secondary" id="clear-enroll" ${enrollCaptures.length ? "" : "disabled"}>Clear photos</button></div>
+    <div class="grid thumbs">${thumbs}</div>
+    <label class="consent"><input id="enroll-consent" type="checkbox" ${enrollConsent ? "checked" : ""}> Employee consent recorded for policy <code>${esc(policyVersion)}</code>. Attendance face check uses an encrypted template only; photos are not kept; HR can revoke and wipe later.</label>
+    <button class="primary" id="submit-enroll">Submit enrollment</button>
+  </article></section>`;
+}
+
 function profile() {
   const requestCards = ["attendance", "expenses", "shifts"].map((key) => {
     const items = list(requests[key]);
     return `<article class="tile"><strong>${esc(key)}</strong><small>${items.length} record${items.length === 1 ? "" : "s"}</small></article>`;
   }).join("");
-  return `<section class="stack"><article class="tile"><h2>${esc(text(context, "employee_name"))}</h2><small>${esc(text(context, "employee"))} · ${esc(text(context, "company"))}</small><p>Face enrolled: ${context.face_enrolled ? "yes" : "no"}. A manager enrolls the template in ERP. This app does not store enrollment photos.</p><button id="sign-out" class="secondary">Sign out</button></article><div class="grid">${requestCards}</div><h2>Team</h2>${rows(team, (row) => text(row, "employee_name"), (row) => text(row, "designation") || text(row, "department"))}<form id="correction" class="tile"><p class="eyebrow">Attendance request</p><label>Reason<select name="reason"><option>Work From Home</option><option>On Duty</option></select></label><label>From<input name="fromDate" type="date" required></label><label>To<input name="toDate" type="date" required></label><label>Explanation<textarea name="explanation"></textarea></label><button class="primary">Send request</button></form></section>`;
+  const enrollHint = isManager()
+    ? `<button class="secondary" data-screen="enroll">Open face enrollment</button>`
+    : `<p>Face enrolled: ${context.face_enrolled ? "yes" : "no"}. A manager enrolls the template in this app. Enrollment photos are not stored on the phone.</p>`;
+  return `<section class="stack"><article class="tile"><h2>${esc(text(context, "employee_name"))}</h2><small>${esc(text(context, "employee"))} · ${esc(text(context, "company"))}</small>${enrollHint}<button id="sign-out" class="secondary">Sign out</button></article><div class="grid">${requestCards}</div><h2>Team</h2>${rows(team, (row) => text(row, "employee_name"), (row) => text(row, "designation") || text(row, "department"))}<form id="correction" class="tile"><p class="eyebrow">Attendance request</p><label>Reason<select name="reason"><option>Work From Home</option><option>On Duty</option></select></label><label>From<input name="fromDate" type="date" required></label><label>To<input name="toDate" type="date" required></label><label>Explanation<textarea name="explanation"></textarea></label><button class="primary">Send request</button></form></section>`;
 }
 
 function render(next: Screen = screen) {
@@ -151,14 +206,17 @@ function render(next: Screen = screen) {
     root.innerHTML = `<section class="setup"><div class="setup-card"><p>${esc(loading)}</p></div></section>`;
     return;
   }
-  const pages: Record<Screen, () => string> = { home, attendance, leave, pay, profile };
-  root.innerHTML = `<section class="shell"><header class="top"><div><strong>Ai Matic HR</strong><small>${esc(text(context, "employee_name") || "Not signed in")}</small></div></header><main class="page">${message ? `<p class="alert ${esc(tone)}">${esc(message)}</p>` : ""}${pages[screen]()}</main>${bottomNavigation("HR", screen, [
+  const pages: Record<Screen, () => string> = { home, attendance, leave, pay, enroll, profile };
+  const nav = [
     { id: "home", label: "Home", icon: icon("home", 22) },
     { id: "attendance", label: "Attend", icon: icon("map-pin", 22) },
     { id: "leave", label: "Leave", icon: icon("list", 22) },
     { id: "pay", label: "Pay", icon: icon("credit-card", 22) },
+    ...(isManager() ? [{ id: "enroll", label: "Enroll", icon: icon("user", 22) }] : []),
     { id: "profile", label: "Profile", icon: icon("user", 22) },
-  ])}</section>`;
+  ];
+  if (!isManager() && screen === "enroll") screen = "home";
+  root.innerHTML = `<section class="shell"><header class="top"><div><strong>Ai Matic HR</strong><small>${esc(text(context, "employee_name") || "Not signed in")}</small></div></header><main class="page">${message ? `<p class="alert ${esc(tone)}">${esc(message)}</p>` : ""}${pages[screen]()}</main>${bottomNavigation("HR", screen, nav)}</section>`;
   bind();
 }
 
@@ -172,13 +230,51 @@ function bind() {
   });
   document.querySelector<HTMLFormElement>("#leave")?.addEventListener("submit", (event) => void submitLeave(event));
   document.querySelector<HTMLFormElement>("#correction")?.addEventListener("submit", (event) => void submitCorrection(event));
+  document.querySelector<HTMLFormElement>("#enroll-search")?.addEventListener("submit", (event) => void searchDirectory(event));
+  document.querySelectorAll<HTMLButtonElement>("[data-employee]").forEach((button) => {
+    button.onclick = () => {
+      enrollEmployee = button.dataset.employee || "";
+      message = "";
+      tone = "";
+      render("enroll");
+    };
+  });
+  document.querySelector<HTMLInputElement>("#enroll-consent")?.addEventListener("change", (event) => {
+    enrollConsent = (event.currentTarget as HTMLInputElement).checked;
+  });
+  document.querySelector<HTMLButtonElement>("#capture-enroll")?.addEventListener("click", () => void captureEnrollmentPhoto());
+  document.querySelector<HTMLButtonElement>("#clear-enroll")?.addEventListener("click", () => {
+    enrollCaptures = [];
+    previewUrl = "";
+    render("enroll");
+  });
+  document.querySelector<HTMLButtonElement>("#submit-enroll")?.addEventListener("click", () => void submitEnrollment());
   document.querySelector<HTMLButtonElement>("#sign-out")?.addEventListener("click", () => {
     void credentials?.clear();
     credentials = null;
     api = null;
     context = {};
+    enrollEmployee = "";
+    enrollCaptures = [];
+    enrollConsent = false;
     setup();
   });
+}
+
+async function searchDirectory(event: Event) {
+  event.preventDefault();
+  if (!api || !isManager()) return;
+  enrollQuery = document.querySelector<HTMLInputElement>("#enroll-query")?.value.trim() || "";
+  try {
+    directory = list(await payload(await api.getDirectory(enrollQuery)));
+    message = directory.length ? `Found ${directory.length} employee${directory.length === 1 ? "" : "s"}` : "No employees matched";
+    tone = directory.length ? "success" : "danger";
+    render("enroll");
+  } catch (error) {
+    message = error instanceof Error ? error.message : "Directory search failed";
+    tone = "danger";
+    render("enroll");
+  }
 }
 
 async function captureLocation() {
@@ -208,6 +304,56 @@ async function captureFace(prompt: string): Promise<string> {
     return previewUrl;
   } finally {
     stream.getTracks().forEach((track) => track.stop());
+  }
+}
+
+async function captureEnrollmentPhoto() {
+  if (enrollCaptures.length >= 5) return;
+  try {
+    const prompts = [
+      "Look straight at the camera",
+      "Turn slightly left, then centre",
+      "Turn slightly right, then centre",
+      "Look up a little, then centre",
+      "Blink once, then hold still",
+    ];
+    const image = await captureFace(prompts[enrollCaptures.length] || prompts[0]);
+    enrollCaptures = [...enrollCaptures, image];
+    message = `Captured photo ${enrollCaptures.length} of 5`;
+    tone = "success";
+    render("enroll");
+  } catch (error) {
+    message = error instanceof Error ? error.message : "Camera capture failed";
+    tone = "danger";
+    render("enroll");
+  }
+}
+
+async function submitEnrollment() {
+  if (!api || !isManager()) return;
+  enrollConsent = Boolean(document.querySelector<HTMLInputElement>("#enroll-consent")?.checked);
+  try {
+    const body = enrollFaceRequest({
+      employee: enrollEmployee,
+      images: enrollCaptures,
+      consent: enrollConsent,
+      consentVersion: text(facePolicy, "consent_version") || FACE_CONSENT_VERSION,
+    });
+    message = "Submitting enrollment to ERP";
+    tone = "";
+    render("enroll");
+    const saved = await payload(await api.enrollFace(body));
+    enrollCaptures = [];
+    enrollConsent = false;
+    previewUrl = "";
+    message = `Enrolled ${text(saved, "name") || enrollEmployee} · ${text(saved, "status") || "Enrolled"}`;
+    tone = "success";
+    context = await payload(await api.getContext());
+    render("enroll");
+  } catch (error) {
+    message = error instanceof Error ? error.message : "Enrollment failed";
+    tone = "danger";
+    render("enroll");
   }
 }
 

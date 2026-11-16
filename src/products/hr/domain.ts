@@ -65,3 +65,39 @@ export function livenessPrompt(challenge: string): string {
   const prompts = ["Blink twice, then look at the camera", "Turn your head left, then back to centre", "Turn your head right, then back to centre", "Look up, then back at the camera"];
   return prompts[(challenge.charCodeAt(0) || 0) % prompts.length];
 }
+
+export const FACE_CONSENT_VERSION = "aimatichr-face-consent-v1";
+
+export function canManageFaceEnrollment(roles: unknown): boolean {
+  const set = new Set(Array.isArray(roles) ? roles.map(String) : []);
+  return set.has("HR Manager") || set.has("System Manager");
+}
+
+export function enrollFaceRequest(input: {
+  employee: string;
+  images: string[];
+  consent: boolean;
+  consentVersion?: string;
+}): Record<string, unknown> {
+  const employee = input.employee.trim();
+  if (!employee) throw new Error("Choose an employee to enroll.");
+  if (input.images.length < 3 || input.images.length > 5) {
+    throw new Error("Capture 3 to 5 live face photos.");
+  }
+  for (const image of input.images) {
+    if (!/^data:image\/(?:jpeg|png);base64,/i.test(image)) {
+      throw new Error("Each enrollment photo must be a live camera capture.");
+    }
+  }
+  if (!input.consent) throw new Error("Recorded employee consent is required.");
+  const consentVersion = (input.consentVersion || FACE_CONSENT_VERSION).trim();
+  if (consentVersion !== FACE_CONSENT_VERSION) {
+    throw new Error(`Consent policy version must be ${FACE_CONSENT_VERSION}.`);
+  }
+  return {
+    employee,
+    images: input.images,
+    consent: 1,
+    consent_version: FACE_CONSENT_VERSION,
+  };
+}
