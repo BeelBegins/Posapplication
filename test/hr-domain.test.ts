@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { attendanceCorrectionRequest, attendanceRequest, leaveRequest } from "../src/products/hr/domain";
+import {
+  FACE_CONSENT_VERSION,
+  attendanceCorrectionRequest,
+  attendanceRequest,
+  canManageFaceEnrollment,
+  enrollFaceRequest,
+  leaveRequest,
+} from "../src/products/hr/domain";
 
 const evidence = {
   logType: "IN" as const,
@@ -26,4 +33,19 @@ test("leave and attendance requests cannot carry a client employee", () => {
   assert.equal("employee" in correction, false);
   assert.throws(() => leaveRequest({ leaveType: "Casual Leave", fromDate: "2026-11-18", toDate: "2026-11-18" }, { employee: "EMP-9" }), /server/);
   assert.throws(() => attendanceCorrectionRequest({ fromDate: "2026-11-18", toDate: "2026-11-18", reason: "On Duty" }, { time: "09:00" }), /server/);
+});
+
+test("face enrollment is manager-gated and consent-bound", () => {
+  assert.equal(canManageFaceEnrollment(["Employee"]), false);
+  assert.equal(canManageFaceEnrollment(["HR Manager"]), true);
+  const jpeg = "data:image/jpeg;base64," + "a".repeat(40);
+  const body = enrollFaceRequest({
+    employee: "HR-EMP-00063",
+    images: [jpeg, jpeg, jpeg],
+    consent: true,
+  });
+  assert.deepEqual(Object.keys(body).sort(), ["consent", "consent_version", "employee", "images"]);
+  assert.equal(body.consent_version, FACE_CONSENT_VERSION);
+  assert.throws(() => enrollFaceRequest({ employee: "HR-EMP-00063", images: [jpeg], consent: true }), /3 to 5/);
+  assert.throws(() => enrollFaceRequest({ employee: "HR-EMP-00063", images: [jpeg, jpeg, jpeg], consent: false }), /consent/);
 });
