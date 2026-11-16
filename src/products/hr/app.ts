@@ -115,8 +115,75 @@ function avatar(name: string): string {
   return `<span class="avatar" aria-hidden="true">${esc(initials(name))}</span>`;
 }
 
+function brandMark(): string {
+  return `<span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 3.5 4.5 7.2v4.9c0 4.6 3.1 8.8 7.5 10.4 4.4-1.6 7.5-5.8 7.5-10.4V7.2L12 3.5Z" stroke="currentColor" stroke-width="1.8"/><path d="M9.2 12.2h5.6M12 9.4v5.6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span>`;
+}
+
 function appBar(subtitle: string, trailing = ""): string {
-  return `<header class="app-bar"><div class="brand"><strong>Ai Matic HR</strong><small>${esc(subtitle || "Not signed in")}</small></div>${trailing}</header>`;
+  return `<header class="app-bar"><div class="brand-lockup">${brandMark()}<div class="brand"><strong>Aimatic HR</strong><small>${esc(subtitle || "Not signed in")}</small></div></div>${trailing}</header>`;
+}
+
+/** Valid JPEG data-URL stills for preview/demo; live enroll uses the same canvas path. */
+function previewCaptureDataUrl(index: number): string {
+  const canvas = document.createElement("canvas");
+  canvas.width = 240;
+  canvas.height = 320;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return "";
+  const gradient = ctx.createLinearGradient(0, 0, 240, 320);
+  const tones = ["#0f9f8a", "#1b4664", "#0a7d6c"];
+  ctx.fillStyle = tones[index % tones.length];
+  ctx.fillRect(0, 0, 240, 320);
+  ctx.fillStyle = "#e8fff8";
+  ctx.beginPath();
+  ctx.ellipse(120, 118, 56, 64, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(120, 250, 84, 74, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "#04241e";
+  ctx.beginPath();
+  ctx.arc(100, 110, 7, 0, Math.PI * 2);
+  ctx.arc(140, 110, 7, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = "#04241e";
+  ctx.lineWidth = 5;
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(102, 142);
+  ctx.quadraticCurveTo(120, 162, 138, 142);
+  ctx.stroke();
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "800 20px sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText(`Photo ${index + 1}`, 120, 300);
+  return canvas.toDataURL("image/jpeg", 0.92);
+}
+
+function isUsableCaptureSrc(src: string): boolean {
+  return /^(data:image\/(jpeg|jpg|png|webp|svg\+xml)|blob:|https?:)/i.test(src) && src.length > 40;
+}
+
+function enrollmentChip(): string {
+  const enrolled = Boolean(context.face_enrolled);
+  const pending = /pending/i.test(text(context, "face_enrollment_status", "enrollment_status", "face_status"));
+  if (enrolled) return `<span class="chip success">Enrolled</span>`;
+  if (pending) return `<span class="chip info">Pending</span>`;
+  return `<span class="chip warn">Not enrolled</span>`;
+}
+
+function captureThumbs(images: string[]): string {
+  if (!images.length) {
+    return `<div class="thumbs">${[0, 1, 2].map((i) => `<div class="thumb-placeholder" aria-hidden="true">${icon("camera", 18)}<span>Slot ${i + 1}</span></div>`).join("")}</div>`;
+  }
+  return `<div class="thumbs">${images.map((image, index) => {
+    if (!isUsableCaptureSrc(image)) {
+      return `<div class="thumb-wrap"><div class="thumb-placeholder">${icon("alert-circle", 18)}<span>Retake ${index + 1}</span></div><button type="button" class="btn-icon" data-retake="${index}" aria-label="Remove photo ${index + 1}">${icon("x", 16)}</button></div>`;
+    }
+    // Data URLs must not go through HTML entity escaping — &amp; breaks base64 payloads.
+    const safe = image.replace(/"/g, "");
+    return `<div class="thumb-wrap"><img class="thumb" alt="Capture ${index + 1}" src="${safe}"><span class="thumb-badge">${index + 1}</span><button type="button" class="btn-icon" data-retake="${index}" aria-label="Remove photo ${index + 1}">${icon("x", 16)}</button></div>`;
+  }).join("")}</div>`;
 }
 
 async function ensureBackHandler(): Promise<void> {
@@ -155,8 +222,8 @@ async function configure(baseUrl: string) {
 function setup(error = "") {
   stopCamera();
   root.innerHTML = `${toastHtml()}<section class="setup"><div class="setup-card">
-    <div class="mark">HR</div>
-    <div class="stack-sm"><p class="t-label">Employee workspace</p><h1 class="t-display">Ai Matic HR</h1><p class="t-meta">Connect to your ERP, then sign in with your own employee account. Attendance, leave and pay stay on the server.</p></div>
+    <div class="mark">${brandMark()}</div>
+    <div class="stack-sm"><p class="t-label">Employee workspace</p><h1 class="t-display">Aimatic HR</h1><p class="t-meta">Connect to your ERP, then sign in with your own employee account. Attendance, leave and pay stay on the server.</p></div>
     ${error ? `<div class="banner danger">${esc(error)}</div>` : ""}
     <form id="setup" class="stack">
       ${field("ERP URL", `<input id="url" type="url" required placeholder="https://siezal.aimatic.tech" autocomplete="url">`)}
@@ -174,8 +241,8 @@ function setup(error = "") {
 function signIn() {
   stopCamera();
   root.innerHTML = `${toastHtml()}<section class="setup"><div class="setup-card">
-    <div class="mark">${icon("shield", 28)}</div>
-    <div class="stack-sm"><p class="t-label">Secure access</p><h1 class="t-display">Sign in</h1><p class="t-meta">Use your ERP account. The app cannot choose another employee.</p></div>
+    <div class="mark">${brandMark()}</div>
+    <div class="stack-sm"><p class="t-label">Aimatic HR</p><h1 class="t-display">Sign in</h1><p class="t-meta">Use your ERP account. The app cannot choose another employee.</p></div>
     ${message ? `<div class="banner danger">${esc(message)}</div>` : ""}
     ${btn(`${icon("log-in", 18)} Sign in with ERP`, { id: "login", kind: "primary", block: true })}
     ${btn("Change ERP server", { id: "change-server", kind: "secondary", block: true })}
@@ -216,7 +283,10 @@ function seedPreview(): void {
   enrollEmployee = "HR-EMP-00063";
   enrollQuery = "Nabeel";
   enrollConsent = previewScreen === "enroll";
-  enrollCaptures = previewScreen === "enroll" ? ["data:image/jpeg;base64,/9j/4AAQ", "data:image/jpeg;base64,/9j/4AAQ", "data:image/jpeg;base64,/9j/4AAQ"] : [];
+  enrollCaptures = previewScreen === "enroll"
+    ? [previewCaptureDataUrl(0), previewCaptureDataUrl(1), previewCaptureDataUrl(2)]
+    : [];
+  previewUrl = enrollCaptures[enrollCaptures.length - 1] || "";
   enrollStep = (new URLSearchParams(location.search).get("step") as EnrollStep) || "pick";
   options = { leave_types: ["Casual Leave", "Annual Leave"] };
   requests = { attendance: [], expenses: [], shifts: [] };
@@ -282,10 +352,7 @@ function home() {
       <p class="t-label">${esc(greet)}</p>
       <h1 class="t-display">${esc(text(context, "employee_name") || "Employee")}</h1>
       <p class="t-meta">${esc([text(context, "designation"), text(context, "department")].filter(Boolean).join(" · "))}</p>
-      <div class="row-between">
-        <span class="chip ${context.verifier_ready ? "success" : "warn"}">${context.verifier_ready ? "Face ready" : "Face not ready"}</span>
-        <span class="chip ${context.face_enrolled ? "success" : "warn"}">${context.face_enrolled ? "Enrolled" : "Not enrolled"}</span>
-      </div>
+      <div class="row-between">${enrollmentChip()}</div>
       <div class="card-flat hero-attend">
         <p class="t-label">Today’s attendance</p>
         <strong>${latest ? `${esc(text(latest, "log_type"))} · ${esc(text(latest, "time"))}` : "No check-in yet today"}</strong>
@@ -311,7 +378,7 @@ function attendance() {
       <p class="t-label">Live attendance</p>
       <h2 class="t-title">Check in or out</h2>
       <p class="t-meta">The server owns employee, time and face match. This phone sends GPS, a challenge and one live frame.</p>
-      ${previewUrl ? `<div class="stage"><img class="preview" alt="Capture preview" src="${esc(previewUrl)}"><div class="oval" aria-hidden="true"></div></div>` : ""}
+      ${previewUrl ? `<div class="stage"><img class="preview" alt="Capture preview" src="${previewUrl.replace(/"/g, "")}"><div class="oval" aria-hidden="true"></div></div>` : ""}
       <p class="banner" id="liveness" hidden></p>
       <div class="grid-2">
         ${btn(`${icon("log-in", 16)} Check in`, { kind: "primary", block: true, attrs: 'data-log="IN"' })}
@@ -421,9 +488,8 @@ function enroll() {
     const stage = cameraOpen || cameraStarting
       ? `<div class="stage"><video id="enroll-video" playsinline muted autoplay></video><div class="oval" aria-hidden="true"></div><div class="stage-meta"><span>${esc(prompt)}</span><span>${enrollCaptures.length}/5</span></div></div>`
       : previewUrl
-        ? `<div class="stage"><img class="preview" alt="Last capture" src="${esc(previewUrl)}"><div class="oval" aria-hidden="true"></div></div>`
+        ? `<div class="stage"><img class="preview" alt="Last capture" src="${previewUrl.replace(/"/g, "")}"><div class="oval" aria-hidden="true"></div></div>`
         : `<div class="stage"><div class="stage-meta"><span>Camera closed</span><span>${enrollCaptures.length}/5</span></div></div>`;
-    const thumbs = enrollCaptures.map((image, index) => `<div class="thumb-wrap"><img class="thumb" alt="Capture ${index + 1}" src="${esc(image)}"><button type="button" class="btn-icon" data-retake="${index}" aria-label="Remove photo ${index + 1}">${icon("x", 16)}</button></div>`).join("");
     return `<section class="stack">
       ${enrollStepper()}
       <article class="card stack">
@@ -432,6 +498,7 @@ function enroll() {
         <p class="t-meta">Center the face in the oval. Face a light source. Avoid backlight. Take 3 to 5 photos.</p>
         <div class="banner">${esc(prompt)}</div>
         ${stage}
+        ${captureThumbs(enrollCaptures)}
         <div class="grid-2">
           ${btn(cameraOpen ? "Camera on" : `${icon("camera", 16)} Open camera`, { id: "open-camera", kind: "secondary", block: true, disabled: enrollBusy || enrollCaptures.length >= 5 })}
           ${btn(`Take photo (${enrollCaptures.length}/5)`, { id: "capture-enroll", kind: "primary", block: true, disabled: enrollBusy || !cameraOpen || enrollCaptures.length >= 5 })}
@@ -440,7 +507,6 @@ function enroll() {
           ${btn("Remove last", { id: "retake-last", kind: "text", block: true, disabled: !enrollCaptures.length || enrollBusy })}
           ${btn("Clear all", { id: "clear-enroll", kind: "text", block: true, disabled: !enrollCaptures.length || enrollBusy })}
         </div>
-        <div class="thumbs">${thumbs || `<div class="banner warn">No photos yet.</div>`}</div>
         <div class="grid-2">
           ${btn("Back", { id: "enroll-back", kind: "secondary", block: true })}
           ${btn("Review photos", { id: "enroll-next", kind: "primary", block: true, disabled: enrollCaptures.length < 3 })}
@@ -451,14 +517,13 @@ function enroll() {
   }
 
   const ready = canSubmitEnrollment({ employee: enrollEmployee, images: enrollCaptures, consent: enrollConsent, busy: enrollBusy });
-  const thumbs = enrollCaptures.map((image, index) => `<div class="thumb-wrap"><img class="thumb" alt="Capture ${index + 1}" src="${esc(image)}"><button type="button" class="btn-icon" data-retake="${index}" aria-label="Remove photo ${index + 1}">${icon("x", 16)}</button></div>`).join("");
   return `<section class="stack">
     ${enrollStepper()}
     <article class="card stack">
       <p class="t-label">Review & submit</p>
       <h2 class="t-title">Complete enrollment</h2>
       <div class="list-row">${avatar(text(selected, "employee_name") || enrollEmployee)}<div class="grow"><strong>${esc(text(selected, "employee_name") || enrollEmployee)}</strong><span class="t-meta">${esc(enrollEmployee)} · consent ${esc(policyVersion)} · ${enrollCaptures.length} photos</span></div></div>
-      <div class="thumbs">${thumbs}</div>
+      ${captureThumbs(enrollCaptures)}
       <div class="banner">Submitting will create or update the HR Face Enrollment row, including Pending records such as 8bni3r68lh.</div>
       <div class="grid-2">
         ${btn("Back to capture", { id: "enroll-back", kind: "secondary", block: true, disabled: enrollBusy })}
@@ -494,7 +559,9 @@ function profile() {
 function render(next: Screen = screen) {
   if (next !== "enroll" && (cameraOpen || cameraStarting)) stopCamera();
   screen = next;
+  if (previewMode) document.documentElement.dataset.preview = "1";
   if (previewTheme === "light" || previewTheme === "dark") document.documentElement.dataset.theme = previewTheme;
+  document.documentElement.dataset.uiReady = "0";
   if (loading) {
     root.innerHTML = `${toastHtml()}<section class="setup"><div class="setup-card"><p class="t-label">Loading</p><div class="skeleton" aria-busy="true">${loadingSkeleton(4)}</div><p class="t-meta">${esc(loading)}</p></div></section>`;
     return;
@@ -513,6 +580,9 @@ function render(next: Screen = screen) {
   bind();
   if (screen === "enroll" && cameraOpen && activeStream) attachPreview(activeStream);
   void ensureBackHandler();
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => { document.documentElement.dataset.uiReady = "1"; });
+  });
 }
 
 function attachPreview(stream: MediaStream): void {
@@ -625,7 +695,7 @@ async function searchDirectory(event: Event) {
 async function captureLocation() {
   let permission = await Geolocation.checkPermissions();
   if (permission.location !== "granted") permission = await Geolocation.requestPermissions({ permissions: ["location"] });
-  if (permission.location !== "granted") throw new Error("Precise location permission is required. Enable Location for Ai Matic HR in Android Settings, then retry.");
+  if (permission.location !== "granted") throw new Error("Precise location permission is required. Enable Location for Aimatic HR in Android Settings, then retry.");
   const position = await Geolocation.getCurrentPosition({ enableHighAccuracy: true, timeout: 20_000, maximumAge: 0 });
   return { latitude: position.coords.latitude, longitude: position.coords.longitude };
 }
@@ -832,17 +902,27 @@ async function submitCorrection(event: Event) {
   }
 }
 
+function markUiReady(): void {
+  document.documentElement.dataset.preview = previewMode ? "1" : "0";
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => { document.documentElement.dataset.uiReady = "1"; });
+  });
+}
+
 async function start() {
   if (previewMode) {
+    document.documentElement.dataset.preview = "1";
     if (previewTheme === "light" || previewTheme === "dark") document.documentElement.dataset.theme = previewTheme;
     if (previewScreen === "setup") {
       setup();
+      markUiReady();
       return;
     }
     if (previewScreen === "signin") {
       message = "";
       config = { baseUrl: "https://siezal.aimatic.tech", clientId: "preview", redirectUri: "aimatic-hr://oauth", scope: "all" };
       signIn();
+      markUiReady();
       return;
     }
     seedPreview();
