@@ -567,16 +567,17 @@ function render(next: Screen = screen) {
     return;
   }
   const pages: Record<Screen, () => string> = { home, attendance, leave, pay, enroll, profile };
-  const nav = [
+  // Exactly 5 tabs — never Enroll in the bar (wraps on ~360px / real phones). Enroll stays manager-only via Home tile + Profile.
+  const nav: Array<{ id: Screen; label: string; icon: string }> = [
     { id: "home", label: "Home", icon: icon("home", 22) },
     { id: "attendance", label: "Attend", icon: icon("map-pin", 22) },
     { id: "leave", label: "Leave", icon: icon("calendar", 22) },
     { id: "pay", label: "Pay", icon: icon("credit-card", 22) },
-    ...(isManager() ? [{ id: "enroll", label: "Enroll", icon: icon("camera", 22) }] : []),
     { id: "profile", label: "Profile", icon: icon("user", 22) },
   ];
   if (!isManager() && screen === "enroll") screen = "home";
-  root.innerHTML = `${toastHtml()}<section class="shell">${appBar(text(context, "employee_name") || "Employee")}<main class="page">${pages[screen]()}</main>${bottomNavigation("HR", screen, nav)}</section>`;
+  const navActive: Screen = screen === "enroll" ? "profile" : screen;
+  root.innerHTML = `${toastHtml()}<section class="shell">${appBar(text(context, "employee_name") || "Employee")}<main class="page">${pages[screen]()}</main>${bottomNavigation("HR", navActive, nav)}</section>`;
   bind();
   if (screen === "enroll" && cameraOpen && activeStream) attachPreview(activeStream);
   void ensureBackHandler();
