@@ -10,6 +10,7 @@ import {
   enrollFaceRequest,
   enrollmentPromptForIndex,
   leaveRequest,
+  raceWithTimeout,
 } from "../src/products/hr/domain";
 
 const evidence = {
@@ -58,4 +59,23 @@ test("face enrollment is manager-gated and consent-bound", () => {
   assert.match(String(cameraPermissionDeniedMessage(new Error("NotAllowedError"))), /Camera permission/i);
   assert.throws(() => enrollFaceRequest({ employee: "HR-EMP-00063", images: [jpeg], consent: true }), /3 to 5/);
   assert.throws(() => enrollFaceRequest({ employee: "HR-EMP-00063", images: [jpeg, jpeg, jpeg], consent: false }), /consent/);
+});
+
+test("raceWithTimeout resolves fast tasks and times out slow ones", async () => {
+  assert.equal(await raceWithTimeout(() => Promise.resolve("ok"), 50, "too slow"), "ok");
+  await assert.rejects(
+    () => raceWithTimeout(() => new Promise((resolve) => setTimeout(() => resolve("late"), 50)), 10, "too slow"),
+    /too slow/,
+  );
+  await assert.rejects(
+    () => raceWithTimeout(() => Promise.reject(new Error("task failed")), 50, "too slow"),
+    /task failed/,
+  );
+});
+
+test("raceWithTimeout starts the timer before calling task", async () => {
+  const startedAt = Date.now();
+  let calledAt = -1;
+  await raceWithTimeout(() => { calledAt = Date.now(); return Promise.resolve(1); }, 50, "too slow");
+  assert.ok(calledAt - startedAt < 50, "task should run immediately, not after the timeout");
 });
