@@ -61,6 +61,17 @@ export function attendanceCorrectionRequest(input: { fromDate: string; toDate: s
   };
 }
 
+/** Starts `ms`'s timer before invoking `task`, so a slow-to-call async operation (e.g. one gated behind a browser permission prompt) is still bounded from the moment the caller commits to it. */
+export function raceWithTimeout<T>(task: () => Promise<T>, ms: number, timeoutMessage: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(timeoutMessage)), ms);
+    task().then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (error) => { clearTimeout(timer); reject(error); },
+    );
+  });
+}
+
 export function livenessPrompt(challenge: string): string {
   const prompts = ["Blink twice, then look at the camera", "Turn your head left, then back to centre", "Turn your head right, then back to centre", "Look up, then back at the camera"];
   return prompts[(challenge.charCodeAt(0) || 0) % prompts.length];
