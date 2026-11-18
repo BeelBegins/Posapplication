@@ -204,7 +204,9 @@ html[data-theme="dark"] .chip.brand{background:#056153;color:#e6fff8;border-colo
 html[data-theme="dark"] .qa-btn .icon{color:#04241e}
 
 .stage{position:relative;overflow:hidden;border-radius:var(--radius-lg);background:#0b1620;min-height:260px;box-shadow:var(--elev-1)}
+.stage[hidden]{display:none}
 .stage video,.stage img.preview{width:100%;min-height:260px;max-height:340px;object-fit:cover;background:#0b1620}
+.stage video.mirror{transform:scaleX(-1)}
 .oval{pointer-events:none;position:absolute;inset:14% 18%;border:2px solid rgba(255,255,255,.9);border-radius:50%;box-shadow:0 0 0 999px rgba(5,14,22,.42)}
 .stage-meta{position:absolute;left:12px;right:12px;bottom:12px;display:flex;justify-content:space-between;gap:8px;color:#fff;font-size:var(--fs-sm);font-weight:700;text-shadow:0 1px 2px #0008}
 .thumbs{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
