@@ -16,7 +16,23 @@ export function createHrApi(client: ApiClient) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
+  const tal = (name: string, body: Record<string, unknown> = {}) => client.callMethod(`aimatichr.hr_mobile.talent.${name}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
   return {
+    // Phase 4 talent (aimatichr.hr_mobile.talent)
+    getGoals: () => tal("get_goals"),
+    goalCheckIn: (body: { goal: string; progress: number; confidence?: string; note?: string }) => tal("goal_check_in", body),
+    getOneOnOnes: () => tal("get_one_on_ones"),
+    getOneOnOne: (body: { name: string }) => tal("get_one_on_one", body),
+    scheduleOneOnOne: (body: { scheduled_on: string; agenda?: string; employee?: string }) => tal("schedule_one_on_one", body),
+    updateOneOnOne: (body: Record<string, unknown>) => tal("update_one_on_one", body),
+    getPoints: () => tal("get_points"),
+    searchColleagues: (body: { query?: string }) => tal("search_colleagues", body),
+    givePoints: (body: { employee: string; points: number; reason: string; category?: string }) => tal("give_points", body),
+    requestRedemption: (body: { points: number; note?: string }) => tal("request_redemption", body),
     // Phase 3 HR operations (aimatichr.hr_mobile.hrops)
     getHelp: (body: { query?: string }) => ops("get_help", body),
     createTicket: (body: Record<string, unknown>) => ops("create_ticket", body),
