@@ -22,6 +22,10 @@ export function createHrApi(client: ApiClient) {
     body: JSON.stringify(body),
   });
   return {
+    // Phase 4 surveys (aimatichr.hr_mobile.surveys)
+    getSurveys: () => client.callMethod("aimatichr.hr_mobile.surveys.get_surveys", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }),
+    getSurvey: (body: { name: string }) => client.callMethod("aimatichr.hr_mobile.surveys.get_survey", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
+    submitSurvey: (body: { name: string; answers: Record<string, unknown> }) => client.callMethod("aimatichr.hr_mobile.surveys.submit_survey", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
     // Phase 4 talent (aimatichr.hr_mobile.talent)
     getGoals: () => tal("get_goals"),
     goalCheckIn: (body: { goal: string; progress: number; confidence?: string; note?: string }) => tal("goal_check_in", body),

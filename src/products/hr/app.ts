@@ -57,7 +57,7 @@ import {
 
 declare const __APP_VERSION__: string;
 type Row = Record<string, unknown>;
-type Screen = "home" | "attendance" | "calendar" | "leave" | "pay" | "enroll" | "profile" | "approvals" | "expenses" | "notifications" | "editprofile" | "documents" | "help" | "ticket" | "policies" | "policy" | "requests" | "assets" | "notices" | "goals" | "goal" | "meetings" | "meeting" | "points";
+type Screen = "home" | "attendance" | "calendar" | "leave" | "pay" | "enroll" | "profile" | "approvals" | "expenses" | "notifications" | "editprofile" | "documents" | "help" | "ticket" | "policies" | "policy" | "requests" | "assets" | "notices" | "goals" | "goal" | "meetings" | "meeting" | "points" | "surveys" | "survey";
 type PreviewScreen = Screen | "setup" | "signin";
 type EnrollStep = "pick" | "consent" | "capture" | "review";
 type HrApi = ReturnType<typeof createHrApi>;
@@ -154,6 +154,10 @@ let meetingWanted = "";
 let pointsData: Row = {};
 let colleagueResults: Row[] = [];
 let colleagueQuery = "";
+let surveys: Row[] = [];
+let surveysPending = 0;
+let surveyDetail: Row | null = null;
+let surveyWanted = "";
 
 const text = (row: Row | undefined, ...keys: string[]) => {
   for (const key of keys) if (row?.[key] != null && row[key] !== "") return String(row[key]);
@@ -239,7 +243,7 @@ function brandMark(): string {
   return `<span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 3.5 4.5 7.2v4.9c0 4.6 3.1 8.8 7.5 10.4 4.4-1.6 7.5-5.8 7.5-10.4V7.2L12 3.5Z" stroke="currentColor" stroke-width="1.8"/><path d="M9.2 12.2h5.6M12 9.4v5.6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span>`;
 }
 
-const screenTitles: Record<Screen, string> = { home: "Home", attendance: "Attendance", calendar: "Attendance calendar", leave: "Leave", pay: "Payslips", enroll: "Face enrollment", profile: "Profile", approvals: "Approvals", expenses: "Expenses & advances", notifications: "Notifications", editprofile: "Edit details", documents: "My documents", help: "Help desk", ticket: "Ticket", policies: "Company policies", policy: "Policy", requests: "Letters & documents", assets: "My assets", notices: "Notices", goals: "My goals", goal: "Goal check-in", meetings: "1-on-1s", meeting: "1-on-1", points: "Bonus points" };
+const screenTitles: Record<Screen, string> = { home: "Home", attendance: "Attendance", calendar: "Attendance calendar", leave: "Leave", pay: "Payslips", enroll: "Face enrollment", profile: "Profile", approvals: "Approvals", expenses: "Expenses & advances", notifications: "Notifications", editprofile: "Edit details", documents: "My documents", help: "Help desk", ticket: "Ticket", policies: "Company policies", policy: "Policy", requests: "Letters & documents", assets: "My assets", notices: "Notices", goals: "My goals", goal: "Goal check-in", meetings: "1-on-1s", meeting: "1-on-1", points: "Bonus points", surveys: "Surveys", survey: "Survey" };
 
 /** Consistent page header: Home shows the greeting; sub-screens get a back arrow. */
 function pageHeader(current: Screen): string {
@@ -249,7 +253,7 @@ function pageHeader(current: Screen): string {
     const name = text(context, "employee_name") || "Employee";
     return `<header class="page-header home">${avatar(name)}<div class="grow"><p class="ph-kicker">${esc(greet)}</p><h1 class="ph-title">${esc(name.split(/\s+/)[0] || name)}</h1></div><button type="button" class="ph-action bell" data-screen="notifications" aria-label="${unreadCount ? `Notifications, ${unreadCount} unread` : "Notifications"}">${hrIcon("bell", 20)}${unreadCount ? `<span class="ph-badge">${unreadCount > 99 ? "99+" : unreadCount}</span>` : ""}</button><button type="button" class="ph-action" id="refresh" aria-label="Refresh">${icon("refresh", 20)}</button></header>`;
   }
-  const backTargets: Partial<Record<Screen, Screen>> = { enroll: "home", approvals: "home", expenses: "home", notifications: "home", editprofile: "profile", documents: "profile", help: "home", ticket: "help", policies: "home", policy: "policies", requests: "home", assets: "home", notices: "home", goals: "home", goal: "goals", meetings: "home", meeting: "meetings", points: "home" };
+  const backTargets: Partial<Record<Screen, Screen>> = { enroll: "home", approvals: "home", expenses: "home", notifications: "home", editprofile: "profile", documents: "profile", help: "home", ticket: "help", policies: "home", policy: "policies", requests: "home", assets: "home", notices: "home", goals: "home", goal: "goals", meetings: "home", meeting: "meetings", points: "home", surveys: "home", survey: "surveys" };
   const back: Screen | null = current === "calendar" ? calendarReturn : backTargets[current] || null;
   return `<header class="page-header">${back ? `<button type="button" class="ph-action" data-screen="${back}" aria-label="Back">${icon("chevron-left", 22)}</button>` : ""}<div class="grow"><h1 class="ph-title">${esc(screenTitles[current])}</h1></div></header>`;
 }
@@ -271,6 +275,7 @@ const HR_ICONS: Record<string, string> = {
   users: '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
   award: '<circle cx="12" cy="8" r="7"/><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/>',
   check: '<polyline points="20 6 9 17 4 12"/>',
+  clipboard: '<path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/><line x1="9" y1="12" x2="15" y2="12"/><line x1="9" y1="16" x2="13" y2="16"/>',
 };
 function hrIcon(name: string, size = 24): string {
   const body = HR_ICONS[name];
@@ -373,6 +378,7 @@ async function ensureBackHandler(): Promise<void> {
       if (screen === "policy") { render("policies"); return; }
       if (screen === "goal") { render("goals"); return; }
       if (screen === "meeting") { render("meetings"); return; }
+      if (screen === "survey") { render("surveys"); return; }
       if (screen !== "home") { render("home"); return; }
       void App.exitApp();
     });
@@ -555,6 +561,18 @@ function seedPreview(): void {
     redemptions: [],
   };
   colleagueResults = [{ name: "EMP-0011", employee_name: "Hina Malik", designation: "Cashier" }, { name: "EMP-0014", employee_name: "Usman Tariq", designation: "Store Supervisor" }];
+  surveys = [
+    { name: "HR-SRV-00004", title: "Q4 engagement pulse", closes_on: "2026-11-30", anonymous: 1, answered: false },
+    { name: "HR-SRV-00003", title: "Canteen menu feedback", closes_on: "2026-11-22", anonymous: 0, answered: true },
+  ];
+  surveysPending = 1;
+  surveyWanted = "HR-SRV-00004";
+  surveyDetail = { name: "HR-SRV-00004", title: "Q4 engagement pulse", description: "Five quick questions, about two minutes.", anonymous: 1, answered: false, questions: [
+    { label: "How happy are you at work this month?", question_type: "Rating", required: 1 },
+    { label: "What do you value most here?", question_type: "Single choice", options: "My team\nPay and benefits\nThe work itself\nGrowth", required: 1 },
+    { label: "Which perks do you use?", question_type: "Multiple choice", options: "Lunch\nTransport\nMedical", required: 0 },
+    { label: "One thing we should change", question_type: "Text", required: 0 },
+  ] };
   calendarData = { month: "2026-11", days: previewDays, summary: { present: 10, absent: 1, half_day: 1, on_leave: 1, holiday: 1, weekly_off: 6, no_record: 0 } };
 }
 
@@ -595,9 +613,11 @@ async function refresh() {
       optional(async () => payload(await api!.getNotifications())),
       optional(async () => payload(await api!.getPolicies())),
       optional(async () => payload(await api!.getDisciplinary())),
+      optional(async () => payload(await api!.getSurveys())),
     ]);
     const results = await Promise.all(tasks);
-    const [approvalData, expenseData, notificationData, policyData, noticeData] = await extra;
+    const [approvalData, expenseData, notificationData, policyData, noticeData, surveyData] = await extra;
+    if (surveyData) { surveys = list(surveyData.surveys); surveysPending = Number(surveyData.pending) || 0; }
     if (policyData) { policies = list(policyData.policies); policyPending = Number(policyData.pending) || 0; }
     if (noticeData) { notices = list(noticeData.notices); noticesPending = Number(noticeData.pending) || 0; }
     if (approvalData) approvals = approvalItems(approvalData);
@@ -655,6 +675,7 @@ function home() {
     ["requests", "file", "Letters & documents", "Salary certificate, experience letter, papers HR asked for", 0],
     ["assets", "box", "My assets", "Laptop, SIM and other company items", 0],
   ];
+  if (surveys.length) services.push(["surveys", "clipboard", "Surveys", surveysPending ? `${surveysPending} waiting for your answer` : "All answered, thank you", surveysPending]);
   if (notices.length) services.push(["notices", "alert-circle", "Notices", noticesPending ? `${noticesPending} needs your response` : "Notices from HR", noticesPending]);
   const growth: Array<[Screen, string, string, string]> = [
     ["goals", "target", "My goals", "Check in on your OKRs"],
@@ -1188,6 +1209,7 @@ async function openScreenData(next: Screen) {
     else if (next === "goals") goals = list((await payload(await api.getGoals())).goals);
     else if (next === "meetings") { const data = await payload(await api.getOneOnOnes()); meetings = list(data.meetings); meetingReports = list(data.reports); meetingHasManager = Boolean(data.has_manager); }
     else if (next === "points") pointsData = await payload(await api.getPoints());
+    else if (next === "surveys") { const data = await payload(await api.getSurveys()); surveys = list(data.surveys); surveysPending = Number(data.pending) || 0; }
     else if (next === "notices") { const data = await payload(await api.getDisciplinary()); notices = list(data.notices); noticesPending = Number(data.pending) || 0; }
     else return;
     if (screen !== next) return;
@@ -1745,6 +1767,85 @@ function syncPointLimits() {
   setLock(document.querySelector<HTMLButtonElement>('#points-redeem button[type="submit"]'), balance < minRedeem);
 }
 
+// ---------------------------------------------------------------- Phase 4 surveys
+
+function surveysScreen() {
+  if (!surveys.length) return emptyState(hrIcon("clipboard", 26), "No open surveys", "Surveys from HR will appear here.");
+  return `<section class="stack">${surveys.map((s) => {
+    const done = Boolean(s.answered);
+    return `<button type="button" class="list-row nav-row" data-survey="${esc(text(s, "name"))}"${done ? " disabled" : ""}><span class="row-icon${done ? "" : " warn"}">${hrIcon("clipboard", 18)}</span><div class="grow"><strong>${esc(text(s, "title"))}</strong><span class="t-meta">${Number(s.anonymous) ? "Anonymous · " : ""}${text(s, "closes_on") ? `closes ${esc(formatDay(text(s, "closes_on")))}` : "open"}</span></div>${done ? statusBadge("Answered", "success") : icon("chevron-right", 18)}</button>`;
+  }).join("")}</section>`;
+}
+
+function surveyQuestion(q: Row, idx: number): string {
+  const type = text(q, "question_type");
+  const req = Number(q.required) ? " required" : "";
+  const label = `<p class="q-label">${esc(text(q, "label"))}${Number(q.required) ? "" : ' <span class="t-meta">(optional)</span>'}</p>`;
+  const opts = text(q, "options").split("\n").map((o) => o.trim()).filter(Boolean);
+  if (type === "Rating") {
+    return `<fieldset class="q">${label}<div class="rating-row" role="radiogroup">${[1, 2, 3, 4, 5].map((n) => `<label class="rating-pill"><input type="radio" name="q${idx}" value="${n}"${req}><span>${n}</span></label>`).join("")}</div><div class="row-between t-meta"><span>Poor</span><span>Excellent</span></div></fieldset>`;
+  }
+  if (type === "Single choice" || type === "Multiple choice") {
+    const kind = type === "Single choice" ? "radio" : "checkbox";
+    return `<fieldset class="q">${label}<div class="list">${opts.map((o) => `<label class="list-row pick-row"><input type="${kind}" name="q${idx}" value="${esc(o)}"${kind === "radio" ? req : ""}><div class="grow"><strong>${esc(o)}</strong></div></label>`).join("")}</div></fieldset>`;
+  }
+  return `<fieldset class="q">${label}<textarea name="q${idx}" maxlength="2000"${req}></textarea></fieldset>`;
+}
+
+function surveyScreen() {
+  const s = surveyDetail;
+  if (!s || text(s, "name") !== surveyWanted) return `<div class="skeleton" aria-busy="true">${loadingSkeleton(5)}</div>`;
+  if (s.answered) return emptyState(icon("check-circle", 26), "Thanks for answering", "Your response has been recorded.");
+  const qs = list(s.questions);
+  return `<section class="stack-lg">
+    <article class="card stack-sm"><h2 class="t-title">${esc(text(s, "title"))}</h2>${text(s, "description") ? `<p class="t-meta">${esc(text(s, "description"))}</p>` : ""}${Number(s.anonymous) ? `<div class="banner info"><span>Anonymous: HR sees totals only, never who answered, and only once enough people have replied.</span></div>` : ""}</article>
+    <form id="survey-form" class="card stack-lg" data-count="${qs.length}">
+      ${qs.map((q, i) => surveyQuestion(q, i + 1)).join("")}
+      ${btn("Submit answers", { kind: "primary", block: true, attrs: 'type="submit"' })}
+    </form>
+  </section>`;
+}
+
+async function loadSurvey(name: string) {
+  if (previewMode || !api) { render("survey"); return; }
+  try {
+    const data = await payload(await api.getSurvey({ name }));
+    if (surveyWanted !== name) return;
+    surveyDetail = data;
+  } catch (error) {
+    if (surveyWanted === name) setToast(error instanceof Error ? error.message : "Could not open the survey", "danger");
+  }
+  if (screen === "survey" && surveyWanted === name) render("survey");
+}
+
+function bindSurveys() {
+  document.querySelectorAll<HTMLButtonElement>("[data-survey]").forEach((button) => {
+    button.onclick = () => { surveyDetail = null; surveyWanted = button.dataset.survey || ""; render("survey"); void loadSurvey(surveyWanted); };
+  });
+  document.querySelector<HTMLFormElement>("#survey-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const form = event.currentTarget as HTMLFormElement;
+    const data = new FormData(form);
+    const count = Number(form.dataset.count) || 0;
+    const qs = list(surveyDetail?.questions);
+    const answers: Record<string, unknown> = {};
+    for (let i = 1; i <= count; i += 1) {
+      const type = text(qs[i - 1], "question_type");
+      if (type === "Multiple choice") answers[String(i)] = data.getAll(`q${i}`).map(String);
+      else if (type === "Rating") { const v = data.get(`q${i}`); if (v) answers[String(i)] = Number(v); }
+      else { const v = String(data.get(`q${i}`) || "").trim(); if (v) answers[String(i)] = v; }
+    }
+    const name = surveyWanted;
+    void runSelfService("Sending", async () => {
+      await payload(await api!.submitSurvey({ name, answers }));
+      if (surveyWanted === name && surveyDetail) surveyDetail = { ...surveyDetail, answered: true };
+      surveys = surveys.map((s) => (text(s, "name") === name ? { ...s, answered: true } : s));
+      surveysPending = surveys.filter((s) => !s.answered).length;
+      setToast("Thanks, your answers were sent", "success");
+    }, "survey");
+  });
+}
+
 async function loadMeeting(name: string) {
   if (previewMode || !api) { render("meeting"); return; }
   try {
@@ -2028,7 +2129,7 @@ function render(next: Screen = screen) {
     root.innerHTML = `${toastHtml()}<section class="auth"><div class="auth-hero">${brandMark()}<h1>Aimatic HR</h1><p>${esc(loading)}…</p></div><div class="auth-card"><div class="skeleton" aria-busy="true">${loadingSkeleton(4)}</div></div></section>`;
     return;
   }
-  const pages: Record<Screen, () => string> = { home, attendance, calendar: calendarScreen, leave, pay, enroll, profile, approvals: approvalsScreen, expenses: expensesScreen, notifications: notificationsScreen, editprofile: editProfileScreen, documents: documentsScreen, help: helpScreen, ticket: ticketScreen, policies: policiesScreen, policy: policyScreen, requests: requestsScreen, assets: assetsScreen, notices: noticesScreen, goals: goalsScreen, goal: goalScreen, meetings: meetingsScreen, meeting: meetingScreen, points: pointsScreen };
+  const pages: Record<Screen, () => string> = { home, attendance, calendar: calendarScreen, leave, pay, enroll, profile, approvals: approvalsScreen, expenses: expensesScreen, notifications: notificationsScreen, editprofile: editProfileScreen, documents: documentsScreen, help: helpScreen, ticket: ticketScreen, policies: policiesScreen, policy: policyScreen, requests: requestsScreen, assets: assetsScreen, notices: noticesScreen, goals: goalsScreen, goal: goalScreen, meetings: meetingsScreen, meeting: meetingScreen, points: pointsScreen, surveys: surveysScreen, survey: surveyScreen };
   // Exactly 5 tabs — never Enroll in the bar (wraps on ~360px / real phones). Enroll stays manager-only via Home tile + Profile.
   const nav: Array<{ id: Screen; label: string; icon: string }> = [
     { id: "home", label: "Home", icon: icon("home", 22) },
@@ -2038,7 +2139,7 @@ function render(next: Screen = screen) {
     { id: "profile", label: "Profile", icon: icon("user", 22) },
   ];
   if (!isManager() && screen === "enroll") screen = "home";
-  const navActive: Screen = screen === "enroll" || screen === "editprofile" || screen === "documents" ? "profile" : screen === "calendar" ? "attendance" : ["approvals", "expenses", "notifications", "help", "ticket", "policies", "policy", "requests", "assets", "notices", "goals", "goal", "meetings", "meeting", "points"].includes(screen) ? "home" : screen;
+  const navActive: Screen = screen === "enroll" || screen === "editprofile" || screen === "documents" ? "profile" : screen === "calendar" ? "attendance" : ["approvals", "expenses", "notifications", "help", "ticket", "policies", "policy", "requests", "assets", "notices", "goals", "goal", "meetings", "meeting", "points", "surveys", "survey"].includes(screen) ? "home" : screen;
   // Pull the live enroll video out of the old DOM before it is discarded, so re-rendering the
   // capture step (new photo taken, retake, etc.) doesn't restart/black-flash the camera preview.
   const existingEnrollVideo = screen === "enroll" ? document.querySelector<HTMLVideoElement>("#enroll-video") : null;
@@ -2086,6 +2187,7 @@ function bind() {
   bindSelfService();
   bindHrOps();
   bindTalent();
+  bindSurveys();
   // A manual refresh mid check-in would repaint #attend-video out from under the live capture.
   document.querySelector<HTMLButtonElement>("#refresh")?.addEventListener("click", () => { if (!attendBusy) void refresh(); });
   document.querySelector<HTMLButtonElement>("#cal-prev")?.addEventListener("click", () => void loadCalendar(shiftMonth(calendarMonth, -1)));
