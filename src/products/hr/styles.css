@@ -519,3 +519,26 @@ details.faq .rich{padding:0 16px 14px}
 .notice .t-label{color:var(--danger-700)}
 html[data-theme="dark"] .bubble.mine{background:rgba(16,163,127,.18)}
 @media(prefers-color-scheme:dark){html:not([data-theme="light"]) .bubble.mine{background:rgba(16,163,127,.18)}}
+
+/* ===== Phase 4 talent ===== */
+.progress{height:8px;border-radius:999px;background:var(--surface-2,rgba(127,127,127,.15));overflow:hidden}
+.progress>span{display:block;height:100%;border-radius:inherit;background:var(--brand-600);transition:width .3s ease}
+.progress.warn>span{background:#f5a524}
+.progress.danger>span{background:var(--danger-700,#c0392b)}
+.goal-row{display:grid;gap:8px;width:100%;text-align:left;font:inherit;color:inherit;cursor:pointer}
+.goal-row.child{margin-left:14px;width:calc(100% - 14px)}
+.goal-group{border-left:3px solid var(--brand-600)}
+.row-start{display:flex;align-items:center;gap:12px}
+.pick-row{cursor:pointer}
+.pick-row input[type=radio]{width:20px;height:20px;accent-color:var(--brand-600);flex:0 0 auto}
+.pick-row:has(input:checked){background:var(--brand-50)}
+.action-row{display:grid;gap:2px;padding:6px 0;border-bottom:1px solid var(--border)}
+.action-row:last-child{border-bottom:0}
+.action-row .t-meta{padding-left:32px}
+.new-action{border-top:1px dashed var(--border);padding-top:12px}
+input[type=range]{width:100%;accent-color:var(--brand-600);min-height:var(--touch)}
+.field output{float:right;font-weight:700}
+.pos{color:var(--brand-700,#0b7a5c)}
+.neg{color:var(--danger-700,#c0392b)}
+html[data-theme="dark"] .pick-row:has(input:checked){background:rgba(16,163,127,.18)}
+.field input[type=range]{background:transparent;border:0;padding:0;box-shadow:none;height:var(--touch)}

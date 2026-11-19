@@ -57,7 +57,7 @@ import {
 
 declare const __APP_VERSION__: string;
 type Row = Record<string, unknown>;
-type Screen = "home" | "attendance" | "calendar" | "leave" | "pay" | "enroll" | "profile" | "approvals" | "expenses" | "notifications" | "editprofile" | "documents" | "help" | "ticket" | "policies" | "policy" | "requests" | "assets" | "notices";
+type Screen = "home" | "attendance" | "calendar" | "leave" | "pay" | "enroll" | "profile" | "approvals" | "expenses" | "notifications" | "editprofile" | "documents" | "help" | "ticket" | "policies" | "policy" | "requests" | "assets" | "notices" | "goals" | "goal" | "meetings" | "meeting" | "points";
 type PreviewScreen = Screen | "setup" | "signin";
 type EnrollStep = "pick" | "consent" | "capture" | "review";
 type HrApi = ReturnType<typeof createHrApi>;
@@ -143,6 +143,17 @@ let myAssets: Row[] = [];
 let assetRequests: Row[] = [];
 let notices: Row[] = [];
 let noticesPending = 0;
+// Phase 4 talent state
+let goals: Row[] = [];
+let goalWanted = "";
+let meetings: Row[] = [];
+let meetingReports: Row[] = [];
+let meetingHasManager = false;
+let meetingDetail: Row | null = null;
+let meetingWanted = "";
+let pointsData: Row = {};
+let colleagueResults: Row[] = [];
+let colleagueQuery = "";
 
 const text = (row: Row | undefined, ...keys: string[]) => {
   for (const key of keys) if (row?.[key] != null && row[key] !== "") return String(row[key]);
@@ -228,7 +239,7 @@ function brandMark(): string {
   return `<span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 3.5 4.5 7.2v4.9c0 4.6 3.1 8.8 7.5 10.4 4.4-1.6 7.5-5.8 7.5-10.4V7.2L12 3.5Z" stroke="currentColor" stroke-width="1.8"/><path d="M9.2 12.2h5.6M12 9.4v5.6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span>`;
 }
 
-const screenTitles: Record<Screen, string> = { home: "Home", attendance: "Attendance", calendar: "Attendance calendar", leave: "Leave", pay: "Payslips", enroll: "Face enrollment", profile: "Profile", approvals: "Approvals", expenses: "Expenses & advances", notifications: "Notifications", editprofile: "Edit details", documents: "My documents", help: "Help desk", ticket: "Ticket", policies: "Company policies", policy: "Policy", requests: "Letters & documents", assets: "My assets", notices: "Notices" };
+const screenTitles: Record<Screen, string> = { home: "Home", attendance: "Attendance", calendar: "Attendance calendar", leave: "Leave", pay: "Payslips", enroll: "Face enrollment", profile: "Profile", approvals: "Approvals", expenses: "Expenses & advances", notifications: "Notifications", editprofile: "Edit details", documents: "My documents", help: "Help desk", ticket: "Ticket", policies: "Company policies", policy: "Policy", requests: "Letters & documents", assets: "My assets", notices: "Notices", goals: "My goals", goal: "Goal check-in", meetings: "1-on-1s", meeting: "1-on-1", points: "Bonus points" };
 
 /** Consistent page header: Home shows the greeting; sub-screens get a back arrow. */
 function pageHeader(current: Screen): string {
@@ -238,7 +249,7 @@ function pageHeader(current: Screen): string {
     const name = text(context, "employee_name") || "Employee";
     return `<header class="page-header home">${avatar(name)}<div class="grow"><p class="ph-kicker">${esc(greet)}</p><h1 class="ph-title">${esc(name.split(/\s+/)[0] || name)}</h1></div><button type="button" class="ph-action bell" data-screen="notifications" aria-label="${unreadCount ? `Notifications, ${unreadCount} unread` : "Notifications"}">${hrIcon("bell", 20)}${unreadCount ? `<span class="ph-badge">${unreadCount > 99 ? "99+" : unreadCount}</span>` : ""}</button><button type="button" class="ph-action" id="refresh" aria-label="Refresh">${icon("refresh", 20)}</button></header>`;
   }
-  const backTargets: Partial<Record<Screen, Screen>> = { enroll: "home", approvals: "home", expenses: "home", notifications: "home", editprofile: "profile", documents: "profile", help: "home", ticket: "help", policies: "home", policy: "policies", requests: "home", assets: "home", notices: "home" };
+  const backTargets: Partial<Record<Screen, Screen>> = { enroll: "home", approvals: "home", expenses: "home", notifications: "home", editprofile: "profile", documents: "profile", help: "home", ticket: "help", policies: "home", policy: "policies", requests: "home", assets: "home", notices: "home", goals: "home", goal: "goals", meetings: "home", meeting: "meetings", points: "home" };
   const back: Screen | null = current === "calendar" ? calendarReturn : backTargets[current] || null;
   return `<header class="page-header">${back ? `<button type="button" class="ph-action" data-screen="${back}" aria-label="Back">${icon("chevron-left", 22)}</button>` : ""}<div class="grow"><h1 class="ph-title">${esc(screenTitles[current])}</h1></div></header>`;
 }
@@ -256,6 +267,10 @@ const HR_ICONS: Record<string, string> = {
   book: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>',
   box: '<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/>',
   send: '<line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>',
+  target: '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>',
+  users: '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+  award: '<circle cx="12" cy="8" r="7"/><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/>',
+  check: '<polyline points="20 6 9 17 4 12"/>',
 };
 function hrIcon(name: string, size = 24): string {
   const body = HR_ICONS[name];
@@ -356,6 +371,8 @@ async function ensureBackHandler(): Promise<void> {
       if (screen === "editprofile" || screen === "documents") { render("profile"); return; }
       if (screen === "ticket") { render("help"); return; }
       if (screen === "policy") { render("policies"); return; }
+      if (screen === "goal") { render("goals"); return; }
+      if (screen === "meeting") { render("meetings"); return; }
       if (screen !== "home") { render("home"); return; }
       void App.exitApp();
     });
@@ -516,6 +533,28 @@ function seedPreview(): void {
   assetRequests = [{ name: "HR-AST-2026-00005", request_type: "Request", item_description: "Second monitor", status: "Approved", creation: "2026-11-14 12:00:00" }];
   notices = [{ name: "HR-DIS-2026-00002", action_type: "Written Warning", subject: "Repeated late arrival", description: "<p>You were late on 6 occasions in October.</p>", incident_date: "2026-10-31", status: "Issued" }];
   noticesPending = 1;
+  goals = [
+    { name: "G-1", goal_name: "Grow Lahore retail sales 15%", is_group: 1, progress: 48, status: "In Progress", end_date: "2026-12-31" },
+    { name: "G-2", goal_name: "Open 2 new franchise stores", parent_goal: "G-1", is_group: 0, progress: 50, status: "In Progress", end_date: "2026-12-15", confidence: "On track", check_ins: [{ name: "C-2", check_in_date: "2026-11-10", progress: 50, previous_progress: 20, confidence: "On track", note: "DHA store signed." }] },
+    { name: "G-3", goal_name: "Cut stock-outs below 2%", parent_goal: "G-1", is_group: 0, progress: 35, status: "In Progress", end_date: "2026-12-31", confidence: "At risk", check_ins: [{ name: "C-3", check_in_date: "2026-11-12", progress: 35, previous_progress: 30, confidence: "At risk", note: "Supplier delays on dairy." }] },
+    { name: "G-4", goal_name: "Finish food-safety certification", is_group: 0, progress: 100, status: "Completed", end_date: "2026-10-31", confidence: "On track", check_ins: [] },
+  ];
+  goalWanted = "G-3";
+  meetings = [
+    { name: "HR-1ON1-2026-00008", employee: "EMP-0007", employee_name: "Ahmed Nabeel", manager: "EMP-0002", manager_name: "Sara Khan", scheduled_on: "2026-11-24 11:00:00", status: "Scheduled", agenda: "Q4 targets, training plan", role: "employee" },
+    { name: "HR-1ON1-2026-00005", employee: "EMP-0007", employee_name: "Ahmed Nabeel", manager: "EMP-0002", manager_name: "Sara Khan", scheduled_on: "2026-11-03 11:00:00", status: "Completed", agenda: "October review", role: "employee" },
+  ];
+  meetingHasManager = true;
+  meetingDetail = { ...meetings[0], shared_notes: "Discuss DHA store opening and the stock-out plan.", modified: "2026-11-18 10:00:00", action_items: [{ description: "Share supplier delay report", owner_role: "Employee", due_date: "2026-11-21", done: 1 }, { description: "Approve weekend staffing", owner_role: "Manager", due_date: "2026-11-25", done: 0 }] };
+  meetingWanted = "HR-1ON1-2026-00008";
+  pointsData = {
+    balance: 85, allowance_left: 35, categories: ["Teamwork", "Customer", "Innovation", "Ownership", "Other"],
+    settings: { enabled: 1, monthly_allowance: 50, max_per_entry: 10, approval_above: 20, redemption_mode: "HR-approved redemption requests", min_redemption: 50, point_value_note: "1 point = PKR 10 shopping voucher" },
+    received: [{ name: "HR-BPE-2026-00031", given_by_name: "Bilal Raza", points: 10, category: "Customer", reason: "Handled the Saturday rush calmly", status: "Approved", docstatus: 1, creation: "2026-11-16 18:20:00" }, { name: "HR-BPE-2026-00027", given_by_name: "Sara Khan", points: 5, category: "Ownership", reason: "Fixed the price-tag mismatch", status: "Approved", docstatus: 1, creation: "2026-11-09 12:00:00" }],
+    given: [{ name: "HR-BPE-2026-00033", employee_name: "Hina Malik", points: 5, category: "Teamwork", reason: "Covered my shift", status: "Approved", docstatus: 1, creation: "2026-11-17 09:00:00" }],
+    redemptions: [],
+  };
+  colleagueResults = [{ name: "EMP-0011", employee_name: "Hina Malik", designation: "Cashier" }, { name: "EMP-0014", employee_name: "Usman Tariq", designation: "Store Supervisor" }];
   calendarData = { month: "2026-11", days: previewDays, summary: { present: 10, absent: 1, half_day: 1, on_leave: 1, holiday: 1, weekly_off: 6, no_record: 0 } };
 }
 
@@ -617,12 +656,19 @@ function home() {
     ["assets", "box", "My assets", "Laptop, SIM and other company items", 0],
   ];
   if (notices.length) services.push(["notices", "alert-circle", "Notices", noticesPending ? `${noticesPending} needs your response` : "Notices from HR", noticesPending]);
+  const growth: Array<[Screen, string, string, string]> = [
+    ["goals", "target", "My goals", "Check in on your OKRs"],
+    ["meetings", "users", "1-on-1s", "Agenda, notes and action items with your manager"],
+    ["points", "award", "Bonus points", "Thank a colleague, see your points"],
+  ];
+  const growthHtml = `<div class="stack-sm">${sectionTitle("Growth")}<div class="list">${growth.map(([id, ic, label, sub]) => `<button type="button" class="list-row nav-row" data-screen="${id}"><span class="row-icon">${hrIcon(ic, 18)}</span><div class="grow"><strong>${esc(label)}</strong><span class="t-meta">${esc(sub)}</span></div>${icon("chevron-right", 18)}</button>`).join("")}</div></div>`;
   const servicesHtml = `<div class="stack-sm">${sectionTitle("HR services")}<div class="list">${services.map(([id, ic, label, sub, count]) => `<button type="button" class="list-row nav-row" data-screen="${id}"><span class="row-icon${count ? " warn" : ""}">${hrIcon(ic, 18)}</span><div class="grow"><strong>${esc(label)}</strong><span class="t-meta">${esc(sub)}</span></div>${count ? `<span class="count-pill warn">${count}</span>` : ""}${icon("chevron-right", 18)}</button>`).join("")}</div></div>`;
   return `<section class="stack-lg">
     ${todayCard}
     ${pendingBanner}
     ${quick}
     ${servicesHtml}
+    ${growthHtml}
     <div class="stack-sm">${sectionTitle("Leave balance", `<button type="button" class="link" data-screen="leave">Apply</button>`)}${balanceTiles}</div>
     <div class="stack-sm">${sectionTitle("Recent activity", `<button type="button" class="link" data-screen="attendance">See all</button>`)}${activity}</div>
   </section>`;
@@ -1068,7 +1114,7 @@ async function refreshExpenseLists() {
  * expense-type options, leaving every form field the employee is editing untouched.
  */
 function patchLiveParts(current: Screen) {
-  const builders: Partial<Record<Screen, () => string>> = { expenses: expensesScreen, documents: documentsScreen, help: helpScreen, requests: requestsScreen, assets: assetsScreen };
+  const builders: Partial<Record<Screen, () => string>> = { expenses: expensesScreen, documents: documentsScreen, help: helpScreen, requests: requestsScreen, assets: assetsScreen, meetings: meetingsScreen, points: pointsScreen };
   const build = builders[current];
   if (build && screen === current) {
     const fresh = document.createElement("div");
@@ -1087,7 +1133,7 @@ function patchLiveParts(current: Screen) {
     const assetField = document.querySelector<HTMLElement>("#asset-form [data-asset-field]");
     if (assetField) assetField.hidden = !myAssets.length;
   }
-  if (screen === current) bindLiveRows();
+  if (screen === current) { bindLiveRows(); bindTalentRows(); }
   const select = current === "expenses" ? document.querySelector<HTMLSelectElement>('#expense-form select[name="expenseType"]') : null;
   const types = list(expenseOptions.types).map((row) => text(row, "name")).filter(Boolean);
   if (select && types.length) {
@@ -1119,6 +1165,9 @@ async function openScreenData(next: Screen) {
     else if (next === "policies") { const data = await payload(await api.getPolicies()); policies = list(data.policies); policyPending = Number(data.pending) || 0; }
     else if (next === "requests") { const data = await payload(await api.getDocumentRequests()); docRequests = list(data.requests); letterTypes = (Array.isArray(data.letter_types) ? data.letter_types : []).map(String); }
     else if (next === "assets") { const data = await payload(await api.getAssets()); myAssets = list(data.assets); assetRequests = list(data.requests); }
+    else if (next === "goals") goals = list((await payload(await api.getGoals())).goals);
+    else if (next === "meetings") { const data = await payload(await api.getOneOnOnes()); meetings = list(data.meetings); meetingReports = list(data.reports); meetingHasManager = Boolean(data.has_manager); }
+    else if (next === "points") pointsData = await payload(await api.getPoints());
     else if (next === "notices") { const data = await payload(await api.getDisciplinary()); notices = list(data.notices); noticesPending = Number(data.pending) || 0; }
     else return;
     if (screen !== next) return;
@@ -1501,6 +1550,287 @@ function bindLiveRows() {
   });
 }
 
+// ---------------------------------------------------------------- Phase 4 talent screens
+
+function progressBar(value: unknown, tone = ""): string {
+  const pct = Math.max(0, Math.min(100, Number(value) || 0));
+  return `<div class="progress${tone ? ` ${tone}` : ""}" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><span style="width:${pct}%"></span></div>`;
+}
+
+function confidenceTone(value: string): "success" | "warning" | "danger" | "neutral" {
+  return value === "On track" ? "success" : value === "At risk" ? "warning" : value === "Off track" ? "danger" : "neutral";
+}
+
+function goalsScreen() {
+  if (!goals.length) return emptyState(hrIcon("target", 26), "No goals yet", "Goals your manager or HR sets for you in Frappe HR will appear here.");
+  const rows = goals.map((g) => {
+    const name = text(g, "name");
+    const pct = Number(g.progress) || 0;
+    const conf = text(g, "confidence");
+    const meta = [text(g, "end_date") ? `due ${formatDay(text(g, "end_date"))}` : "", text(g, "status")].filter(Boolean).join(" · ");
+    if (Number(g.is_group)) {
+      return `<article class="card stack-sm goal-group"><div class="row-between"><strong>${esc(text(g, "goal_name"))}</strong><span class="t-label">${Math.round(pct)}%</span></div>${progressBar(pct)}<span class="t-meta">Objective · progress comes from its key results</span></article>`;
+    }
+    return `<button type="button" class="card stack-sm goal-row${g.parent_goal ? " child" : ""}" data-goal="${esc(name)}"><div class="row-between"><strong>${esc(text(g, "goal_name"))}</strong>${conf ? statusBadge(conf, confidenceTone(conf)) : ""}</div>${progressBar(pct, confidenceTone(conf) === "danger" ? "danger" : confidenceTone(conf) === "warning" ? "warn" : "")}<div class="row-between"><span class="t-meta">${esc(meta)}</span><span class="t-label">${Math.round(pct)}%</span></div></button>`;
+  }).join("");
+  return `<section class="stack">${rows}</section>`;
+}
+
+function goalScreen() {
+  const goal = goals.find((g) => text(g, "name") === goalWanted);
+  if (!goal) return `<div class="skeleton" aria-busy="true">${loadingSkeleton(4)}</div>`;
+  const pct = Math.round(Number(goal.progress) || 0);
+  const history = list(goal.check_ins);
+  const conf = text(goal, "confidence") || "On track";
+  const historyHtml = history.length
+    ? `<div class="list">${history.map((c) => { const cf = text(c, "confidence"); return `<article class="list-row"><span class="row-icon">${hrIcon("check", 18)}</span><div class="grow"><strong>${esc(String(Math.round(Number(c.previous_progress) || 0)))}% → ${esc(String(Math.round(Number(c.progress) || 0)))}%</strong><span class="t-meta">${esc(formatDay(text(c, "check_in_date")))}${text(c, "note") ? ` · ${esc(text(c, "note"))}` : ""}</span></div>${cf ? statusBadge(cf, confidenceTone(cf)) : ""}</article>`; }).join("")}</div>`
+    : `<p class="t-meta">No check-ins yet.</p>`;
+  return `<section class="stack-lg">
+    <article class="card stack-sm">
+      <span class="t-label">${esc(text(goal, "status") || "In Progress")}${text(goal, "end_date") ? ` · due ${esc(formatDay(text(goal, "end_date")))}` : ""}</span>
+      <h2 class="t-title">${esc(text(goal, "goal_name"))}</h2>
+      <div class="row-between"><span class="t-meta">Current progress</span><strong>${pct}%</strong></div>
+      ${progressBar(pct)}
+    </article>
+    <form id="goal-checkin" class="card stack">
+      <h2 class="t-title">New check-in</h2>
+      <div class="field"><label for="gc-progress">Progress <output id="gc-out">${pct}%</output></label><input id="gc-progress" name="progress" type="range" min="0" max="100" step="5" value="${pct}"></div>
+      ${field("Confidence", `<select name="confidence">${["On track", "At risk", "Off track"].map((v) => `<option${v === conf ? " selected" : ""}>${v}</option>`).join("")}</select>`)}
+      ${field("What changed?", `<textarea name="note" maxlength="1000" placeholder="Wins, blockers, help you need"></textarea>`)}
+      ${btn("Save check-in", { kind: "primary", block: true, attrs: 'type="submit"' })}
+    </form>
+    <div class="stack-sm">${sectionTitle("History")}${historyHtml}</div>
+  </section>`;
+}
+
+function meetingRow(row: Row): string {
+  const st = text(row, "status");
+  const other = text(row, "role") === "manager" ? text(row, "employee_name") : text(row, "manager_name");
+  return `<button type="button" class="list-row nav-row" data-meeting="${esc(text(row, "name"))}">${avatar(other || "?")}<div class="grow"><strong>${esc(other || "1-on-1")}</strong><span class="t-meta">${esc(formatDateTime(text(row, "scheduled_on")))}${text(row, "agenda") ? ` · ${esc(text(row, "agenda"))}` : ""}</span></div>${statusBadge(st, statusTone(st))}</button>`;
+}
+
+function meetingsScreen() {
+  const upcoming = meetings.filter((m) => text(m, "status") === "Scheduled");
+  const past = meetings.filter((m) => text(m, "status") !== "Scheduled");
+  const withOptions = [meetingHasManager ? `<option value="">My manager</option>` : "", ...meetingReports.map((r) => `<option value="${esc(text(r, "name"))}">${esc(text(r, "employee_name"))}</option>`)].join("");
+  const canSchedule = meetingHasManager || meetingReports.length > 0;
+  return `<section class="stack-lg">
+    <div class="stack-sm" data-live="upcoming">${sectionTitle("Upcoming")}${upcoming.length ? `<div class="list">${upcoming.map(meetingRow).join("")}</div>` : `<p class="t-meta">Nothing scheduled.</p>`}</div>
+    ${canSchedule ? `<form id="meeting-form" class="card stack">
+      <h2 class="t-title">Schedule a 1-on-1</h2>
+      ${field("With", `<select name="employee">${withOptions}</select>`)}
+      ${field("When", `<input name="when" type="datetime-local" required>`)}
+      ${field("Agenda", `<textarea name="agenda" maxlength="2000" placeholder="What do you want to talk about?"></textarea>`)}
+      ${btn("Schedule", { kind: "primary", block: true, attrs: 'type="submit"' })}
+    </form>` : `<div class="banner info"><span>Ask HR to set your manager to schedule 1-on-1s.</span></div>`}
+    <div class="stack-sm" data-live="past">${sectionTitle("Past")}${past.length ? `<div class="list">${past.map(meetingRow).join("")}</div>` : `<p class="t-meta">No past 1-on-1s.</p>`}</div>
+  </section>`;
+}
+
+function meetingScreen() {
+  const m = meetingDetail;
+  if (!m || text(m, "name") !== meetingWanted) return `<div class="skeleton" aria-busy="true">${loadingSkeleton(5)}</div>`;
+  const manager = text(m, "role") === "manager";
+  const st = text(m, "status");
+  const locked = st === "Cancelled";
+  const other = manager ? text(m, "employee_name") : text(m, "manager_name");
+  const items = list(m.action_items);
+  const dis = locked ? " disabled" : "";
+  const itemRows = items.map((a, i) => `<div class="action-row"><label class="check-row"><input type="checkbox" name="a_done_${i}"${Number(a.done) ? " checked" : ""}${dis}><span class="grow">${esc(text(a, "description"))}</span></label><input type="hidden" name="a_desc_${i}" value="${esc(text(a, "description"))}"><input type="hidden" name="a_owner_${i}" value="${esc(text(a, "owner_role") || "Employee")}"><input type="hidden" name="a_due_${i}" value="${esc(text(a, "due_date"))}"><span class="t-meta">${esc(text(a, "owner_role") === "Manager" ? (manager ? "You" : other) : (manager ? other : "You"))}${text(a, "due_date") ? ` · ${esc(formatDay(text(a, "due_date")))}` : ""}</span></div>`).join("");
+  return `<section class="stack-lg">
+    <article class="card stack-sm">
+      <div class="row-between"><span class="t-label">${esc(formatDateTime(text(m, "scheduled_on")))}</span>${statusBadge(st, statusTone(st))}</div>
+      <div class="row-start">${avatar(other || "?")}<div><h2 class="t-title">${esc(other)}</h2><span class="t-meta">${manager ? "Reports to you" : "Your manager"}</span></div></div>
+    </article>
+    <form id="meeting-edit" class="card stack" data-count="${items.length}">
+      ${field("Agenda", `<textarea name="agenda" maxlength="2000"${dis}>${esc(text(m, "agenda"))}</textarea>`)}
+      ${field("Shared notes", `<textarea name="shared_notes" maxlength="5000" placeholder="Both of you can see these"${dis}>${esc(text(m, "shared_notes"))}</textarea>`)}
+      ${manager ? field("Private notes (only you)", `<textarea name="private_notes" maxlength="5000"${dis}>${esc(text(m, "manager_private_notes"))}</textarea>`) : ""}
+      <div class="stack-sm"><p class="t-label">Action items</p>${itemRows || `<p class="t-meta">No action items yet.</p>`}</div>
+      ${locked ? "" : `<div class="stack-sm new-action">${field("New action item", `<input name="new_desc" maxlength="240" placeholder="e.g. Share the supplier report">`)}<div class="grid-2">${field("Owner", `<select name="new_owner"><option value="Employee">${manager ? esc(other) : "Me"}</option><option value="Manager">${manager ? "Me" : esc(other)}</option></select>`)}${field("Due", `<input name="new_due" type="date">`)}</div></div>
+      ${btn("Save", { kind: "primary", block: true, attrs: 'type="submit"' })}`}
+    </form>
+    ${manager && st === "Scheduled" ? `<div class="grid-2">${btn("Cancel meeting", { kind: "secondary", block: true, attrs: 'data-meeting-status="Cancelled"' })}${btn("Mark completed", { kind: "primary", block: true, attrs: 'data-meeting-status="Completed"' })}</div>` : ""}
+  </section>`;
+}
+
+function pointRow(row: Row, given: boolean): string {
+  const pending = Number(row.docstatus) === 0;
+  const who = given ? `To ${text(row, "employee_name")}` : `From ${text(row, "given_by_name") || "HR"}`;
+  const pts = Number(row.points) || 0;
+  return `<article class="list-row"><span class="row-icon">${hrIcon("award", 18)}</span><div class="grow"><strong>${esc(who)}</strong><span class="t-meta">${esc(text(row, "category"))} · ${esc(text(row, "reason"))} · ${esc(formatDay(text(row, "creation")))}</span></div><div class="row-trail-stack"><strong class="${pts < 0 ? "neg" : "pos"}">${pts > 0 ? "+" : ""}${pts}</strong>${pending ? statusBadge(text(row, "status") || "Pending", "warning") : ""}</div></article>`;
+}
+
+function pointsScreen() {
+  const settings = (pointsData.settings || {}) as Row;
+  if (pointsData.settings && !Number(settings.enabled)) return emptyState(hrIcon("award", 26), "Bonus points are off", "HR has not switched on bonus points.");
+  const balance = Number(pointsData.balance) || 0;
+  const left = Number(pointsData.allowance_left) || 0;
+  const maxEntry = Number(settings.max_per_entry) || 10;
+  const redeemOn = text(settings, "redemption_mode") === "HR-approved redemption requests";
+  const minRedeem = Math.max(Number(settings.min_redemption) || 1, 1);
+  const cats = (Array.isArray(pointsData.categories) ? pointsData.categories : ["Teamwork"]).map((c) => `<option>${esc(String(c))}</option>`).join("");
+  const people = colleagueResults.length
+    ? `<div class="list">${colleagueResults.map((p, i) => `<label class="list-row pick-row"><input type="radio" form="points-give" name="employee" value="${esc(text(p, "name"))}"${i === 0 && colleagueResults.length === 1 ? " checked" : ""} required>${avatar(text(p, "employee_name"))}<div class="grow"><strong>${esc(text(p, "employee_name"))}</strong><span class="t-meta">${esc(text(p, "designation") || text(p, "department"))}</span></div></label>`).join("")}</div>`
+    : `<p class="t-meta">${colleagueQuery ? "Nobody matched." : "Search for the colleague you want to thank."}</p>`;
+  const received = list(pointsData.received);
+  const given = list(pointsData.given);
+  const redemptions = list(pointsData.redemptions);
+  return `<section class="stack-lg">
+    <article class="card stat-hero" data-live="hero"><p class="t-label">Your points</p><strong class="pay-amount">${balance}</strong><p class="t-meta">${left} of ${Number(settings.monthly_allowance) || 0} left to give this month${text(settings, "point_value_note") ? ` · ${esc(text(settings, "point_value_note"))}` : ""}</p></article>
+    <div class="card stack">
+      <h2 class="t-title">Thank a colleague</h2>
+      <form id="colleague-search" class="search-bar" role="search">${icon("search", 18)}<input name="q" type="search" placeholder="Search by name" value="${esc(colleagueQuery)}" aria-label="Search colleagues"></form>
+      <div data-live="colleagues">${people}</div>
+      <form id="points-give" class="stack">
+        <div class="grid-2">${field("Points", `<input name="points" type="number" min="1" max="${Math.min(maxEntry, Math.max(left, 1))}" value="${Math.min(5, maxEntry)}" required${left ? "" : " disabled"}>`)}${field("For", `<select name="category">${cats}</select>`)}</div>
+        ${field("Why?", `<textarea name="reason" required maxlength="500" placeholder="What did they do?"></textarea>`)}
+        ${btn(`${hrIcon("award", 16)} Give points`, { kind: "primary", block: true, attrs: `type="submit"${left ? "" : " disabled"}` })}
+        ${Number(settings.approval_above) ? `<p class="t-meta">Awards above ${Number(settings.approval_above)} points go to HR for approval.</p>` : ""}
+      </form>
+    </div>
+    ${redeemOn ? `<form id="points-redeem" class="card stack">
+      <h2 class="t-title">Redeem points</h2>
+      <p class="t-meta">HR reviews each request and pays out by hand. Nothing is added to your salary automatically.</p>
+      <div class="grid-2">${field("Points", `<input name="points" type="number" min="${minRedeem}" max="${Math.max(balance, minRedeem)}" value="${minRedeem}" required${balance >= minRedeem ? "" : " disabled"}>`)}<div></div></div>
+      ${field("Note (optional)", `<input name="note" maxlength="500" placeholder="e.g. Shopping voucher">`)}
+      ${btn("Request redemption", { kind: "secondary", block: true, attrs: `type="submit"${balance >= minRedeem ? "" : " disabled"}` })}
+      ${balance >= minRedeem ? "" : `<p class="t-meta">You need at least ${minRedeem} points to redeem.</p>`}
+    </form>` : ""}
+    <div class="stack-sm" data-live="received">${sectionTitle("Received")}${received.length ? `<div class="list">${received.map((r) => pointRow(r, false)).join("")}</div>` : `<p class="t-meta">No points yet.</p>`}</div>
+    <div class="stack-sm" data-live="given">${sectionTitle("Given")}${given.length ? `<div class="list">${given.map((r) => pointRow(r, true)).join("")}</div>` : `<p class="t-meta">You have not given points yet.</p>`}</div>
+    ${redemptions.length ? `<div class="stack-sm" data-live="redemptions">${sectionTitle("Redemptions")}<div class="list">${redemptions.map((r) => { const st = text(r, "status"); return `<article class="list-row"><span class="row-icon">${hrIcon("wallet", 18)}</span><div class="grow"><strong>${esc(String(Number(r.points) || 0))} points</strong><span class="t-meta">${esc(formatDay(text(r, "creation")))}${text(r, "hr_note") ? ` · ${esc(text(r, "hr_note"))}` : ""}</span></div>${statusBadge(st, statusTone(st))}</article>`; }).join("")}</div></div>` : ""}
+  </section>`;
+}
+
+async function loadMeeting(name: string) {
+  if (previewMode || !api) { render("meeting"); return; }
+  try {
+    const data = await payload(await api.getOneOnOne({ name }));
+    if (meetingWanted !== name) return;
+    meetingDetail = data;
+  } catch (error) {
+    if (meetingWanted === name) setToast(error instanceof Error ? error.message : "Could not open the 1-on-1", "danger");
+  }
+  if (screen === "meeting" && meetingWanted === name) render("meeting");
+}
+
+async function refreshPoints() {
+  try { pointsData = await payload(await api!.getPoints()); } catch { /* next open */ }
+}
+
+/** Row bindings inside [data-live] sections (idempotent, rebound after patchLiveParts). */
+function bindTalentRows() {
+  document.querySelectorAll<HTMLButtonElement>("[data-goal]").forEach((button) => {
+    button.onclick = () => { goalWanted = button.dataset.goal || ""; render("goal"); };
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-meeting]").forEach((button) => {
+    button.onclick = () => { meetingDetail = null; meetingWanted = button.dataset.meeting || ""; render("meeting"); void loadMeeting(meetingWanted); };
+  });
+}
+
+function meetingActions(form: HTMLFormElement): Row[] {
+  const data = new FormData(form);
+  const count = Number(form.dataset.count) || 0;
+  const items: Row[] = [];
+  for (let i = 0; i < count; i += 1) {
+    items.push({ description: String(data.get(`a_desc_${i}`) || ""), owner_role: String(data.get(`a_owner_${i}`) || "Employee"), due_date: String(data.get(`a_due_${i}`) || "") || null, done: data.get(`a_done_${i}`) ? 1 : 0 });
+  }
+  const fresh = String(data.get("new_desc") || "").trim();
+  if (fresh) items.push({ description: fresh, owner_role: String(data.get("new_owner") || "Employee"), due_date: String(data.get("new_due") || "") || null, done: 0 });
+  return items;
+}
+
+function bindTalent() {
+  bindTalentRows();
+  const range = document.querySelector<HTMLInputElement>("#gc-progress");
+  const out = document.querySelector<HTMLOutputElement>("#gc-out");
+  if (range && out) range.oninput = () => { out.textContent = `${range.value}%`; };
+  document.querySelector<HTMLFormElement>("#goal-checkin")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget as HTMLFormElement);
+    const goal = goalWanted;
+    void runSelfService("Saving", async () => {
+      await payload(await api!.goalCheckIn({ goal, progress: Number(data.get("progress")), confidence: String(data.get("confidence") || "On track"), note: String(data.get("note") || "") }));
+      setToast("Check-in saved", "success");
+      try { goals = list((await payload(await api!.getGoals())).goals); } catch { /* next open */ }
+    }, "goal");
+  });
+  document.querySelector<HTMLFormElement>("#meeting-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget as HTMLFormElement);
+    const when = String(data.get("when") || "");
+    void runSelfService("Scheduling", async () => {
+      if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(when)) throw new Error("Pick a date and time.");
+      const saved = await payload(await api!.scheduleOneOnOne({ employee: String(data.get("employee") || ""), scheduled_on: `${when.replace("T", " ").slice(0, 16)}:00`, agenda: String(data.get("agenda") || "") }));
+      setToast(`1-on-1 ${text(saved, "name")} scheduled`, "success");
+      try { const fresh = await payload(await api!.getOneOnOnes()); meetings = list(fresh.meetings); meetingReports = list(fresh.reports); } catch { /* next open */ }
+    }, "meetings");
+  });
+  document.querySelector<HTMLFormElement>("#meeting-edit")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const form = event.currentTarget as HTMLFormElement;
+    const data = new FormData(form);
+    const name = meetingWanted;
+    const manager = text(meetingDetail || {}, "role") === "manager";
+    const body: Record<string, unknown> = { name, agenda: String(data.get("agenda") || ""), shared_notes: String(data.get("shared_notes") || ""), actions: meetingActions(form), modified: text(meetingDetail || {}, "modified") };
+    if (manager) body.private_notes = String(data.get("private_notes") || "");
+    void runSelfService("Saving", async () => {
+      const saved = await payload(await api!.updateOneOnOne(body));
+      if (meetingWanted === name) meetingDetail = saved;
+      setToast("1-on-1 saved", "success");
+    }, "meeting");
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-meeting-status]").forEach((button) => {
+    button.onclick = () => {
+      const name = meetingWanted;
+      const status = button.dataset.meetingStatus || "";
+      void runSelfService("Updating", async () => {
+        const saved = await payload(await api!.updateOneOnOne({ name, status, modified: text(meetingDetail || {}, "modified") }));
+        if (meetingWanted === name) meetingDetail = saved;
+        meetings = meetings.map((m) => (text(m, "name") === name ? { ...m, status } : m));
+        setToast(status === "Completed" ? "Marked completed" : "1-on-1 cancelled", "success");
+      }, "meeting");
+    };
+  });
+  document.querySelector<HTMLFormElement>("#colleague-search")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    colleagueQuery = String(new FormData(event.currentTarget as HTMLFormElement).get("q") || "").trim().slice(0, 60);
+    if (previewMode || !api) { patchLiveParts("points"); return; }
+    const asked = colleagueQuery;
+    void (async () => {
+      try {
+        const rows = list(await payload(await api!.searchColleagues({ query: asked })));
+        if (asked !== colleagueQuery) return;
+        colleagueResults = rows;
+      } catch (error) { setToast(error instanceof Error ? error.message : "Search failed", "danger"); return; }
+      if (screen === "points") patchLiveParts("points");
+    })();
+  });
+  document.querySelector<HTMLFormElement>("#points-give")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const form = event.currentTarget as HTMLFormElement;
+    const data = new FormData(form);
+    const employee = String(data.get("employee") || "");
+    void runSelfService("Sending", async () => {
+      if (!employee) throw new Error("Pick the colleague first.");
+      const saved = await payload(await api!.givePoints({ employee, points: Number(data.get("points")), category: String(data.get("category") || "Teamwork"), reason: String(data.get("reason") || "") }));
+      setToast(text(saved, "status") === "Pending Approval" ? "Sent to HR for approval" : "Points given. Thank you!", "success");
+      colleagueResults = []; colleagueQuery = "";
+      await refreshPoints();
+    }, "points");
+  });
+  document.querySelector<HTMLFormElement>("#points-redeem")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget as HTMLFormElement);
+    void runSelfService("Sending", async () => {
+      const saved = await payload(await api!.requestRedemption({ points: Number(data.get("points")), note: String(data.get("note") || "") }));
+      setToast(`Request ${text(saved, "name")} sent to HR`, "success");
+      await refreshPoints();
+    }, "points");
+  });
+}
+
 function bindHrOps() {
   bindLiveRows();
   document.querySelector<HTMLFormElement>("#faq-search")?.addEventListener("submit", (event) => {
@@ -1648,7 +1978,7 @@ function render(next: Screen = screen) {
     root.innerHTML = `${toastHtml()}<section class="auth"><div class="auth-hero">${brandMark()}<h1>Aimatic HR</h1><p>${esc(loading)}…</p></div><div class="auth-card"><div class="skeleton" aria-busy="true">${loadingSkeleton(4)}</div></div></section>`;
     return;
   }
-  const pages: Record<Screen, () => string> = { home, attendance, calendar: calendarScreen, leave, pay, enroll, profile, approvals: approvalsScreen, expenses: expensesScreen, notifications: notificationsScreen, editprofile: editProfileScreen, documents: documentsScreen, help: helpScreen, ticket: ticketScreen, policies: policiesScreen, policy: policyScreen, requests: requestsScreen, assets: assetsScreen, notices: noticesScreen };
+  const pages: Record<Screen, () => string> = { home, attendance, calendar: calendarScreen, leave, pay, enroll, profile, approvals: approvalsScreen, expenses: expensesScreen, notifications: notificationsScreen, editprofile: editProfileScreen, documents: documentsScreen, help: helpScreen, ticket: ticketScreen, policies: policiesScreen, policy: policyScreen, requests: requestsScreen, assets: assetsScreen, notices: noticesScreen, goals: goalsScreen, goal: goalScreen, meetings: meetingsScreen, meeting: meetingScreen, points: pointsScreen };
   // Exactly 5 tabs — never Enroll in the bar (wraps on ~360px / real phones). Enroll stays manager-only via Home tile + Profile.
   const nav: Array<{ id: Screen; label: string; icon: string }> = [
     { id: "home", label: "Home", icon: icon("home", 22) },
@@ -1658,7 +1988,7 @@ function render(next: Screen = screen) {
     { id: "profile", label: "Profile", icon: icon("user", 22) },
   ];
   if (!isManager() && screen === "enroll") screen = "home";
-  const navActive: Screen = screen === "enroll" || screen === "editprofile" || screen === "documents" ? "profile" : screen === "calendar" ? "attendance" : ["approvals", "expenses", "notifications", "help", "ticket", "policies", "policy", "requests", "assets", "notices"].includes(screen) ? "home" : screen;
+  const navActive: Screen = screen === "enroll" || screen === "editprofile" || screen === "documents" ? "profile" : screen === "calendar" ? "attendance" : ["approvals", "expenses", "notifications", "help", "ticket", "policies", "policy", "requests", "assets", "notices", "goals", "goal", "meetings", "meeting", "points"].includes(screen) ? "home" : screen;
   // Pull the live enroll video out of the old DOM before it is discarded, so re-rendering the
   // capture step (new photo taken, retake, etc.) doesn't restart/black-flash the camera preview.
   const existingEnrollVideo = screen === "enroll" ? document.querySelector<HTMLVideoElement>("#enroll-video") : null;
@@ -1705,6 +2035,7 @@ function bind() {
   });
   bindSelfService();
   bindHrOps();
+  bindTalent();
   // A manual refresh mid check-in would repaint #attend-video out from under the live capture.
   document.querySelector<HTMLButtonElement>("#refresh")?.addEventListener("click", () => { if (!attendBusy) void refresh(); });
   document.querySelector<HTMLButtonElement>("#cal-prev")?.addEventListener("click", () => void loadCalendar(shiftMonth(calendarMonth, -1)));
