@@ -259,3 +259,33 @@ html[data-theme="dark"] .qa-btn .icon{color:#04241e}
 @keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 @media(max-width:380px){.grid-2,.qa,.thumbs{grid-template-columns:1fr}}
+/* Attendance calendar */
+.area-banner{display:flex;gap:8px;align-items:flex-start}
+.grid-3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.cal-stat{text-align:center}
+.cal-nav h2{margin:0}
+.cal-nav .btn{min-width:44px;font-size:22px;line-height:1}
+.cal-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px}
+.cal-head{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;text-align:center;opacity:.6;padding-bottom:2px}
+.cal-cell{position:relative;aspect-ratio:1;border-radius:10px;border:1px solid transparent;background:var(--surface-2);color:inherit;font:inherit;font-weight:600;display:grid;place-items:center;padding:0}
+.cal-cell.empty{background:transparent}
+.cal-cell.today{outline:2px solid var(--accent,#0f9f8a);outline-offset:1px}
+.cal-flag{position:absolute;top:5px;right:5px;width:6px;height:6px;border-radius:50%;background:#e0a100}
+.cal-legend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12px;opacity:.85}
+.cal-legend span{display:inline-flex;align-items:center;gap:6px}
+.cal-dot{display:inline-block;width:10px;height:10px;border-radius:50%;flex:none;background:var(--surface-2)}
+.list-row .cal-dot{width:12px;height:12px}
+.tone-present{background:#d7f5e6;color:#0b5d3b}
+.tone-absent{background:#fde2df;color:#8f1c13}
+.tone-half{background:#fff1cc;color:#7a5200}
+.tone-leave{background:#e2e9ff;color:#2a3f9e}
+.tone-holiday{background:#f1e3ff;color:#5b2a8f}
+.tone-off{background:var(--surface-2);color:inherit;opacity:.7}
+.tone-upcoming{background:transparent;border-color:var(--border,rgba(127,127,127,.25))}
+.cal-dot.tone-present{background:#1fa86b}.cal-dot.tone-absent{background:#d93b2b}.cal-dot.tone-half{background:#e0a100}.cal-dot.tone-leave{background:#4a63d8}.cal-dot.tone-holiday{background:#8a4fd1}.cal-dot.tone-off{background:#9aa5b1;opacity:1}
+html[data-theme="dark"] .tone-present{background:#0f5c36;color:#eafff3}
+html[data-theme="dark"] .tone-absent{background:#6d1a12;color:#ffe8e6}
+html[data-theme="dark"] .tone-half{background:#6b4a00;color:#fff6d9}
+html[data-theme="dark"] .tone-leave{background:#24336e;color:#e6ecff}
+html[data-theme="dark"] .tone-holiday{background:#47236e;color:#f4eaff}
+@media(prefers-color-scheme:dark){html:not([data-theme="light"]) .tone-present{background:#0f5c36;color:#eafff3}html:not([data-theme="light"]) .tone-absent{background:#6d1a12;color:#ffe8e6}html:not([data-theme="light"]) .tone-half{background:#6b4a00;color:#fff6d9}html:not([data-theme="light"]) .tone-leave{background:#24336e;color:#e6ecff}html:not([data-theme="light"]) .tone-holiday{background:#47236e;color:#f4eaff}}

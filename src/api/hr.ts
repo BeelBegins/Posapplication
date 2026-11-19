@@ -15,6 +15,8 @@ export function createHrApi(client: ApiClient) {
     getRequests: () => post("get_requests"),
     getApprovals: () => post("get_approvals"),
     getRecentCheckins: () => post("get_recent_checkins"),
+    getAttendanceCalendar: (month: string) => post("get_attendance_calendar", { month }),
+    getCheckinLocation: () => post("get_checkin_location"),
     getFormOptions: () => post("get_form_options"),
     requestCheckinChallenge: () => post("request_checkin_challenge"),
     submitAttendance: (body: Record<string, unknown>) => post("submit_attendance", body),

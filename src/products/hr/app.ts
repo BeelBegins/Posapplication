@@ -11,7 +11,13 @@ import {
   FACE_CONSENT_VERSION,
   attendanceCorrectionRequest,
   attendanceRequest,
+  calendarWeeks,
   cameraPermissionDeniedMessage,
+  checkinAreaText,
+  dayTone,
+  monthLabel,
+  shiftMonth,
+  type CalendarDay,
   canManageFaceEnrollment,
   canSubmitEnrollment,
   enrollFaceRequest,
@@ -23,7 +29,7 @@ import {
 
 declare const __APP_VERSION__: string;
 type Row = Record<string, unknown>;
-type Screen = "home" | "attendance" | "leave" | "pay" | "enroll" | "profile";
+type Screen = "home" | "attendance" | "calendar" | "leave" | "pay" | "enroll" | "profile";
 type PreviewScreen = Screen | "setup" | "signin";
 type EnrollStep = "pick" | "consent" | "capture" | "review";
 type HrApi = ReturnType<typeof createHrApi>;
@@ -50,6 +56,12 @@ let payslips: Row[] = [];
 let requests: Row = {};
 let team: Row[] = [];
 let checkins: Row[] = [];
+let checkinArea: Row = {};
+let calendarMonth = new Date().toISOString().slice(0, 7);
+let calendarData: Row | null = null;
+let calendarLoading = false;
+let calendarError = "";
+let calendarRequest = 0;
 let options: Row = {};
 let directory: Row[] = [];
 let facePolicy: Row = {};
@@ -241,6 +253,7 @@ async function ensureBackHandler(): Promise<void> {
         return;
       }
       if (screen === "enroll") { render("home"); return; }
+      if (screen === "calendar") { render("attendance"); return; }
       if (screen !== "home") { render("home"); return; }
       void App.exitApp();
     });
@@ -328,6 +341,17 @@ function seedPreview(): void {
   enrollStep = (new URLSearchParams(location.search).get("step") as EnrollStep) || "pick";
   options = { leave_types: ["Casual Leave", "Annual Leave"] };
   requests = { attendance: [], expenses: [], shifts: [] };
+  checkinArea = { enforced: true, required: false, location: { name: "SZL-HO", location_name: "Siezal Head Office", radius_m: 150 } };
+  calendarMonth = "2026-11";
+  const statuses: Record<number, string> = { 1: "Weekly Off", 2: "Present", 3: "Present", 4: "Present", 5: "Absent", 6: "Present", 7: "Weekly Off", 8: "Weekly Off", 9: "Present", 10: "Half Day", 11: "Present", 12: "On Leave", 13: "Present", 14: "Weekly Off", 15: "Weekly Off", 16: "Present", 17: "Present", 18: "Holiday" };
+  const previewDays: Row[] = [];
+  for (let dom = 1; dom <= 30; dom += 1) {
+    const date = `2026-11-${String(dom).padStart(2, "0")}`;
+    const status = statuses[dom] || (dom <= 18 ? "No Record" : (dom % 7 === 0 || dom % 7 === 1 ? "Weekly Off" : "Upcoming"));
+    const worked = status === "Present" || status === "Half Day";
+    previewDays.push({ date, status, in_time: worked ? `${date}T09:0${dom % 6}:00` : null, out_time: worked ? `${date}T${status === "Half Day" ? "13" : "18"}:1${dom % 6}:00` : null, working_hours: worked ? (status === "Half Day" ? 4 : 9) : null, late_entry: dom === 9, early_exit: false, leave_type: status === "On Leave" ? "Casual Leave" : null });
+  }
+  calendarData = { month: "2026-11", days: previewDays, summary: { present: 10, absent: 1, half_day: 1, on_leave: 1, holiday: 1, weekly_off: 6, no_record: 0 } };
 }
 
 async function loadContext() {
@@ -352,13 +376,16 @@ async function refresh() {
       api.getTeam().then(payload),
       api.getRecentCheckins().then(payload),
       api.getFormOptions().then(payload),
+      // Older servers lack this endpoint: never let it fail the whole refresh.
+      api.getCheckinLocation().then(payload).catch(() => ({})),
     ];
     if (isManager()) {
       tasks.push(api.getDirectory(enrollQuery).then(payload));
       tasks.push(api.getFacePolicy().then(payload));
     }
     const results = await Promise.all(tasks);
-    const [leave, pay, requestRows, teamRows, logs, formOptions] = results as Row[];
+    const [leave, pay, requestRows, teamRows, logs, formOptions, area] = results as Row[];
+    checkinArea = area && typeof area === "object" ? area : {};
     leaveRows = list(leave.applications);
     balances = (leave.balances && typeof leave.balances === "object" ? leave.balances : {}) as Row;
     payslips = list(pay);
@@ -367,8 +394,8 @@ async function refresh() {
     checkins = list(logs);
     options = formOptions;
     if (isManager()) {
-      directory = list(results[6]);
-      facePolicy = (results[7] && typeof results[7] === "object" ? results[7] as Row : facePolicy);
+      directory = list(results[7]);
+      facePolicy = (results[8] && typeof results[8] === "object" ? results[8] as Row : facePolicy);
     }
     if (!loading) render(screen);
   } catch (error) {
@@ -398,6 +425,7 @@ function home() {
     </article>
     <div class="qa">
       <button class="qa-btn" data-screen="attendance"><span class="icon">${icon("log-in", 18)}</span><strong>Check in / out</strong><span class="t-meta">Face + GPS</span></button>
+      <button class="qa-btn" data-screen="calendar"><span class="icon">${icon("calendar", 18)}</span><strong>My calendar</strong><span class="t-meta">Month at a glance</span></button>
       <button class="qa-btn" data-screen="leave"><span class="icon">${icon("calendar", 18)}</span><strong>Request leave</strong><span class="t-meta">Send to ERP</span></button>
       ${isManager() ? `<button class="qa-btn" data-screen="enroll"><span class="icon">${icon("camera", 18)}</span><strong>Enroll face</strong><span class="t-meta">Managers</span></button>` : ""}
       <button class="qa-btn" data-screen="profile"><span class="icon">${icon("user", 18)}</span><strong>Profile</strong><span class="t-meta">Team & requests</span></button>
@@ -416,6 +444,7 @@ function attendance() {
       <p class="t-label">Live attendance</p>
       <h2 class="t-title">Check in or out</h2>
       <p class="t-meta">The server owns employee, time and face match. This phone sends GPS, a challenge and one live frame.</p>
+      <div class="banner info area-banner">${icon("map-pin", 16)}<span>${esc(checkinAreaText(checkinArea))}</span></div>
       <div class="stage" id="attend-stage" hidden><video id="attend-video" class="mirror" playsinline muted autoplay></video><div class="oval" aria-hidden="true"></div></div>
       <p class="banner" id="liveness" hidden></p>
       <div class="grid-2">
@@ -423,8 +452,77 @@ function attendance() {
         ${btn(`${icon("log-out", 16)} Check out`, { kind: "secondary", block: true, disabled: attendBusy, attrs: 'data-log="OUT"' })}
       </div>
     </article>
+    ${btn(`${icon("calendar", 16)} Attendance calendar`, { kind: "secondary", block: true, attrs: 'data-screen="calendar"' })}
     <div class="stack-sm"><h3 class="t-subtitle">History</h3>${history}</div>
   </section>`;
+}
+
+function hhmm(value: unknown): string {
+  const raw = typeof value === "string" ? value : "";
+  const match = /T?(\d{2}:\d{2})/.exec(raw.includes("T") ? raw.split("T")[1] : raw.split(" ")[1] || "");
+  return match ? match[1] : "";
+}
+
+const calendarLegend: Array<[string, string]> = [["present", "Present"], ["absent", "Absent"], ["half", "Half day"], ["leave", "Leave"], ["holiday", "Holiday"], ["off", "Weekly off"]];
+
+function calendarScreen() {
+  const days = (calendarData && Array.isArray(calendarData.days) ? calendarData.days : []) as CalendarDay[];
+  const summary = (calendarData && calendarData.summary && typeof calendarData.summary === "object" ? calendarData.summary : {}) as Row;
+  const today = new Date().toISOString().slice(0, 10);
+  const weeks = calendarWeeks(calendarMonth, days);
+  const grid = `<div class="cal-grid" role="grid" aria-label="${esc(monthLabel(calendarMonth))}">
+    ${["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((name) => `<span class="cal-head" role="columnheader">${name}</span>`).join("")}
+    ${weeks.flat().map((cell) => {
+      if (!cell.dayOfMonth) return `<span class="cal-cell empty" aria-hidden="true"></span>`;
+      const day = cell.day;
+      const toneName = day ? dayTone(day.status) : "none";
+      const isToday = day?.date === today;
+      const flags = day && (day.late_entry || day.early_exit) ? `<i class="cal-flag" title="${day.late_entry ? "Late entry" : "Early exit"}"></i>` : "";
+      return `<button type="button" class="cal-cell tone-${toneName}${isToday ? " today" : ""}" data-cal-day="${esc(day?.date || "")}" aria-label="${esc(`${cell.dayOfMonth}: ${day?.status || "No record"}`)}"><span>${cell.dayOfMonth}</span>${flags}</button>`;
+    }).join("")}
+  </div>`;
+  const stat = (label: string, key: string) => `<article class="card-flat cal-stat"><strong class="t-subtitle">${esc(String(summary[key] ?? 0))}</strong><p class="t-meta">${esc(label)}</p></article>`;
+  const recent = days.filter((day) => day.date <= today && (day.in_time || day.out_time || !["No Record", "Upcoming", "Weekly Off"].includes(day.status))).slice(-31).reverse();
+  const rows = recent.length
+    ? `<div class="list">${recent.map((day) => `<article class="list-row"><span class="cal-dot tone-${dayTone(day.status)}" aria-hidden="true"></span><div class="grow"><strong>${esc(day.date)}</strong><span class="t-meta">${esc([day.status, day.leave_type, hhmm(day.in_time) && `In ${hhmm(day.in_time)}`, hhmm(day.out_time) && `Out ${hhmm(day.out_time)}`, day.working_hours ? `${Number(day.working_hours).toFixed(1)} h` : "", day.late_entry ? "Late" : "", day.early_exit ? "Early exit" : ""].filter(Boolean).join(" · "))}</span></div></article>`).join("")}</div>`
+    : emptyState(icon("calendar", 28), "Nothing recorded yet", "Attendance, leave and holidays for this month will appear here.");
+  return `<section class="stack">
+    <article class="card stack">
+      <div class="row-between cal-nav">
+        <button type="button" class="btn btn-text" id="cal-prev" aria-label="Previous month">‹</button>
+        <h2 class="t-title">${esc(monthLabel(calendarMonth))}</h2>
+        <button type="button" class="btn btn-text" id="cal-next" aria-label="Next month">›</button>
+      </div>
+      ${calendarError ? `<div class="banner danger">${esc(calendarError)}</div>` : ""}
+      ${calendarLoading && !calendarData ? `<div class="skeleton" aria-busy="true">${loadingSkeleton(3)}</div>` : grid}
+      <div class="cal-legend">${calendarLegend.map(([toneName, label]) => `<span><i class="cal-dot tone-${toneName}"></i>${esc(label)}</span>`).join("")}</div>
+    </article>
+    <div class="grid-3">${stat("Present", "present")}${stat("Absent", "absent")}${stat("Leave", "on_leave")}</div>
+    <div class="stack-sm"><h3 class="t-subtitle">Days</h3>${rows}</div>
+  </section>`;
+}
+
+async function loadCalendar(month: string): Promise<void> {
+  calendarMonth = month;
+  if (previewMode || !api) { render("calendar"); return; }
+  const ticket = ++calendarRequest;
+  calendarLoading = true;
+  calendarError = "";
+  calendarData = null;
+  render("calendar");
+  try {
+    const data = await raceWithTimeout(async () => payload(await api!.getAttendanceCalendar(month)), 30_000, "The calendar did not load. Check your connection and try again.");
+    if (ticket !== calendarRequest) return;
+    calendarData = data;
+  } catch (error) {
+    if (ticket !== calendarRequest) return;
+    calendarError = error instanceof Error ? error.message : "Could not load the calendar.";
+  } finally {
+    if (ticket === calendarRequest) {
+      calendarLoading = false;
+      if (screen === "calendar") render("calendar");
+    }
+  }
 }
 
 function leave() {
@@ -613,7 +711,7 @@ function render(next: Screen = screen) {
     root.innerHTML = `${toastHtml()}<section class="setup"><div class="setup-card"><p class="t-label">Loading</p><div class="skeleton" aria-busy="true">${loadingSkeleton(4)}</div><p class="t-meta">${esc(loading)}</p></div></section>`;
     return;
   }
-  const pages: Record<Screen, () => string> = { home, attendance, leave, pay, enroll, profile };
+  const pages: Record<Screen, () => string> = { home, attendance, calendar: calendarScreen, leave, pay, enroll, profile };
   // Exactly 5 tabs — never Enroll in the bar (wraps on ~360px / real phones). Enroll stays manager-only via Home tile + Profile.
   const nav: Array<{ id: Screen; label: string; icon: string }> = [
     { id: "home", label: "Home", icon: icon("home", 22) },
@@ -623,7 +721,7 @@ function render(next: Screen = screen) {
     { id: "profile", label: "Profile", icon: icon("user", 22) },
   ];
   if (!isManager() && screen === "enroll") screen = "home";
-  const navActive: Screen = screen === "enroll" ? "profile" : screen;
+  const navActive: Screen = screen === "enroll" ? "profile" : screen === "calendar" ? "attendance" : screen;
   // Pull the live enroll video out of the old DOM before it is discarded, so re-rendering the
   // capture step (new photo taken, retake, etc.) doesn't restart/black-flash the camera preview.
   const existingEnrollVideo = screen === "enroll" ? document.querySelector<HTMLVideoElement>("#enroll-video") : null;
@@ -658,11 +756,14 @@ function bind() {
       cancelAttend();
       if (button.dataset.screen !== "enroll") stopCamera();
       if (button.dataset.screen === "enroll") enrollStep = "pick";
+      if (button.dataset.screen === "calendar") { void loadCalendar(calendarMonth); return; }
       render(button.dataset.screen as Screen);
     };
   });
   // A manual refresh mid check-in would repaint #attend-video out from under the live capture.
   document.querySelector<HTMLButtonElement>("#refresh")?.addEventListener("click", () => { if (!attendBusy) void refresh(); });
+  document.querySelector<HTMLButtonElement>("#cal-prev")?.addEventListener("click", () => void loadCalendar(shiftMonth(calendarMonth, -1)));
+  document.querySelector<HTMLButtonElement>("#cal-next")?.addEventListener("click", () => void loadCalendar(shiftMonth(calendarMonth, 1)));
   document.querySelectorAll<HTMLButtonElement>("[data-log]").forEach((button) => {
     button.onclick = () => void submitLog(button.dataset.log === "OUT" ? "OUT" : "IN");
   });
@@ -758,7 +859,7 @@ async function captureLocation() {
   if (permission.location !== "granted") permission = await Geolocation.requestPermissions({ permissions: ["location"] });
   if (permission.location !== "granted") throw new Error("Precise location permission is required. Enable Location for Aimatic HR in Android Settings, then retry.");
   const position = await Geolocation.getCurrentPosition({ enableHighAccuracy: true, timeout: 20_000, maximumAge: 0 });
-  return { latitude: position.coords.latitude, longitude: position.coords.longitude };
+  return { latitude: position.coords.latitude, longitude: position.coords.longitude, accuracy: position.coords.accuracy };
 }
 
 function frameQualityIssue(canvas: HTMLCanvasElement): string | null {

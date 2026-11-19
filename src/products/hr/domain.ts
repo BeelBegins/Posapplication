@@ -6,6 +6,8 @@ export interface AttendanceEvidence {
   longitude: number;
   challenge: string;
   image: string;
+  /** GPS horizontal accuracy in metres, when the device reports one. */
+  accuracy?: number | null;
 }
 
 const authorityKeys = new Set(["employee", "time", "log_time", "timestamp", "verified", "match", "liveness", "match_score"]);
@@ -27,13 +29,19 @@ export function attendanceRequest(evidence: AttendanceEvidence, extras: Record<s
   }
   if (evidence.challenge.trim().length < 32) throw new Error("Attendance challenge is missing or expired.");
   if (!/^data:image\/(?:jpeg|png);base64,/i.test(evidence.image)) throw new Error("A live camera capture is required.");
-  return {
+  const body: Record<string, string | number> = {
     log_type: evidence.logType,
     latitude: evidence.latitude,
     longitude: evidence.longitude,
     challenge: evidence.challenge.trim(),
     image: evidence.image,
   };
+  // The server applies its GPS accuracy limit and widens nothing on the client's say-so; a
+  // missing or nonsensical reading is simply not sent.
+  if (typeof evidence.accuracy === "number" && Number.isFinite(evidence.accuracy) && evidence.accuracy > 0) {
+    body.accuracy = Math.round(evidence.accuracy * 10) / 10;
+  }
+  return body;
 }
 
 export function leaveRequest(input: { leaveType: string; fromDate: string; toDate: string; description?: string; halfDay?: boolean }, extras: Record<string, unknown> = {}) {
@@ -141,4 +149,78 @@ export function enrollFaceRequest(input: {
     consent: 1,
     consent_version: FACE_CONSENT_VERSION,
   };
+}
+
+export interface CalendarDay {
+  date: string;
+  status: string;
+  in_time?: string | null;
+  out_time?: string | null;
+  working_hours?: number | null;
+  late_entry?: boolean;
+  early_exit?: boolean;
+  leave_type?: string | null;
+}
+
+export type CalendarCell = { day: CalendarDay | null; dayOfMonth: number | null };
+
+/** "YYYY-MM" for the month `delta` months away from `month` ("YYYY-MM"). */
+export function shiftMonth(month: string, delta: number): string {
+  const match = /^(\d{4})-(\d{2})$/.exec(month);
+  if (!match) throw new Error("Month must be YYYY-MM.");
+  const index = Number(match[1]) * 12 + (Number(match[2]) - 1) + delta;
+  const year = Math.floor(index / 12);
+  return `${String(year).padStart(4, "0")}-${String(index - year * 12 + 1).padStart(2, "0")}`;
+}
+
+export function monthLabel(month: string): string {
+  const match = /^(\d{4})-(\d{2})$/.exec(month);
+  if (!match) return month;
+  const names = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  return `${names[Number(match[2]) - 1] || ""} ${match[1]}`;
+}
+
+/** Monday-first weeks of cells for a month grid; leading/trailing cells are empty. */
+export function calendarWeeks(month: string, days: CalendarDay[]): CalendarCell[][] {
+  const match = /^(\d{4})-(\d{2})$/.exec(month);
+  if (!match) return [];
+  const year = Number(match[1]);
+  const monthIndex = Number(match[2]) - 1;
+  const count = new Date(Date.UTC(year, monthIndex + 1, 0)).getUTCDate();
+  const firstWeekday = (new Date(Date.UTC(year, monthIndex, 1)).getUTCDay() + 6) % 7;
+  const byDate = new Map(days.map((day) => [day.date, day]));
+  const cells: CalendarCell[] = Array.from({ length: firstWeekday }, () => ({ day: null, dayOfMonth: null }));
+  for (let dom = 1; dom <= count; dom += 1) {
+    const key = `${match[1]}-${match[2]}-${String(dom).padStart(2, "0")}`;
+    cells.push({ day: byDate.get(key) || null, dayOfMonth: dom });
+  }
+  while (cells.length % 7) cells.push({ day: null, dayOfMonth: null });
+  const weeks: CalendarCell[][] = [];
+  for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7));
+  return weeks;
+}
+
+export type DayTone = "present" | "absent" | "half" | "leave" | "holiday" | "off" | "none" | "upcoming";
+
+export function dayTone(status: string): DayTone {
+  switch (status) {
+    case "Present": case "Work From Home": return "present";
+    case "Absent": return "absent";
+    case "Half Day": return "half";
+    case "On Leave": return "leave";
+    case "Holiday": return "holiday";
+    case "Weekly Off": return "off";
+    case "Upcoming": return "upcoming";
+    default: return "none";
+  }
+}
+
+/** Plain-language line describing where the employee may check in. */
+export function checkinAreaText(info: { enforced?: unknown; required?: unknown; location?: unknown }): string {
+  const location = info.location && typeof info.location === "object" ? info.location as Record<string, unknown> : null;
+  if (!info.enforced) return "Location is recorded with each check-in.";
+  if (!location) return info.required ? "No check-in location is assigned to you. Ask HR to assign one before checking in." : "No check-in area is set for your shift, so any location is accepted.";
+  const name = String(location.location_name || location.name || "your site");
+  const radius = Number(location.radius_m);
+  return Number.isFinite(radius) && radius > 0 ? `Check in within ${Math.round(radius)} m of ${name}.` : `Check in at ${name}.`;
 }
