@@ -1082,6 +1082,7 @@ function setBusyControls(busy: boolean) {
  * successful action re-renders, and only the screen it belongs to; if the employee moved to
  * another screen meanwhile, that screen just gets its controls re-enabled.
  */
+const DRAFT_SAFE_SCREENS: Screen[] = ["points", "meetings", "help", "requests", "assets", "expenses", "documents"];
 /** The form whose submit started the current action, so other forms' drafts can be kept. */
 let lastSubmittedForm: HTMLFormElement | null = null;
 if (typeof document !== "undefined") document.addEventListener("submit", (event) => { lastSubmittedForm = event.target instanceof HTMLFormElement ? event.target : null; }, true);
@@ -1090,6 +1091,10 @@ async function runSelfService(label: string, task: () => Promise<void>, owner: S
   if (!api || previewMode || ssBusy) return;
   if (offline()) { setToast("You appear offline. Reconnect and try again.", "danger"); return; }
   ssBusy = label;
+  // Taken now, while this action's own submit is the latest one; a later (rejected) submit must
+  // not change which form this action resets.
+  const submittedForm = lastSubmittedForm && lastSubmittedForm.isConnected ? lastSubmittedForm : null;
+  lastSubmittedForm = null;
   setBusyControls(true);
   let ok = false;
   try {
@@ -1101,10 +1106,10 @@ async function runSelfService(label: string, task: () => Promise<void>, owner: S
     ssBusy = "";
     // A form the employee started after leaving and returning (not the one being submitted) is kept.
     const freshEdits = Boolean(document.querySelector("main.page form[data-dirty]:not([data-submitting]):not([role=search])"));
-    const submitted = lastSubmittedForm && lastSubmittedForm.isConnected ? lastSubmittedForm : null;
-    lastSubmittedForm = null;
-    // Another form on the same page has a draft (e.g. redeem while giving points): keep it.
-    const otherDraft = Array.from(document.querySelectorAll<HTMLFormElement>("main.page form[data-dirty]:not([role=search])")).some((form) => form !== submitted);
+    const submitted = submittedForm && submittedForm.isConnected ? submittedForm : null;
+    // Another form on the same page has a draft (e.g. redeem while giving points): keep it, but
+    // only on screens whose changing parts patchLiveParts() fully refreshes.
+    const otherDraft = DRAFT_SAFE_SCREENS.includes(owner) && Array.from(document.querySelectorAll<HTMLFormElement>("main.page form[data-dirty]:not([role=search])")).some((form) => form !== submitted);
     if (ok && screen === owner && !freshEdits && !otherDraft) render(owner);
     else if (ok && screen === owner && submitted && otherDraft) {
       submitted.reset();
@@ -1147,6 +1152,7 @@ function patchLiveParts(current: Screen) {
     const assetField = document.querySelector<HTMLElement>("#asset-form [data-asset-field]");
     if (assetField) assetField.hidden = !myAssets.length;
   }
+  if (current === "points") syncPointLimits();
   if (screen === current) { bindLiveRows(); bindTalentRows(); }
   const select = current === "expenses" ? document.querySelector<HTMLSelectElement>('#expense-form select[name="expenseType"]') : null;
   const types = list(expenseOptions.types).map((row) => text(row, "name")).filter(Boolean);
@@ -1713,8 +1719,30 @@ function pointsScreen() {
     </form>` : ""}
     <div class="stack-sm" data-live="received">${sectionTitle("Received")}${received.length ? `<div class="list">${received.map((r) => pointRow(r, false)).join("")}</div>` : `<p class="t-meta">No points yet.</p>`}</div>
     <div class="stack-sm" data-live="given">${sectionTitle("Given")}${given.length ? `<div class="list">${given.map((r) => pointRow(r, true)).join("")}</div>` : `<p class="t-meta">You have not given points yet.</p>`}</div>
-    ${redemptions.length ? `<div class="stack-sm" data-live="redemptions">${sectionTitle("Redemptions")}<div class="list">${redemptions.map((r) => { const st = text(r, "status"); return `<article class="list-row"><span class="row-icon">${hrIcon("wallet", 18)}</span><div class="grow"><strong>${esc(String(Number(r.points) || 0))} points</strong><span class="t-meta">${esc(formatDay(text(r, "creation")))}${text(r, "hr_note") ? ` · ${esc(text(r, "hr_note"))}` : ""}</span></div>${statusBadge(st, statusTone(st))}</article>`; }).join("")}</div></div>` : ""}
+    <div class="stack-sm" data-live="redemptions"${redemptions.length ? "" : " hidden"}>${sectionTitle("Redemptions")}<div class="list">${redemptions.map((r) => { const st = text(r, "status"); return `<article class="list-row"><span class="row-icon">${hrIcon("wallet", 18)}</span><div class="grow"><strong>${esc(String(Number(r.points) || 0))} points</strong><span class="t-meta">${esc(formatDay(text(r, "creation")))}${text(r, "hr_note") ? ` · ${esc(text(r, "hr_note"))}` : ""}</span></div>${statusBadge(st, statusTone(st))}</article>`; }).join("")}</div></div>
   </section>`;
+}
+
+/** Keep the give / redeem limits and locked states in step with a refreshed balance. */
+function syncPointLimits() {
+  const settings = (pointsData.settings || {}) as Row;
+  const left = Number(pointsData.allowance_left) || 0;
+  const balance = Number(pointsData.balance) || 0;
+  const maxEntry = Number(settings.max_per_entry) || 10;
+  const minRedeem = Math.max(Number(settings.min_redemption) || 1, 1);
+  const setLock = (el: HTMLInputElement | HTMLButtonElement | null, locked: boolean) => {
+    if (!el) return;
+    if (locked) el.setAttribute("data-locked", ""); else el.removeAttribute("data-locked");
+    el.disabled = locked || Boolean(ssBusy);
+  };
+  const give = document.querySelector<HTMLInputElement>('#points-give input[name="points"]');
+  if (give) { give.max = String(Math.min(maxEntry, Math.max(left, 1))); if (Number(give.value) > Number(give.max)) give.value = give.max; }
+  setLock(give, !left);
+  setLock(document.querySelector<HTMLButtonElement>('#points-give button[type="submit"]'), !left);
+  const redeem = document.querySelector<HTMLInputElement>('#points-redeem input[name="points"]');
+  if (redeem) redeem.max = String(Math.max(balance, minRedeem));
+  setLock(redeem, balance < minRedeem);
+  setLock(document.querySelector<HTMLButtonElement>('#points-redeem button[type="submit"]'), balance < minRedeem);
 }
 
 async function loadMeeting(name: string) {
