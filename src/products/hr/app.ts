@@ -15,6 +15,7 @@ import {
   cameraPermissionDeniedMessage,
   checkinAreaText,
   dayTone,
+  localIsoDate,
   monthLabel,
   shiftMonth,
   type CalendarDay,
@@ -57,7 +58,8 @@ let requests: Row = {};
 let team: Row[] = [];
 let checkins: Row[] = [];
 let checkinArea: Row = {};
-let calendarMonth = new Date().toISOString().slice(0, 7);
+let calendarMonth = localIsoDate().slice(0, 7);
+let calendarReturn: Screen = "attendance";
 let calendarData: Row | null = null;
 let calendarLoading = false;
 let calendarError = "";
@@ -253,7 +255,7 @@ async function ensureBackHandler(): Promise<void> {
         return;
       }
       if (screen === "enroll") { render("home"); return; }
-      if (screen === "calendar") { render("attendance"); return; }
+      if (screen === "calendar") { render(calendarReturn); return; }
       if (screen !== "home") { render("home"); return; }
       void App.exitApp();
     });
@@ -377,7 +379,8 @@ async function refresh() {
       api.getRecentCheckins().then(payload),
       api.getFormOptions().then(payload),
       // Older servers lack this endpoint: never let it fail the whole refresh.
-      api.getCheckinLocation().then(payload).catch(() => ({})),
+      // Bounded so a stalled lookup can't hold back the rest of the refresh.
+      raceWithTimeout(async () => payload(await api!.getCheckinLocation()), 15_000, "timeout").catch(() => ({})),
     ];
     if (isManager()) {
       tasks.push(api.getDirectory(enrollQuery).then(payload));
@@ -468,7 +471,7 @@ const calendarLegend: Array<[string, string]> = [["present", "Present"], ["absen
 function calendarScreen() {
   const days = (calendarData && Array.isArray(calendarData.days) ? calendarData.days : []) as CalendarDay[];
   const summary = (calendarData && calendarData.summary && typeof calendarData.summary === "object" ? calendarData.summary : {}) as Row;
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localIsoDate();
   const weeks = calendarWeeks(calendarMonth, days);
   const grid = `<div class="cal-grid" role="grid" aria-label="${esc(monthLabel(calendarMonth))}">
     ${["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((name) => `<span class="cal-head" role="columnheader">${name}</span>`).join("")}
@@ -756,7 +759,11 @@ function bind() {
       cancelAttend();
       if (button.dataset.screen !== "enroll") stopCamera();
       if (button.dataset.screen === "enroll") enrollStep = "pick";
-      if (button.dataset.screen === "calendar") { void loadCalendar(calendarMonth); return; }
+      if (button.dataset.screen === "calendar") {
+        calendarReturn = screen === "home" ? "home" : "attendance";
+        void loadCalendar(localIsoDate().slice(0, 7));
+        return;
+      }
       render(button.dataset.screen as Screen);
     };
   });

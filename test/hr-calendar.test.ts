@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { attendanceRequest, calendarWeeks, checkinAreaText, dayTone, monthLabel, shiftMonth } from "../src/products/hr/domain";
+import { attendanceRequest, calendarWeeks, checkinAreaText, dayTone, localIsoDate, monthLabel, shiftMonth } from "../src/products/hr/domain";
 
 const evidence = { logType: "IN" as const, latitude: 24.86, longitude: 67.01, challenge: "x".repeat(40), image: "data:image/jpeg;base64,AAAA" };
 
@@ -42,4 +42,12 @@ test("checkinAreaText explains the policy", () => {
   assert.equal(checkinAreaText({ enforced: false }), "Location is recorded with each check-in.");
   assert.match(checkinAreaText({ enforced: true, required: true, location: null }), /Ask HR/);
   assert.equal(checkinAreaText({ enforced: true, location: { location_name: "HO", radius_m: 150.4 } }), "Check in within 150 m of HO.");
+});
+
+test("checkinAreaText does not invent a policy when none loaded", () => {
+  assert.match(checkinAreaText({}), /server checks/);
+});
+
+test("localIsoDate uses the local calendar date", () => {
+  assert.equal(localIsoDate(new Date(2026, 10, 1, 0, 30)), "2026-11-01");
 });
