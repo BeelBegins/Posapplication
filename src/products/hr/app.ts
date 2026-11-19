@@ -15,6 +15,12 @@ import {
   cameraPermissionDeniedMessage,
   checkinAreaText,
   dayTone,
+  formatDateRange,
+  formatDateTime,
+  formatDay,
+  formatMonthOf,
+  formatTime,
+  statusTone,
   localIsoDate,
   monthLabel,
   shiftMonth,
@@ -153,7 +159,7 @@ function toastHtml(): string {
   return `<div class="toast-host" aria-live="polite">${toastBodyHtml()}</div>`;
 }
 
-function btn(label: string, opts: { id?: string; kind?: "primary" | "secondary" | "text" | "danger"; block?: boolean; disabled?: boolean; attrs?: string } = {}): string {
+function btn(label: string, opts: { id?: string; kind?: "primary" | "secondary" | "text" | "danger" | "danger-text"; block?: boolean; disabled?: boolean; attrs?: string } = {}): string {
   const kind = opts.kind || "primary";
   return `<button type="button" class="btn btn-${kind}${opts.block ? " btn-block" : ""}" ${opts.id ? `id="${opts.id}"` : ""} ${opts.disabled ? "disabled" : ""} ${opts.attrs || ""}>${label}</button>`;
 }
@@ -170,8 +176,26 @@ function brandMark(): string {
   return `<span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 3.5 4.5 7.2v4.9c0 4.6 3.1 8.8 7.5 10.4 4.4-1.6 7.5-5.8 7.5-10.4V7.2L12 3.5Z" stroke="currentColor" stroke-width="1.8"/><path d="M9.2 12.2h5.6M12 9.4v5.6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span>`;
 }
 
-function appBar(subtitle: string, trailing = ""): string {
-  return `<header class="app-bar"><div class="brand-lockup">${brandMark()}<div class="brand"><strong>Aimatic HR</strong><small>${esc(subtitle || "Not signed in")}</small></div></div>${trailing}</header>`;
+const screenTitles: Record<Screen, string> = { home: "Home", attendance: "Attendance", calendar: "Attendance calendar", leave: "Leave", pay: "Payslips", enroll: "Face enrollment", profile: "Profile" };
+
+/** Consistent page header: Home shows the greeting; sub-screens get a back arrow. */
+function pageHeader(current: Screen): string {
+  if (current === "home") {
+    const hour = new Date().getHours();
+    const greet = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+    const name = text(context, "employee_name") || "Employee";
+    return `<header class="page-header home">${avatar(name)}<div class="grow"><p class="ph-kicker">${esc(greet)}</p><h1 class="ph-title">${esc(name.split(/\s+/)[0] || name)}</h1></div><button type="button" class="ph-action" id="refresh" aria-label="Refresh">${icon("refresh", 20)}</button></header>`;
+  }
+  const back: Screen | null = current === "calendar" ? calendarReturn : current === "enroll" ? "home" : null;
+  return `<header class="page-header">${back ? `<button type="button" class="ph-action" data-screen="${back}" aria-label="Back">${icon("chevron-left", 22)}</button>` : ""}<div class="grow"><h1 class="ph-title">${esc(screenTitles[current])}</h1></div></header>`;
+}
+
+function sectionTitle(title: string, trailing = ""): string {
+  return `<div class="section-title"><h2>${esc(title)}</h2>${trailing}</div>`;
+}
+
+function infoRow(label: string, value: string): string {
+  return value ? `<div class="info-row"><span>${esc(label)}</span><strong>${esc(value)}</strong></div>` : "";
 }
 
 /** Valid JPEG data-URL stills for preview/demo; live enroll uses the same canvas path. */
@@ -408,45 +432,45 @@ async function refresh() {
 }
 
 function home() {
-  const hour = new Date().getHours();
-  const greet = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
   const latest = checkins[0];
-  const balanceCards = Object.entries(balances).slice(0, 4).map(([name, value]) => {
-    const row = value && typeof value === "object" ? value as Row : {};
-    return `<article class="card-flat"><p class="t-label">${esc(name)}</p><strong class="t-subtitle">${esc(row.balance_leaves ?? "-")}</strong><p class="t-meta">days left</p></article>`;
-  }).join("");
-  return `<section class="stack">
-    <article class="card hero-card stack">
-      <p class="t-label">${esc(greet)}</p>
-      <h1 class="t-display">${esc(text(context, "employee_name") || "Employee")}</h1>
-      <p class="t-meta">${esc([text(context, "designation"), text(context, "department")].filter(Boolean).join(" · "))}</p>
-      <div class="row-between">${enrollmentChip()}</div>
-      <div class="card-flat hero-attend">
-        <p class="t-label">Today’s attendance</p>
-        <strong>${latest ? `${esc(text(latest, "log_type"))} · ${esc(text(latest, "time"))}` : "No check-in yet today"}</strong>
-      </div>
-    </article>
-    <div class="qa">
-      <button class="qa-btn" data-screen="attendance"><span class="icon">${icon("log-in", 18)}</span><strong>Check in / out</strong><span class="t-meta">Face + GPS</span></button>
-      <button class="qa-btn" data-screen="calendar"><span class="icon">${icon("calendar", 18)}</span><strong>My calendar</strong><span class="t-meta">Month at a glance</span></button>
-      <button class="qa-btn" data-screen="leave"><span class="icon">${icon("calendar", 18)}</span><strong>Request leave</strong><span class="t-meta">Send to ERP</span></button>
-      ${isManager() ? `<button class="qa-btn" data-screen="enroll"><span class="icon">${icon("camera", 18)}</span><strong>Enroll face</strong><span class="t-meta">Managers</span></button>` : ""}
-      <button class="qa-btn" data-screen="profile"><span class="icon">${icon("user", 18)}</span><strong>Profile</strong><span class="t-meta">Team & requests</span></button>
-    </div>
-    <div class="grid-2">${balanceCards || `<article class="card-flat"><strong>Leave</strong><p class="t-meta">No balance returned</p></article>`}<article class="card-flat"><p class="t-label">Direct reports</p><strong class="t-subtitle">${esc(String(team.length))}</strong></article></div>
-    ${btn(`${icon("refresh", 16)} Refresh`, { id: "refresh", kind: "secondary", block: true })}
+  const lastIn = latest && text(latest, "log_type") === "IN";
+  const todayCard = `<article class="card today-card">
+      <div class="today-head"><div><p class="t-label">Today</p><strong class="today-status">${latest ? (lastIn ? "Checked in" : "Checked out") : "Not checked in"}</strong><p class="t-meta">${latest ? esc(`Last ${lastIn ? "check-in" : "check-out"} ${formatDateTime(text(latest, "time"))}`) : "Your first punch of the day will show here."}</p></div>${enrollmentChip()}</div>
+      ${btn(`${icon(lastIn ? "log-out" : "log-in", 18)} ${lastIn ? "Check out" : "Check in"}`, { kind: "primary", block: true, attrs: 'data-screen="attendance"' })}
+    </article>`;
+  const actions: Array<[Screen, string, string]> = [["attendance", "map-pin", "Attendance"], ["calendar", "calendar", "Calendar"], ["leave", "clock", "Leave"], ["pay", "credit-card", "Payslips"]];
+  const quick = `<div class="qa-row">${actions.map(([id, ic, label]) => `<button type="button" class="qa-tile" data-screen="${id}"><span class="qa-icon">${icon(ic, 20)}</span><span>${esc(label)}</span></button>`).join("")}</div>`;
+  const balanceEntries = Object.entries(balances).slice(0, 4);
+  const balanceTiles = balanceEntries.length
+    ? `<div class="tiles">${balanceEntries.map(([name, value]) => {
+      const row = value && typeof value === "object" ? value as Row : {};
+      return `<article class="tile"><strong>${esc(row.balance_leaves ?? "–")}</strong><span>${esc(name)}</span></article>`;
+    }).join("")}</div>`
+    : `<p class="t-meta">No leave allocated yet.</p>`;
+  const recent = checkins.slice(0, 3);
+  const activity = recent.length
+    ? `<div class="list">${recent.map((row) => checkinRow(row)).join("")}</div>`
+    : emptyState(icon("clock", 24), "No activity yet", "Check-ins you make will appear here.");
+  return `<section class="stack-lg">
+    ${todayCard}
+    ${quick}
+    <div class="stack-sm">${sectionTitle("Leave balance", `<button type="button" class="link" data-screen="leave">Apply</button>`)}${balanceTiles}</div>
+    <div class="stack-sm">${sectionTitle("Recent activity", `<button type="button" class="link" data-screen="attendance">See all</button>`)}${activity}</div>
   </section>`;
+}
+
+function checkinRow(row: Row): string {
+  const out = text(row, "log_type") === "OUT";
+  return `<article class="list-row"><span class="row-icon ${out ? "out" : "in"}">${icon(out ? "log-out" : "log-in", 18)}</span><div class="grow"><strong>${out ? "Check-out" : "Check-in"}</strong><span class="t-meta">${esc(formatDay(text(row, "time")))}</span></div><span class="row-trail">${esc(formatTime(text(row, "time")))}${text(row, "shift") ? `<small>${esc(text(row, "shift"))}</small>` : ""}</span></article>`;
 }
 
 function attendance() {
   const history = checkins.length
-    ? `<div class="list">${checkins.map((row) => `<article class="list-row"><span class="icon-btn" style="width:40px;height:40px;display:grid;place-items:center;background:var(--surface-2);border-radius:12px">${icon(text(row, "log_type") === "OUT" ? "log-out" : "log-in", 18)}</span><div class="grow"><strong>${esc(text(row, "log_type") || "Log")}</strong><span class="t-meta">${esc(text(row, "time"))}</span></div>${statusBadge(text(row, "shift") || "ERP", "info")}</article>`).join("")}</div>`
-    : emptyState(icon("clock", 28), "No recent check-ins", "Successful check-ins from ERP will appear here.");
+    ? `<div class="list">${checkins.map((row) => checkinRow(row)).join("")}</div>`
+    : emptyState(icon("clock", 24), "No recent check-ins", "Successful check-ins from ERP will appear here.");
   return `<section class="stack">
     <article class="card stack">
-      <p class="t-label">Live attendance</p>
-      <h2 class="t-title">Check in or out</h2>
-      <p class="t-meta">The server owns employee, time and face match. This phone sends GPS, a challenge and one live frame.</p>
+      <div class="card-head"><span class="row-icon in">${icon("camera", 18)}</span><div class="grow"><h2 class="t-title">Face check-in</h2><p class="t-meta">Look at the camera when it opens. Time and face match are checked by the server.</p></div></div>
       <div class="banner info area-banner">${icon("map-pin", 16)}<span>${esc(checkinAreaText(checkinArea))}</span></div>
       <div class="stage" id="attend-stage" hidden><video id="attend-video" class="mirror" playsinline muted autoplay></video><div class="oval" aria-hidden="true"></div></div>
       <p class="banner" id="liveness" hidden></p>
@@ -455,8 +479,8 @@ function attendance() {
         ${btn(`${icon("log-out", 16)} Check out`, { kind: "secondary", block: true, disabled: attendBusy, attrs: 'data-log="OUT"' })}
       </div>
     </article>
-    ${btn(`${icon("calendar", 16)} Attendance calendar`, { kind: "secondary", block: true, attrs: 'data-screen="calendar"' })}
-    <div class="stack-sm"><h3 class="t-subtitle">History</h3>${history}</div>
+    <button type="button" class="list-row nav-row" data-screen="calendar"><span class="row-icon">${icon("calendar", 18)}</span><div class="grow"><strong>Attendance calendar</strong><span class="t-meta">Present, absent, leave and holidays by month</span></div>${icon("chevron-right", 18)}</button>
+    <div class="stack-sm">${sectionTitle("History")}${history}</div>
   </section>`;
 }
 
@@ -487,21 +511,21 @@ function calendarScreen() {
   const stat = (label: string, key: string) => `<article class="card-flat cal-stat"><strong class="t-subtitle">${esc(String(summary[key] ?? 0))}</strong><p class="t-meta">${esc(label)}</p></article>`;
   const recent = days.filter((day) => day.date <= today && (day.in_time || day.out_time || !["No Record", "Upcoming", "Weekly Off"].includes(day.status))).slice(-31).reverse();
   const rows = recent.length
-    ? `<div class="list">${recent.map((day) => `<article class="list-row"><span class="cal-dot tone-${dayTone(day.status)}" aria-hidden="true"></span><div class="grow"><strong>${esc(day.date)}</strong><span class="t-meta">${esc([day.status, day.leave_type, hhmm(day.in_time) && `In ${hhmm(day.in_time)}`, hhmm(day.out_time) && `Out ${hhmm(day.out_time)}`, day.working_hours ? `${Number(day.working_hours).toFixed(1)} h` : "", day.late_entry ? "Late" : "", day.early_exit ? "Early exit" : ""].filter(Boolean).join(" · "))}</span></div></article>`).join("")}</div>`
+    ? `<div class="list">${recent.map((day) => `<article class="list-row"><span class="cal-dot tone-${dayTone(day.status)}" aria-hidden="true"></span><div class="grow"><strong>${esc(formatDay(day.date))}</strong><span class="t-meta">${esc([day.status, day.leave_type, hhmm(day.in_time) && `In ${hhmm(day.in_time)}`, hhmm(day.out_time) && `Out ${hhmm(day.out_time)}`, day.working_hours ? `${Number(day.working_hours).toFixed(1)} h` : "", day.late_entry ? "Late" : "", day.early_exit ? "Early exit" : ""].filter(Boolean).join(" · "))}</span></div></article>`).join("")}</div>`
     : emptyState(icon("calendar", 28), "Nothing recorded yet", "Attendance, leave and holidays for this month will appear here.");
   return `<section class="stack">
     <article class="card stack">
       <div class="row-between cal-nav">
-        <button type="button" class="btn btn-text" id="cal-prev" aria-label="Previous month">‹</button>
+        <button type="button" class="ph-action" id="cal-prev" aria-label="Previous month">${icon("chevron-left", 20)}</button>
         <h2 class="t-title">${esc(monthLabel(calendarMonth))}</h2>
-        <button type="button" class="btn btn-text" id="cal-next" aria-label="Next month">›</button>
+        <button type="button" class="ph-action" id="cal-next" aria-label="Next month">${icon("chevron-right", 20)}</button>
       </div>
       ${calendarError ? `<div class="banner danger">${esc(calendarError)}</div>` : ""}
       ${calendarLoading && !calendarData ? `<div class="skeleton" aria-busy="true">${loadingSkeleton(3)}</div>` : grid}
       <div class="cal-legend">${calendarLegend.map(([toneName, label]) => `<span><i class="cal-dot tone-${toneName}"></i>${esc(label)}</span>`).join("")}</div>
     </article>
     <div class="grid-3">${stat("Present", "present")}${stat("Absent", "absent")}${stat("Leave", "on_leave")}</div>
-    <div class="stack-sm"><h3 class="t-subtitle">Days</h3>${rows}</div>
+    <div class="stack-sm">${sectionTitle("Days")}${rows}</div>
   </section>`;
 }
 
@@ -530,28 +554,42 @@ async function loadCalendar(month: string): Promise<void> {
 
 function leave() {
   const typeOptions = (Array.isArray(options.leave_types) ? options.leave_types : []).map((entry) => `<option>${esc(String(entry))}</option>`).join("");
+  const balanceEntries = Object.entries(balances);
+  const tiles = balanceEntries.length
+    ? `<div class="tiles">${balanceEntries.map(([name, value]) => {
+      const row = value && typeof value === "object" ? value as Row : {};
+      return `<article class="tile"><strong>${esc(row.balance_leaves ?? "–")}</strong><span>${esc(name)}</span></article>`;
+    }).join("")}</div>`
+    : `<p class="t-meta">No leave allocated yet.</p>`;
   const rows = leaveRows.length
-    ? `<div class="list">${leaveRows.map((row) => `<article class="list-row"><div class="grow"><strong>${esc(text(row, "leave_type"))}</strong><span class="t-meta">${esc(text(row, "from_date"))} → ${esc(text(row, "to_date"))}</span></div>${statusBadge(text(row, "status") || "Open", "info")}</article>`).join("")}</div>`
-    : emptyState(icon("calendar", 28), "No leave applications", "Submitted leave will show here.");
-  return `<section class="stack">
+    ? `<div class="list">${leaveRows.map((row) => {
+      const status = text(row, "status") || "Open";
+      return `<article class="list-row"><span class="row-icon">${icon("calendar", 18)}</span><div class="grow"><strong>${esc(text(row, "leave_type"))}</strong><span class="t-meta">${esc(formatDateRange(text(row, "from_date"), text(row, "to_date")))}</span></div>${statusBadge(status, statusTone(status))}</article>`;
+    }).join("")}</div>`
+    : emptyState(icon("calendar", 24), "No leave applications", "Leave you apply for will show here with its status.");
+  return `<section class="stack-lg">
+    <div class="stack-sm">${sectionTitle("Balance")}${tiles}</div>
     <form id="leave" class="card stack">
-      <p class="t-label">Request leave</p>
-      <h2 class="t-title">New application</h2>
+      <h2 class="t-title">Apply for leave</h2>
       ${field("Leave type", `<select name="leaveType" required>${typeOptions || "<option value=''>No allocated leave</option>"}</select>`)}
       <div class="grid-2">
         ${field("From", `<input name="fromDate" type="date" required>`)}
         ${field("To", `<input name="toDate" type="date" required>`)}
       </div>
-      ${field("Note", `<textarea name="description" placeholder="Optional note"></textarea>`)}
-      ${btn("Submit to ERP", { kind: "primary", block: true, attrs: 'type="submit"' })}
+      ${field("Reason", `<textarea name="description" placeholder="Optional note for your approver"></textarea>`)}
+      ${btn("Submit application", { kind: "primary", block: true, attrs: 'type="submit"' })}
     </form>
-    ${rows}
+    <div class="stack-sm">${sectionTitle("My applications")}${rows}</div>
   </section>`;
 }
 
 function pay() {
-  if (!payslips.length) return emptyState(icon("credit-card", 28), "No payslips", "Posted salary slips will appear here.");
-  return `<section class="stack"><h2 class="t-title">Payslips</h2><div class="list">${payslips.map((row) => `<article class="list-row"><div class="grow"><strong>${esc(text(row, "name"))}</strong><span class="t-meta">${esc(text(row, "start_date"))} → ${esc(text(row, "end_date"))}</span></div><strong>${esc(money(row.net_pay))}</strong></article>`).join("")}</div></section>`;
+  if (!payslips.length) return emptyState(icon("credit-card", 24), "No payslips yet", "Your salary slips will appear here once payroll is posted.");
+  const latest = payslips[0];
+  return `<section class="stack-lg">
+    <article class="card pay-hero"><p class="t-label">Latest net pay</p><strong class="pay-amount">${esc(money(latest.net_pay))}</strong><p class="t-meta">${esc(formatMonthOf(text(latest, "start_date")) || text(latest, "name"))}</p></article>
+    <div class="stack-sm">${sectionTitle("All payslips")}<div class="list">${payslips.map((row) => `<article class="list-row"><span class="row-icon">${icon("credit-card", 18)}</span><div class="grow"><strong>${esc(formatMonthOf(text(row, "start_date")) || text(row, "name"))}</strong><span class="t-meta">${esc(formatDateRange(text(row, "start_date"), text(row, "end_date")))} · ${esc(text(row, "name"))}</span></div><span class="row-trail"><b>${esc(money(row.net_pay))}</b></span></article>`).join("")}</div></div>
+  </section>`;
 }
 
 function enrollStepper(): string {
@@ -603,7 +641,7 @@ function enroll() {
         <p class="t-label">Consent</p>
         <h2 class="t-title">Record employee consent</h2>
         <p class="t-meta">Policy <code>${esc(policyVersion)}</code> · attendance check-in/out only.</p>
-        <ul class="t-meta" style="margin:0;padding-left:18px;display:grid;gap:6px">
+        <ul class="t-meta bullet-list">
           <li>Encrypted face template is stored. Raw photos are not kept.</li>
           <li>No commercial face API is used.</li>
           <li>An HR manager can revoke and wipe later.</li>
@@ -663,7 +701,7 @@ function enroll() {
       <h2 class="t-title">Complete enrollment</h2>
       <div class="list-row">${avatar(text(selected, "employee_name") || enrollEmployee)}<div class="grow"><strong>${esc(text(selected, "employee_name") || enrollEmployee)}</strong><span class="t-meta">${esc(enrollEmployee)} · consent ${esc(policyVersion)} · ${enrollCaptures.length} photos</span></div></div>
       ${captureThumbs(enrollCaptures)}
-      <div class="banner">Submitting will create or update the HR Face Enrollment row, including Pending records such as 8bni3r68lh.</div>
+      <div class="banner">Submitting creates or updates this employee\u2019s face enrollment, including any Pending record.</div>
       <div class="grid-2">
         ${btn("Back to capture", { id: "enroll-back", kind: "secondary", block: true, disabled: enrollBusy })}
         ${btn(enrollBusy ? "Enrolling…" : "Submit enrollment", { id: "submit-enroll", kind: "primary", block: true, disabled: !ready })}
@@ -673,25 +711,33 @@ function enroll() {
 }
 
 function profile() {
-  const requestCards = ["attendance", "expenses", "shifts"].map((key) => {
-    const items = list(requests[key]);
-    return `<article class="card-flat"><p class="t-label">${esc(key)}</p><strong class="t-subtitle">${items.length}</strong><p class="t-meta">open records</p></article>`;
-  }).join("");
-  return `<section class="stack">
-    <article class="card stack">
-      <div class="list-row" style="border:0;padding:0;box-shadow:none">${avatar(text(context, "employee_name"))}<div class="grow"><h2 class="t-title">${esc(text(context, "employee_name"))}</h2><p class="t-meta">${esc(text(context, "employee"))} · ${esc(text(context, "company"))}</p></div></div>
-      ${isManager() ? btn(`${icon("camera", 16)} Open face enrollment`, { kind: "secondary", block: true, attrs: 'data-screen="enroll"' }) : `<p class="t-meta">Face enrolled: ${context.face_enrolled ? "yes" : "no"}.</p>`}
-      ${btn(`${icon("log-out", 16)} Sign out`, { id: "sign-out", kind: "danger", block: true })}
+  const name = text(context, "employee_name") || "Employee";
+  const requestTiles = [["attendance", "Attendance"], ["expenses", "Expenses"], ["shifts", "Shifts"]].map(([key, label]) => `<article class="tile"><strong>${list(requests[key]).length}</strong><span>${esc(label)}</span></article>`).join("");
+  return `<section class="stack-lg">
+    <article class="card profile-card">
+      <span class="avatar xl" aria-hidden="true">${esc(initials(name))}</span>
+      <h2 class="t-title">${esc(name)}</h2>
+      <p class="t-meta">${esc(text(context, "designation") || "Employee")}</p>
+      ${enrollmentChip()}
     </article>
-    <div class="grid-2">${requestCards}</div>
-    <div class="stack-sm"><h3 class="t-subtitle">Team</h3>${team.length ? `<div class="list">${team.map((row) => `<article class="list-row">${avatar(text(row, "employee_name"))}<div class="grow"><strong>${esc(text(row, "employee_name"))}</strong><span class="t-meta">${esc(text(row, "designation") || text(row, "department"))}</span></div></article>`).join("")}</div>` : emptyState(icon("users", 28), "No direct reports", "People who report to you will appear here.")}</div>
+    <div class="card info-card">
+      ${infoRow("Employee ID", text(context, "employee"))}
+      ${infoRow("Department", text(context, "department"))}
+      ${infoRow("Company", text(context, "company"))}
+    </div>
+    <div class="stack-sm">${sectionTitle("Open requests")}<div class="tiles">${requestTiles}</div></div>
+    <div class="stack-sm">${sectionTitle("My team")}${team.length ? `<div class="list">${team.map((row) => `<article class="list-row">${avatar(text(row, "employee_name"))}<div class="grow"><strong>${esc(text(row, "employee_name"))}</strong><span class="t-meta">${esc(text(row, "designation") || text(row, "department"))}</span></div></article>`).join("")}</div>` : emptyState(icon("users", 24), "No direct reports", "People who report to you will appear here.")}</div>
     <form id="correction" class="card stack">
-      <p class="t-label">Attendance request</p>
+      <h2 class="t-title">Attendance request</h2>
+      <p class="t-meta">For days you worked from home or on duty away from your site.</p>
       ${field("Reason", `<select name="reason"><option>Work From Home</option><option>On Duty</option></select>`)}
       <div class="grid-2">${field("From", `<input name="fromDate" type="date" required>`)}${field("To", `<input name="toDate" type="date" required>`)}</div>
-      ${field("Explanation", `<textarea name="explanation"></textarea>`)}
+      ${field("Explanation", `<textarea name="explanation" placeholder="What happened?"></textarea>`)}
       ${btn("Send request", { kind: "primary", block: true, attrs: 'type="submit"' })}
     </form>
+    ${isManager() ? `<button type="button" class="list-row nav-row" data-screen="enroll"><span class="row-icon">${icon("camera", 18)}</span><div class="grow"><strong>Face enrollment</strong><span class="t-meta">Enroll or re-enroll an employee</span></div>${icon("chevron-right", 18)}</button>` : ""}
+    ${btn(`${icon("log-out", 16)} Sign out`, { id: "sign-out", kind: "danger-text", block: true })}
+    <p class="t-meta center">Aimatic HR v${esc(__APP_VERSION__)}</p>
   </section>`;
 }
 
@@ -730,7 +776,7 @@ function render(next: Screen = screen) {
   const existingEnrollVideo = screen === "enroll" ? document.querySelector<HTMLVideoElement>("#enroll-video") : null;
   const preservedEnrollVideo = existingEnrollVideo && existingEnrollVideo.srcObject ? existingEnrollVideo : null;
   preservedEnrollVideo?.remove();
-  root.innerHTML = `${toastHtml()}<section class="shell">${appBar(text(context, "employee_name") || "Employee")}<main class="page">${pages[screen]()}</main>${bottomNavigation("HR", navActive, nav)}</section>`;
+  root.innerHTML = `${toastHtml()}<section class="shell">${pageHeader(screen)}<main class="page">${pages[screen]()}</main>${bottomNavigation("HR", navActive, nav)}</section>`;
   bind();
   if (screen === "enroll" && cameraOpen && activeStream) {
     const placeholder = document.querySelector<HTMLVideoElement>("#enroll-video");

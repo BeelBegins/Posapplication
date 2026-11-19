@@ -231,3 +231,59 @@ export function checkinAreaText(info: { enforced?: unknown; required?: unknown; 
 export function localIsoDate(value: Date = new Date()): string {
   return `${String(value.getFullYear()).padStart(4, "0")}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
 }
+
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const MONTHS_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+function parseParts(value: unknown): { y: number; m: number; d: number; time: string } | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}))?/.exec(typeof value === "string" ? value.trim() : "");
+  if (!match) return null;
+  return { y: Number(match[1]), m: Number(match[2]), d: Number(match[3]), time: match[4] ? `${match[4]}:${match[5]}` : "" };
+}
+
+/** "Tue 17 Nov" from an ERP date or datetime string (server wall-clock, no timezone shift). */
+export function formatDay(value: unknown): string {
+  const p = parseParts(value);
+  if (!p) return typeof value === "string" ? value : "";
+  const weekday = WEEKDAYS[new Date(Date.UTC(p.y, p.m - 1, p.d)).getUTCDay()];
+  return `${weekday} ${p.d} ${MONTHS_SHORT[p.m - 1]}`;
+}
+
+/** "Tue 17 Nov · 09:02" from an ERP datetime string. */
+export function formatDateTime(value: unknown): string {
+  const p = parseParts(value);
+  if (!p) return typeof value === "string" ? value : "";
+  return p.time ? `${formatDay(value)} · ${p.time}` : formatDay(value);
+}
+
+/** "09:02" from an ERP datetime string, or "". */
+export function formatTime(value: unknown): string {
+  return parseParts(value)?.time || "";
+}
+
+/** "20 Nov" or "20–22 Nov" or "30 Nov – 2 Dec" for an inclusive ERP date range. */
+export function formatDateRange(from: unknown, to: unknown): string {
+  const a = parseParts(from), b = parseParts(to);
+  if (!a) return "";
+  const left = `${a.d} ${MONTHS_SHORT[a.m - 1]}`;
+  if (!b || (a.y === b.y && a.m === b.m && a.d === b.d)) return left;
+  if (a.y === b.y && a.m === b.m) return `${a.d}–${b.d} ${MONTHS_SHORT[a.m - 1]}`;
+  return `${left} – ${b.d} ${MONTHS_SHORT[b.m - 1]}${a.y !== b.y ? ` ${b.y}` : ""}`;
+}
+
+/** "November 2026" for a salary slip start date. */
+export function formatMonthOf(value: unknown): string {
+  const p = parseParts(value);
+  return p ? monthLabel(`${p.y}-${String(p.m).padStart(2, "0")}`) : "";
+}
+
+export type StatusTone = "success" | "warning" | "danger" | "info" | "neutral";
+
+/** Tone for an ERP document status chip (leave, requests, payslips). */
+export function statusTone(status: string): StatusTone {
+  const value = status.trim().toLowerCase();
+  if (["approved", "submitted", "paid", "present", "completed"].includes(value)) return "success";
+  if (["rejected", "cancelled", "absent"].includes(value)) return "danger";
+  if (["open", "pending", "draft", "half day"].includes(value)) return "warning";
+  return "info";
+}
