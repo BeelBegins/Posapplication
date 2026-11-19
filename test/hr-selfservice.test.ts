@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { advanceBalance, advanceRequest, approvalAction, approvalItems, base64FromDataUrl, canWithdrawLeave, expenseClaimRequest, formatBytes, profileUpdates, safePdfName, uploadProblem } from "../src/products/hr/selfservice";
+import { advanceBalance, advanceRequest, approvalAction, approvalItems, base64FromDataUrl, canWithdrawLeave, expenseClaimRequest, formatBytes, formatFullDate, profileUpdates, safePdfName, uploadProblem } from "../src/products/hr/selfservice";
 
 test("approvalItems keeps only pending requests and normalises fields", () => {
   const items = approvalItems({
@@ -71,4 +71,12 @@ test("small helpers", () => {
   assert.equal(safePdfName("payslip-2026-11.pdf"), "payslip-2026-11.pdf");
   assert.equal(safePdfName("../evil name"), "evil-name.pdf");
   assert.equal(safePdfName(""), "payslip.pdf");
+});
+
+test("formatFullDate keeps the year and rejects invalid dates", () => {
+  assert.equal(formatFullDate("2021-03-01"), "1 Mar 2021");
+  assert.equal(formatFullDate("2026-11-19 09:00:00"), "19 Nov 2026");
+  assert.equal(formatFullDate("2026-02-30"), "");
+  assert.equal(formatFullDate(""), "");
+  assert.equal(formatFullDate(null), "");
 });

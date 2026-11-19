@@ -485,3 +485,9 @@ input[type=file]{font-size:var(--fs-sm);max-width:100%}
 html[data-theme="dark"] .approvals-cta{background:rgba(217,119,6,.14)}
 html[data-theme="dark"] .list-row.notif.unread{background:rgba(16,163,127,.14)}
 html[data-theme="dark"] .segmented .seg.active{color:#fff}
+/* Phase 2 polish: keep row trails readable on 360px */
+.row-trail-stack{min-width:max-content;padding-left:8px}
+.row-trail-stack .link{padding:0;min-height:28px;white-space:nowrap}
+.pay-row .grow{min-width:0}
+.pay-row .grow strong{white-space:nowrap}
+.pay-trail b{white-space:nowrap}
