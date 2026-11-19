@@ -298,16 +298,19 @@ async function configure(baseUrl: string) {
 
 function setup(error = "") {
   stopCamera();
-  root.innerHTML = `${toastHtml()}<section class="setup"><div class="setup-card">
-    <div class="mark">${brandMark()}</div>
-    <div class="stack-sm"><p class="t-label">Employee workspace</p><h1 class="t-display">Aimatic HR</h1><p class="t-meta">Connect to your ERP, then sign in with your own employee account. Attendance, leave and pay stay on the server.</p></div>
-    ${error ? `<div class="banner danger">${esc(error)}</div>` : ""}
-    <form id="setup" class="stack">
-      ${field("ERP URL", `<input id="url" type="url" required placeholder="https://siezal.aimatic.tech" autocomplete="url">`)}
-      ${btn("Continue", { kind: "primary", block: true, attrs: 'type="submit"' })}
-    </form>
-    <p class="t-meta">v${esc(__APP_VERSION__)} · Public OAuth · No API secret</p>
-  </div></section>`;
+  root.innerHTML = `${toastHtml()}<section class="auth">
+    <div class="auth-hero">${brandMark()}<h1>Aimatic HR</h1><p>Attendance, leave and pay in one place.</p></div>
+    <div class="auth-card">
+      <div class="auth-step"><span class="auth-dot active">1</span><span class="auth-line"></span><span class="auth-dot">2</span></div>
+      <div class="stack-sm"><h2 class="t-title">Connect to your company</h2><p class="t-meta">Enter the ERP address your HR team gave you. You'll sign in with your own account next.</p></div>
+      ${error ? `<div class="banner danger">${esc(error)}</div>` : ""}
+      <form id="setup" class="stack">
+        ${field("Company ERP address", `<input id="url" type="url" required placeholder="https://yourcompany.aimatic.tech" autocomplete="url" inputmode="url">`)}
+        ${btn(`Continue ${icon("chevron-right", 18)}`, { kind: "primary", block: true, attrs: 'type="submit"' })}
+      </form>
+    </div>
+    <p class="auth-foot">${icon("shield", 14)}<span>Secure sign-in · no passwords stored in the app · v${esc(__APP_VERSION__)}</span></p>
+  </section>`;
   document.querySelector<HTMLFormElement>("#setup")!.onsubmit = async (event) => {
     event.preventDefault();
     try { await configure(document.querySelector<HTMLInputElement>("#url")!.value); signIn(); }
@@ -317,13 +320,20 @@ function setup(error = "") {
 
 function signIn() {
   stopCamera();
-  root.innerHTML = `${toastHtml()}<section class="setup"><div class="setup-card">
-    <div class="mark">${brandMark()}</div>
-    <div class="stack-sm"><p class="t-label">Aimatic HR</p><h1 class="t-display">Sign in</h1><p class="t-meta">Use your ERP account. The app cannot choose another employee.</p></div>
-    ${message ? `<div class="banner danger">${esc(message)}</div>` : ""}
-    ${btn(`${icon("log-in", 18)} Sign in with ERP`, { id: "login", kind: "primary", block: true })}
-    ${btn("Change ERP server", { id: "change-server", kind: "secondary", block: true })}
-  </div></section>`;
+  let host = "";
+  try { host = config?.baseUrl ? new URL(config.baseUrl).host : ""; } catch { host = config?.baseUrl || ""; }
+  root.innerHTML = `${toastHtml()}<section class="auth">
+    <div class="auth-hero">${brandMark()}<h1>Aimatic HR</h1><p>Attendance, leave and pay in one place.</p></div>
+    <div class="auth-card">
+      <div class="auth-step"><span class="auth-dot done">${icon("check", 12)}</span><span class="auth-line done"></span><span class="auth-dot active">2</span></div>
+      <div class="stack-sm"><h2 class="t-title">Sign in</h2><p class="t-meta">Use your own ERP account. Check-ins are always recorded for the signed-in employee.</p></div>
+      ${host ? `<div class="server-pill">${icon("check-circle", 16)}<span>Connected to <strong>${esc(host)}</strong></span></div>` : ""}
+      ${message ? `<div class="banner danger">${esc(message)}</div>` : ""}
+      ${btn(`${icon("log-in", 18)} Sign in with ERP`, { id: "login", kind: "primary", block: true })}
+      ${btn("Use a different company", { id: "change-server", kind: "text", block: true })}
+    </div>
+    <p class="auth-foot">${icon("shield", 14)}<span>You'll finish signing in on your company's page · v${esc(__APP_VERSION__)}</span></p>
+  </section>`;
   document.querySelector<HTMLButtonElement>("#login")!.onclick = async () => {
     try { await credentials!.login(); await loadContext(); }
     catch (error) { message = error instanceof Error ? error.message : "Sign in failed"; signIn(); }
@@ -346,7 +356,7 @@ function seedPreview(): void {
   };
   facePolicy = context.face_policy as Row;
   checkins = [
-    { log_type: "IN", time: "2026-11-17 09:02:11", shift: "General" },
+    { log_type: "IN", time: `${localIsoDate()} 09:02:11`, shift: "General" },
     { log_type: "OUT", time: "2026-11-16 18:11:04", shift: "General" },
   ];
   leaveRows = [{ leave_type: "Casual Leave", status: "Open", from_date: "2026-11-20", to_date: "2026-11-20" }];
@@ -433,9 +443,14 @@ async function refresh() {
 
 function home() {
   const latest = checkins[0];
-  const lastIn = latest && text(latest, "log_type") === "IN";
+  // Only today's punches decide the Today card; yesterday's last IN must not suggest "Check out".
+  const latestToday = latest && text(latest, "time").slice(0, 10) === localIsoDate() ? latest : undefined;
+  const lastIn = Boolean(latestToday) && text(latestToday, "log_type") === "IN";
+  const todayMeta = latestToday
+    ? `Last ${lastIn ? "check-in" : "check-out"} ${formatTime(text(latestToday, "time"))}`
+    : latest ? `Last punch ${formatDateTime(text(latest, "time"))}` : "Your first punch of the day will show here.";
   const todayCard = `<article class="card today-card">
-      <div class="today-head"><div><p class="t-label">Today</p><strong class="today-status">${latest ? (lastIn ? "Checked in" : "Checked out") : "Not checked in"}</strong><p class="t-meta">${latest ? esc(`Last ${lastIn ? "check-in" : "check-out"} ${formatDateTime(text(latest, "time"))}`) : "Your first punch of the day will show here."}</p></div>${enrollmentChip()}</div>
+      <div class="today-head"><div><p class="t-label">Today</p><strong class="today-status">${latestToday ? (lastIn ? "Checked in" : "Checked out") : "Not checked in"}</strong><p class="t-meta">${esc(todayMeta)}</p></div>${enrollmentChip()}</div>
       ${btn(`${icon(lastIn ? "log-out" : "log-in", 18)} ${lastIn ? "Check out" : "Check in"}`, { kind: "primary", block: true, attrs: 'data-screen="attendance"' })}
     </article>`;
   const actions: Array<[Screen, string, string]> = [["attendance", "map-pin", "Attendance"], ["calendar", "calendar", "Calendar"], ["leave", "clock", "Leave"], ["pay", "credit-card", "Payslips"]];
@@ -619,18 +634,17 @@ function enroll() {
   if (enrollStep === "pick") {
     return `<section class="stack">
       ${enrollStepper()}
-      <article class="card stack">
-        <p class="t-label">Manager enrollment</p>
-        <h2 class="t-title">Choose employee</h2>
-        <p class="t-meta">Completing this flow also finishes an existing Pending record for the same employee.</p>
-        <form id="enroll-search" class="stack">
-          ${field("Search directory", `<input id="enroll-query" value="${esc(enrollQuery)}" placeholder="Name, code, or department" autocomplete="off">`)}
-          ${btn(enrollSearching ? "Searching…" : `${icon("search", 16)} Search`, { kind: "secondary", block: true, disabled: enrollSearching || enrollBusy, attrs: 'type="submit"' })}
-        </form>
-        <div class="list">${picks || emptyState(icon("users", 28), "No employees yet", "Search the directory, then select who to enroll.")}</div>
-        ${selected ? `<div class="banner success">Selected ${esc(text(selected, "employee_name"))} (${esc(text(selected, "name"))})</div>` : `<div class="banner warn">Pick an employee to continue.</div>`}
-        ${btn("Continue to consent", { id: "enroll-next", kind: "primary", block: true, disabled: !enrollEmployee })}
-      </article>
+      <div class="stack-sm"><h2 class="t-title">Who are you enrolling?</h2><p class="t-meta">Finishing this also completes any Pending enrollment for the same person.</p></div>
+      <form id="enroll-search" class="search-bar">
+        <span class="search-icon" aria-hidden="true">${icon("search", 18)}</span>
+        <input id="enroll-query" value="${esc(enrollQuery)}" placeholder="Search name, code or department" autocomplete="off" aria-label="Search employees">
+        <button type="submit" class="btn btn-secondary search-go" ${enrollSearching || enrollBusy ? "disabled" : ""}>${enrollSearching ? "…" : "Search"}</button>
+      </form>
+      ${picks ? `<div class="list">${picks}</div>` : emptyState(icon("users", 24), "No employees found", "Search the directory, then pick who to enroll.")}
+      <div class="sticky-actions">
+        ${selected ? `<p class="t-meta">Selected <strong>${esc(text(selected, "employee_name"))}</strong> · ${esc(text(selected, "name"))}</p>` : `<p class="t-meta">Pick an employee to continue.</p>`}
+        ${btn(`Continue ${icon("chevron-right", 18)}`, { id: "enroll-next", kind: "primary", block: true, disabled: !enrollEmployee })}
+      </div>
     </section>`;
   }
 
@@ -638,9 +652,7 @@ function enroll() {
     return `<section class="stack">
       ${enrollStepper()}
       <article class="card stack">
-        <p class="t-label">Consent</p>
-        <h2 class="t-title">Record employee consent</h2>
-        <p class="t-meta">Policy <code>${esc(policyVersion)}</code> · attendance check-in/out only.</p>
+        <div class="card-head"><span class="row-icon in">${icon("shield", 18)}</span><div class="grow"><h2 class="t-title">Employee consent</h2><p class="t-meta">Used only for attendance check-in and check-out · policy ${esc(policyVersion)}</p></div></div>
         <ul class="t-meta bullet-list">
           <li>Encrypted face template is stored. Raw photos are not kept.</li>
           <li>No commercial face API is used.</li>
@@ -654,7 +666,7 @@ function enroll() {
         </button>
         <div class="grid-2">
           ${btn("Back", { id: "enroll-back", kind: "secondary", block: true })}
-          ${btn("Continue to capture", { id: "enroll-next", kind: "primary", block: true, disabled: !enrollConsent })}
+          ${btn("Continue", { id: "enroll-next", kind: "primary", block: true, disabled: !enrollConsent })}
         </div>
       </article>
     </section>`;
@@ -670,26 +682,24 @@ function enroll() {
     return `<section class="stack">
       ${enrollStepper()}
       <article class="card stack">
-        <p class="t-label">Capture</p>
-        <h2 class="t-title">Live face photos</h2>
-        <p class="t-meta">Center the face in the oval. Face a light source. Avoid backlight. Take 3 to 5 photos.</p>
-        <div class="banner">${esc(prompt)}</div>
+        <div class="row-between"><h2 class="t-title">Live face photos</h2><span class="chip ${enrollCaptures.length >= 3 ? "success" : "info"}">${enrollCaptures.length}/5</span></div>
+        <p class="t-meta">Face a light source, keep the face inside the oval, and take 3 to 5 photos.</p>
         ${stage}
-        ${captureThumbs(enrollCaptures)}
-        <div class="grid-2">
-          ${btn(cameraOpen ? "Camera on" : `${icon("camera", 16)} Open camera`, { id: "open-camera", kind: "secondary", block: true, disabled: enrollBusy || enrollCaptures.length >= 5 })}
-          ${btn(`Take photo (${enrollCaptures.length}/5)`, { id: "capture-enroll", kind: "primary", block: true, disabled: enrollBusy || !cameraOpen || enrollCaptures.length >= 5 })}
+        <div class="prompt-pill">${icon("alert-circle", 16)}<span>${esc(prompt)}</span></div>
+        <div class="capture-bar">
+          ${btn(cameraOpen || cameraStarting ? `${icon("x", 16)} Close` : `${icon("camera", 16)} Open camera`, { id: cameraOpen || cameraStarting ? "close-camera" : "open-camera", kind: "secondary", disabled: enrollBusy || (!(cameraOpen || cameraStarting) && enrollCaptures.length >= 5) })}
+          ${btn(`${icon("camera", 18)} Take photo`, { id: "capture-enroll", kind: "primary", disabled: enrollBusy || !cameraOpen || enrollCaptures.length >= 5 })}
         </div>
+        ${captureThumbs(enrollCaptures)}
         <div class="grid-2">
           ${btn("Remove last", { id: "retake-last", kind: "text", block: true, disabled: !enrollCaptures.length || enrollBusy })}
           ${btn("Clear all", { id: "clear-enroll", kind: "text", block: true, disabled: !enrollCaptures.length || enrollBusy })}
         </div>
-        <div class="grid-2">
-          ${btn("Back", { id: "enroll-back", kind: "secondary", block: true })}
-          ${btn("Review photos", { id: "enroll-next", kind: "primary", block: true, disabled: enrollCaptures.length < 3 })}
-        </div>
-        ${btn("Close camera", { id: "close-camera", kind: "secondary", block: true, disabled: !(cameraOpen || cameraStarting) })}
       </article>
+      <div class="grid-2">
+        ${btn("Back", { id: "enroll-back", kind: "secondary", block: true })}
+        ${btn(`Review ${icon("chevron-right", 18)}`, { id: "enroll-next", kind: "primary", block: true, disabled: enrollCaptures.length < 3 })}
+      </div>
     </section>`;
   }
 
@@ -697,8 +707,7 @@ function enroll() {
   return `<section class="stack">
     ${enrollStepper()}
     <article class="card stack">
-      <p class="t-label">Review & submit</p>
-      <h2 class="t-title">Complete enrollment</h2>
+      <h2 class="t-title">Review and submit</h2>
       <div class="list-row">${avatar(text(selected, "employee_name") || enrollEmployee)}<div class="grow"><strong>${esc(text(selected, "employee_name") || enrollEmployee)}</strong><span class="t-meta">${esc(enrollEmployee)} · consent ${esc(policyVersion)} · ${enrollCaptures.length} photos</span></div></div>
       ${captureThumbs(enrollCaptures)}
       <div class="banner">Submitting creates or updates this employee\u2019s face enrollment, including any Pending record.</div>
@@ -757,7 +766,7 @@ function render(next: Screen = screen) {
   if (previewTheme === "light" || previewTheme === "dark") document.documentElement.dataset.theme = previewTheme;
   document.documentElement.dataset.uiReady = "0";
   if (loading) {
-    root.innerHTML = `${toastHtml()}<section class="setup"><div class="setup-card"><p class="t-label">Loading</p><div class="skeleton" aria-busy="true">${loadingSkeleton(4)}</div><p class="t-meta">${esc(loading)}</p></div></section>`;
+    root.innerHTML = `${toastHtml()}<section class="auth"><div class="auth-hero">${brandMark()}<h1>Aimatic HR</h1><p>${esc(loading)}…</p></div><div class="auth-card"><div class="skeleton" aria-busy="true">${loadingSkeleton(4)}</div></div></section>`;
     return;
   }
   const pages: Record<Screen, () => string> = { home, attendance, calendar: calendarScreen, leave, pay, enroll, profile };

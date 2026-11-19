@@ -11,13 +11,19 @@ test("formatDay / formatDateTime / formatTime use ERP wall-clock", () => {
   assert.equal(formatTime("2026-11-17"), "");
   assert.equal(formatDay("garbage"), "garbage");
   assert.equal(formatDay(undefined), "");
+  assert.equal(formatDay("2026-02-30"), "2026-02-30");
+  assert.equal(formatDay("2026-13-01"), "2026-13-01");
+  assert.equal(formatDateTime("2026-11-17 25:00:00"), "2026-11-17 25:00:00");
+  assert.equal(formatDateTime("2026-11-17 09:02:11junk"), "2026-11-17 09:02:11junk");
+  assert.equal(formatDateTime("2026-11-17 09:02:11.123456"), "Tue 17 Nov · 09:02");
+  assert.equal(formatDateTime("2026-11-17T09:02:00+05:00"), "Tue 17 Nov · 09:02");
 });
 
 test("formatDateRange", () => {
   assert.equal(formatDateRange("2026-11-20", "2026-11-20"), "20 Nov");
   assert.equal(formatDateRange("2026-11-20", "2026-11-22"), "20–22 Nov");
   assert.equal(formatDateRange("2026-11-30", "2026-12-02"), "30 Nov – 2 Dec");
-  assert.equal(formatDateRange("2026-12-30", "2027-01-02"), "30 Dec – 2 Jan 2027");
+  assert.equal(formatDateRange("2026-12-30", "2027-01-02"), "30 Dec 2026 – 2 Jan 2027");
   assert.equal(formatDateRange("", "2026-01-01"), "");
 });
 
