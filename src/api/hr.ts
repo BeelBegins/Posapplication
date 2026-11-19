@@ -25,6 +25,7 @@ export function createHrApi(client: ApiClient) {
     ticketAction: (body: Record<string, unknown>) => ops("ticket_action", body),
     getPolicies: () => ops("get_policies"),
     getPolicy: (body: { name: string }) => ops("get_policy", body),
+    getPolicyAttachment: (body: { name: string }) => ops("get_policy_attachment", body),
     acknowledgePolicy: (body: { name: string; policy_version: number }) => ops("acknowledge_policy", body),
     getDocumentRequests: () => ops("get_document_requests"),
     createLetterRequest: (body: Record<string, unknown>) => ops("create_letter_request", body),
