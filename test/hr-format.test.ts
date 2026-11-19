@@ -34,3 +34,9 @@ test("formatMonthOf and statusTone", () => {
   assert.equal(statusTone("Open"), "warning");
   assert.equal(statusTone("Something"), "info");
 });
+
+test("formatters reject invalid seconds and offsets", () => {
+  assert.equal(formatDateTime("2026-11-17 09:02:99"), "2026-11-17 09:02:99");
+  assert.equal(formatDateTime("2026-11-17T09:02+99:99"), "2026-11-17T09:02+99:99");
+  assert.equal(formatDateTime("2026-11-17T09:02:30+05:00"), "Tue 17 Nov · 09:02");
+});
