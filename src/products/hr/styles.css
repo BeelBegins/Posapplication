@@ -542,3 +542,15 @@ input[type=range]{width:100%;accent-color:var(--brand-600);min-height:var(--touc
 .neg{color:var(--danger-700,#c0392b)}
 html[data-theme="dark"] .pick-row:has(input:checked){background:rgba(16,163,127,.18)}
 .field input[type=range]{background:transparent;border:0;padding:0;box-shadow:none;height:var(--touch)}
+
+/* ===== Phase 4 surveys ===== */
+fieldset.q{border:0;margin:0;padding:0;display:grid;gap:8px;min-width:0}
+.q-label{font-weight:700;margin:0}
+.rating-row{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}
+.rating-pill{position:relative}
+.rating-pill input{position:absolute;opacity:0;inset:0}
+.rating-pill span{display:grid;place-items:center;height:48px;border-radius:12px;border:1px solid var(--border);font-weight:800;background:var(--surface)}
+.rating-pill input:checked+span{background:var(--brand-600);color:#fff;border-color:var(--brand-600)}
+.rating-pill input:focus-visible+span{outline:2px solid var(--brand-600);outline-offset:2px}
+.pick-row input[type=checkbox]{width:20px;height:20px;accent-color:var(--brand-600);flex:0 0 auto}
+.list-row.nav-row[disabled]{opacity:.75;cursor:default}
