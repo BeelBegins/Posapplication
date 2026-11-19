@@ -1115,7 +1115,7 @@ async function openScreenData(next: Screen) {
     else if (next === "notifications") { const data = await payload(await api.getNotifications()); notifications = list(data.items); unreadCount = Number(data.unread) || 0; }
     else if (next === "editprofile") profileData = ((await payload(await api.getProfile())).profile || {}) as Row;
     else if (next === "documents") documents = list(await payload(await api.getDocuments()));
-    else if (next === "help") helpData = await payload(await api.getHelp({ query: helpQuery }));
+    else if (next === "help") { const asked = helpQuery; const data = await payload(await api.getHelp({ query: asked })); if (asked !== helpQuery) return; helpData = data; }
     else if (next === "policies") { const data = await payload(await api.getPolicies()); policies = list(data.policies); policyPending = Number(data.pending) || 0; }
     else if (next === "requests") { const data = await payload(await api.getDocumentRequests()); docRequests = list(data.requests); letterTypes = (Array.isArray(data.letter_types) ? data.letter_types : []).map(String); }
     else if (next === "assets") { const data = await payload(await api.getAssets()); myAssets = list(data.assets); assetRequests = list(data.requests); }
@@ -1556,7 +1556,7 @@ function bindHrOps() {
       const doc = policyDetail || {};
       void runSelfService("Saving", async () => {
         await payload(await api!.acknowledgePolicy({ name: text(doc, "name"), policy_version: Number(doc.policy_version) || 1 }));
-        policyDetail = { ...doc, acknowledged: true };
+        if (policyWanted === text(doc, "name") || !policyWanted) policyDetail = { ...doc, acknowledged: true };
         policies = policies.map((row) => (text(row, "name") === text(doc, "name") ? { ...row, acknowledged: true, pending: false } : row));
         policyPending = policies.filter((row) => row.pending).length;
         setToast("Policy acknowledged", "success");
