@@ -57,7 +57,7 @@ import {
 
 declare const __APP_VERSION__: string;
 type Row = Record<string, unknown>;
-type Screen = "home" | "attendance" | "calendar" | "leave" | "pay" | "enroll" | "profile" | "approvals" | "expenses" | "notifications" | "editprofile" | "documents" | "help" | "ticket" | "policies" | "policy" | "requests" | "assets" | "notices" | "goals" | "goal" | "meetings" | "meeting" | "points" | "surveys" | "survey";
+type Screen = "home" | "attendance" | "calendar" | "leave" | "pay" | "enroll" | "profile" | "approvals" | "expenses" | "notifications" | "editprofile" | "documents" | "help" | "ticket" | "policies" | "policy" | "requests" | "assets" | "notices" | "goals" | "goal" | "meetings" | "meeting" | "points" | "surveys" | "survey" | "hiring" | "pipeline" | "applicant";
 type PreviewScreen = Screen | "setup" | "signin";
 type EnrollStep = "pick" | "consent" | "capture" | "review";
 type HrApi = ReturnType<typeof createHrApi>;
@@ -156,6 +156,13 @@ let colleagueResults: Row[] = [];
 let colleagueQuery = "";
 let surveys: Row[] = [];
 let surveysPending = 0;
+let openings: Row[] = [];
+let hiringIsHr = false;
+let pipelineWanted = "";
+let pipelineData: Row | null = null;
+let pipelineStage = "";
+let applicantWanted = "";
+let applicantDetail: Row | null = null;
 let surveyDetail: Row | null = null;
 let surveyWanted = "";
 
@@ -243,7 +250,7 @@ function brandMark(): string {
   return `<span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 3.5 4.5 7.2v4.9c0 4.6 3.1 8.8 7.5 10.4 4.4-1.6 7.5-5.8 7.5-10.4V7.2L12 3.5Z" stroke="currentColor" stroke-width="1.8"/><path d="M9.2 12.2h5.6M12 9.4v5.6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span>`;
 }
 
-const screenTitles: Record<Screen, string> = { home: "Home", attendance: "Attendance", calendar: "Attendance calendar", leave: "Leave", pay: "Payslips", enroll: "Face enrollment", profile: "Profile", approvals: "Approvals", expenses: "Expenses & advances", notifications: "Notifications", editprofile: "Edit details", documents: "My documents", help: "Help desk", ticket: "Ticket", policies: "Company policies", policy: "Policy", requests: "Letters & documents", assets: "My assets", notices: "Notices", goals: "My goals", goal: "Goal check-in", meetings: "1-on-1s", meeting: "1-on-1", points: "Bonus points", surveys: "Surveys", survey: "Survey" };
+const screenTitles: Record<Screen, string> = { home: "Home", attendance: "Attendance", calendar: "Attendance calendar", leave: "Leave", pay: "Payslips", enroll: "Face enrollment", profile: "Profile", approvals: "Approvals", expenses: "Expenses & advances", notifications: "Notifications", editprofile: "Edit details", documents: "My documents", help: "Help desk", ticket: "Ticket", policies: "Company policies", policy: "Policy", requests: "Letters & documents", assets: "My assets", notices: "Notices", goals: "My goals", goal: "Goal check-in", meetings: "1-on-1s", meeting: "1-on-1", points: "Bonus points", surveys: "Surveys", survey: "Survey", hiring: "Hiring", pipeline: "Pipeline", applicant: "Applicant" };
 
 /** Consistent page header: Home shows the greeting; sub-screens get a back arrow. */
 function pageHeader(current: Screen): string {
@@ -253,7 +260,7 @@ function pageHeader(current: Screen): string {
     const name = text(context, "employee_name") || "Employee";
     return `<header class="page-header home">${avatar(name)}<div class="grow"><p class="ph-kicker">${esc(greet)}</p><h1 class="ph-title">${esc(name.split(/\s+/)[0] || name)}</h1></div><button type="button" class="ph-action bell" data-screen="notifications" aria-label="${unreadCount ? `Notifications, ${unreadCount} unread` : "Notifications"}">${hrIcon("bell", 20)}${unreadCount ? `<span class="ph-badge">${unreadCount > 99 ? "99+" : unreadCount}</span>` : ""}</button><button type="button" class="ph-action" id="refresh" aria-label="Refresh">${icon("refresh", 20)}</button></header>`;
   }
-  const backTargets: Partial<Record<Screen, Screen>> = { enroll: "home", approvals: "home", expenses: "home", notifications: "home", editprofile: "profile", documents: "profile", help: "home", ticket: "help", policies: "home", policy: "policies", requests: "home", assets: "home", notices: "home", goals: "home", goal: "goals", meetings: "home", meeting: "meetings", points: "home", surveys: "home", survey: "surveys" };
+  const backTargets: Partial<Record<Screen, Screen>> = { enroll: "home", approvals: "home", expenses: "home", notifications: "home", editprofile: "profile", documents: "profile", help: "home", ticket: "help", policies: "home", policy: "policies", requests: "home", assets: "home", notices: "home", goals: "home", goal: "goals", meetings: "home", meeting: "meetings", points: "home", surveys: "home", survey: "surveys", hiring: "home", pipeline: "hiring", applicant: "pipeline" };
   const back: Screen | null = current === "calendar" ? calendarReturn : backTargets[current] || null;
   return `<header class="page-header">${back ? `<button type="button" class="ph-action" data-screen="${back}" aria-label="Back">${icon("chevron-left", 22)}</button>` : ""}<div class="grow"><h1 class="ph-title">${esc(screenTitles[current])}</h1></div></header>`;
 }
@@ -272,6 +279,8 @@ const HR_ICONS: Record<string, string> = {
   box: '<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/>',
   send: '<line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>',
   target: '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>',
+  briefcase: '<rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/><path d="M2 13h20"/>',
+  star: '<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>',
   users: '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
   award: '<circle cx="12" cy="8" r="7"/><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/>',
   check: '<polyline points="20 6 9 17 4 12"/>',
@@ -379,6 +388,8 @@ async function ensureBackHandler(): Promise<void> {
       if (screen === "goal") { render("goals"); return; }
       if (screen === "meeting") { render("meetings"); return; }
       if (screen === "survey") { render("surveys"); return; }
+      if (screen === "applicant") { render("pipeline"); return; }
+      if (screen === "pipeline") { render("hiring"); return; }
       if (screen !== "home") { render("home"); return; }
       void App.exitApp();
     });
@@ -566,6 +577,26 @@ function seedPreview(): void {
     { name: "HR-SRV-00003", title: "Canteen menu feedback", closes_on: "2026-11-22", anonymous: 0, answered: true },
   ];
   surveysPending = 1;
+  hiringIsHr = true;
+  openings = [
+    { name: "HR-OPN-2026-0007", job_title: "Store Supervisor", location: "Lahore DHA", closes_on: "2026-12-05", vacancies: 2, applicants: 14 },
+    { name: "HR-OPN-2026-0006", job_title: "Cashier", location: "Lahore Gulberg", closes_on: "2026-11-28", vacancies: 3, applicants: 23 },
+  ];
+  pipelineWanted = "HR-OPN-2026-0007";
+  pipelineStage = "Interview";
+  const cand = (name: string, applicant_name: string, hiring_stage: string, applicant_rating: number, source: string, creation: string) => ({ name, applicant_name, hiring_stage, applicant_rating, source, creation });
+  pipelineData = { opening: "HR-OPN-2026-0007", title: "Store Supervisor", role: "hr", stages: ["Applied", "Screening", "Interview", "Offer", "On Hold", "Hired", "Rejected"], pools: ["Retail leads 2026", "Future supervisors"], columns: [
+    { stage: "Applied", applicants: [cand("HR-APP-2026-00141", "Ali Hassan", "Applied", 0, "Website", "2026-11-18 10:00:00"), cand("HR-APP-2026-00139", "Mehwish Akram", "Applied", 0, "Rozee.pk", "2026-11-17 16:00:00"), cand("HR-APP-2026-00137", "Faisal Iqbal", "Applied", 0, "Website", "2026-11-17 09:00:00")] },
+    { stage: "Screening", applicants: [cand("HR-APP-2026-00131", "Zara Siddiqui", "Screening", 0.6, "Referral", "2026-11-14 11:00:00"), cand("HR-APP-2026-00128", "Imran Shah", "Screening", 0.4, "Website", "2026-11-13 12:00:00")] },
+    { stage: "Interview", applicants: [cand("HR-APP-2026-00122", "Ayesha Noor", "Interview", 0.8, "Referral", "2026-11-10 10:00:00"), cand("HR-APP-2026-00119", "Bilal Ahmed", "Interview", 0.6, "LinkedIn", "2026-11-09 15:00:00")] },
+    { stage: "Offer", applicants: [cand("HR-APP-2026-00110", "Kamran Javed", "Offer", 1, "Referral", "2026-11-04 10:00:00")] },
+    { stage: "On Hold", applicants: [] }, { stage: "Hired", applicants: [] },
+    { stage: "Rejected", applicants: [cand("HR-APP-2026-00125", "Usama Tariq", "Rejected", 0.2, "Website", "2026-11-11 10:00:00")] },
+  ] };
+  applicantWanted = "HR-APP-2026-00122";
+  applicantDetail = { name: "HR-APP-2026-00122", applicant_name: "Ayesha Noor", job_title: "HR-OPN-2026-0007", hiring_stage: "Interview", status: "Shortlisted", source: "Referral", applicant_rating: 0.8, email_id: "ayesha.noor@example.com", phone_number: "+92 300 1234567", creation: "2026-11-10 10:00:00", has_resume: true, role: "hr",
+    stages: ["Applied", "Screening", "Interview", "Offer", "On Hold", "Hired", "Rejected"], pools: ["Retail leads 2026", "Future supervisors"],
+    comments: [{ comment_by: "Sara Khan", content: "Strong on inventory control. Second interview with the area manager on Monday.", creation: "2026-11-17 17:30:00" }, { comment_by: "Hina Malik", content: "Phone screen done, good communication.", creation: "2026-11-12 12:10:00" }] };
   surveyWanted = "HR-SRV-00004";
   surveyDetail = { name: "HR-SRV-00004", title: "Q4 engagement pulse", description: "Five quick questions, about two minutes.", anonymous: 1, answered: false, questions: [
     { label: "How happy are you at work this month?", question_type: "Rating", required: 1 },
@@ -614,9 +645,11 @@ async function refresh() {
       optional(async () => payload(await api!.getPolicies())),
       optional(async () => payload(await api!.getDisciplinary())),
       optional(async () => payload(await api!.getSurveys())),
+      optional(async () => payload(await api!.getOpenings())),
     ]);
     const results = await Promise.all(tasks);
-    const [approvalData, expenseData, notificationData, policyData, noticeData, surveyData] = await extra;
+    const [approvalData, expenseData, notificationData, policyData, noticeData, surveyData, openingData] = await extra;
+    if (openingData) { openings = list(openingData.openings); hiringIsHr = Boolean(openingData.is_hr); }
     if (surveyData) { surveys = list(surveyData.surveys); surveysPending = Number(surveyData.pending) || 0; }
     if (policyData) { policies = list(policyData.policies); policyPending = Number(policyData.pending) || 0; }
     if (noticeData) { notices = list(noticeData.notices); noticesPending = Number(noticeData.pending) || 0; }
@@ -682,6 +715,7 @@ function home() {
     ["meetings", "users", "1-on-1s", "Agenda, notes and action items with your manager"],
     ["points", "award", "Bonus points", "Thank a colleague, see your points"],
   ];
+  if (openings.length || hiringIsHr) growth.push(["hiring", "briefcase", "Hiring", openings.length ? `${openings.length} open ${openings.length === 1 ? "role" : "roles"} · ${openings.reduce((n, o) => n + (Number(o.applicants) || 0), 0)} applicants` : "No open roles"]);
   const growthHtml = `<div class="stack-sm">${sectionTitle("Growth")}<div class="list">${growth.map(([id, ic, label, sub]) => `<button type="button" class="list-row nav-row" data-screen="${id}"><span class="row-icon">${hrIcon(ic, 18)}</span><div class="grow"><strong>${esc(label)}</strong><span class="t-meta">${esc(sub)}</span></div>${icon("chevron-right", 18)}</button>`).join("")}</div></div>`;
   const servicesHtml = `<div class="stack-sm">${sectionTitle("HR services")}<div class="list">${services.map(([id, ic, label, sub, count]) => `<button type="button" class="list-row nav-row" data-screen="${id}"><span class="row-icon${count ? " warn" : ""}">${hrIcon(ic, 18)}</span><div class="grow"><strong>${esc(label)}</strong><span class="t-meta">${esc(sub)}</span></div>${count ? `<span class="count-pill warn">${count}</span>` : ""}${icon("chevron-right", 18)}</button>`).join("")}</div></div>`;
   return `<section class="stack-lg">
@@ -1174,7 +1208,7 @@ function patchLiveParts(current: Screen) {
     if (assetField) assetField.hidden = !myAssets.length;
   }
   if (current === "points") syncPointLimits();
-  if (screen === current) { bindLiveRows(); bindTalentRows(); }
+  if (screen === current) { bindLiveRows(); bindTalentRows(); bindHiringRows(); }
   const select = current === "expenses" ? document.querySelector<HTMLSelectElement>('#expense-form select[name="expenseType"]') : null;
   const types = list(expenseOptions.types).map((row) => text(row, "name")).filter(Boolean);
   if (select && types.length) {
@@ -1210,6 +1244,7 @@ async function openScreenData(next: Screen) {
     else if (next === "meetings") { const data = await payload(await api.getOneOnOnes()); meetings = list(data.meetings); meetingReports = list(data.reports); meetingHasManager = Boolean(data.has_manager); }
     else if (next === "points") pointsData = await payload(await api.getPoints());
     else if (next === "surveys") { const data = await payload(await api.getSurveys()); surveys = list(data.surveys); surveysPending = Number(data.pending) || 0; }
+    else if (next === "hiring") { const data = await payload(await api.getOpenings()); openings = list(data.openings); hiringIsHr = Boolean(data.is_hr); }
     else if (next === "notices") { const data = await payload(await api.getDisciplinary()); notices = list(data.notices); noticesPending = Number(data.pending) || 0; }
     else return;
     if (screen !== next) return;
@@ -1636,7 +1671,7 @@ function goalScreen() {
     </article>
     <form id="goal-checkin" class="card stack">
       <h2 class="t-title">New check-in</h2>
-      <div class="field"><label for="gc-progress">Progress <output id="gc-out">${pct}%</output></label><input id="gc-progress" name="progress" type="range" min="0" max="100" step="5" value="${pct}"></div>
+      <div class="field"><label for="gc-progress">Progress <output id="gc-out">${pct}%</output></label><input id="gc-progress" name="progress" type="range" min="0" max="100" step="5" value="${pct}" style="--pct:${pct}%"></div>
       ${field("Confidence", `<select name="confidence">${["On track", "At risk", "Off track"].map((v) => `<option${v === conf ? " selected" : ""}>${v}</option>`).join("")}</select>`)}
       ${field("What changed?", `<textarea name="note" maxlength="1000" placeholder="Wins, blockers, help you need"></textarea>`)}
       ${btn("Save check-in", { kind: "primary", block: true, attrs: 'type="submit"' })}
@@ -1765,6 +1800,189 @@ function syncPointLimits() {
   if (redeem) redeem.max = String(Math.max(balance, minRedeem));
   setLock(redeem, balance < minRedeem);
   setLock(document.querySelector<HTMLButtonElement>('#points-redeem button[type="submit"]'), balance < minRedeem);
+}
+
+// ---------------------------------------------------------------- Phase 4 hiring
+
+function stars(rating: unknown): string {
+  const n = Math.round((Number(rating) || 0) * 5);
+  if (!n) return "";
+  return `<span class="stars" aria-label="Rated ${n} of 5">${[1, 2, 3, 4, 5].map((i) => `<span class="${i <= n ? "on" : ""}">${hrIcon("star", 12)}</span>`).join("")}</span>`;
+}
+
+function stageTone(stage: string): "neutral" | "success" | "warning" | "danger" | "info" {
+  return stage === "Hired" ? "success" : stage === "Rejected" ? "danger" : stage === "Offer" ? "info" : stage === "On Hold" ? "warning" : "neutral";
+}
+
+function hiringScreen() {
+  if (!openings.length) return emptyState(hrIcon("briefcase", 26), "No open roles", hiringIsHr ? "Open a Job Opening on the desk and it will appear here." : "Roles you are the hiring manager for will appear here.");
+  return `<section class="stack-sm" data-live="openings">${sectionTitle("Open roles")}<div class="list">${openings.map((o) => {
+    const meta = [text(o, "location"), Number(o.vacancies) ? `${Number(o.vacancies)} to hire` : "", text(o, "closes_on") ? `closes ${formatDay(text(o, "closes_on"))}` : ""].filter(Boolean).join(" · ");
+    return `<button type="button" class="list-row nav-row" data-opening="${esc(text(o, "name"))}"><span class="row-icon">${hrIcon("briefcase", 18)}</span><div class="grow"><strong>${esc(text(o, "job_title") || text(o, "name"))}</strong><span class="t-meta">${esc(meta)}</span></div><span class="count-pill">${Number(o.applicants) || 0}</span>${icon("chevron-right", 18)}</button>`;
+  }).join("")}</div></section>`;
+}
+
+function pipelineScreen() {
+  const p = pipelineData;
+  if (p && p.error && text(p, "opening") === pipelineWanted) return `<section class="stack">${emptyState(icon("alert-circle", 26), "Could not open the pipeline", text(p, "error"))}${btn("Try again", { kind: "primary", block: true, attrs: 'data-pipeline-retry="1"' })}</section>`;
+  if (!p || text(p, "opening") !== pipelineWanted) return `<div class="skeleton" aria-busy="true">${loadingSkeleton(5)}</div>`;
+  const columns = list(p.columns);
+  const total = columns.reduce((n, c) => n + list(c.applicants).length, 0);
+  const current = columns.find((c) => text(c, "stage") === pipelineStage) || columns.find((c) => list(c.applicants).length) || columns[0];
+  const stage = current ? text(current, "stage") : "";
+  const rows = current ? list(current.applicants) : [];
+  const tabs = `<div class="stage-tabs" role="tablist" aria-label="Stages">${columns.map((c) => { const st = text(c, "stage"); const on = st === stage; return `<button type="button" role="tab" class="stage-tab${on ? " active" : ""}" data-stage="${esc(st)}" aria-selected="${on}">${esc(st)}<span class="stage-count">${list(c.applicants).length}</span></button>`; }).join("")}</div>`;
+  const body = rows.length
+    ? `<div class="list">${rows.map((a) => `<button type="button" class="list-row nav-row" data-applicant="${esc(text(a, "name"))}">${avatar(text(a, "applicant_name"))}<div class="grow"><strong>${esc(text(a, "applicant_name"))}</strong><span class="t-meta">Applied ${esc(formatDay(text(a, "creation")))}${text(a, "source") ? ` · ${esc(text(a, "source"))}` : ""}</span></div>${stars(a.applicant_rating)}${icon("chevron-right", 18)}</button>`).join("")}</div>`
+    : `<p class="t-meta center pad">Nobody in ${esc(stage)} yet.</p>`;
+  return `<section class="stack-lg" data-live="pipeline">
+    <article class="card row-between"><div><h2 class="t-title">${esc(text(p, "title") || text(p, "opening"))}</h2><span class="t-meta">${total} applicant${total === 1 ? "" : "s"}${text(p, "role") === "manager" ? " · you are the hiring manager" : ""}</span></div><span class="row-icon">${hrIcon("briefcase", 18)}</span></article>
+    ${tabs}
+    ${body}
+  </section>`;
+}
+
+function applicantScreen() {
+  const a = applicantDetail;
+  if (a && a.error && text(a, "name") === applicantWanted) return `<section class="stack">${emptyState(icon("alert-circle", 26), "Could not open the applicant", text(a, "error"))}${btn("Try again", { kind: "primary", block: true, attrs: 'data-applicant-retry="1"' })}</section>`;
+  if (!a || text(a, "name") !== applicantWanted) return `<div class="skeleton" aria-busy="true">${loadingSkeleton(5)}</div>`;
+  const hr = text(a, "role") === "hr";
+  const stage = text(a, "hiring_stage") || "Applied";
+  const stagesList = (Array.isArray(a.stages) ? a.stages : []).map(String);
+  const pools = (Array.isArray(a.pools) ? a.pools : []).map(String);
+  const comments = list(a.comments);
+  const contact = hr ? `<div class="list">
+      ${text(a, "email_id") ? `<a class="list-row nav-row" href="mailto:${esc(text(a, "email_id"))}"><span class="row-icon">${icon("mail", 18)}</span><div class="grow"><strong>${esc(text(a, "email_id"))}</strong><span class="t-meta">Email</span></div></a>` : ""}
+      ${text(a, "phone_number") ? `<a class="list-row nav-row" href="tel:${esc(text(a, "phone_number").replace(/[^+0-9]/g, ""))}"><span class="row-icon">${icon("phone", 18)}</span><div class="grow"><strong>${esc(text(a, "phone_number"))}</strong><span class="t-meta">Phone</span></div></a>` : ""}
+      ${a.has_resume ? `<button type="button" class="list-row nav-row" data-cv="1"><span class="row-icon">${hrIcon("file", 18)}</span><div class="grow"><strong>CV</strong><span class="t-meta">Open or save</span></div>${hrIcon("download", 18)}</button>` : ""}
+    </div>` : `<div class="banner info"><span>Contact details and CVs stay with HR. Leave your feedback below.</span></div>`;
+  return `<section class="stack-lg">
+    <article class="card stack-sm" data-live="applicant-head">
+      <div class="row gap">${avatar(text(a, "applicant_name"))}<div class="grow"><h2 class="t-title">${esc(text(a, "applicant_name"))}</h2><span class="t-meta">${esc(text(pipelineData || {}, "title") || text(a, "job_title"))} · applied ${esc(formatDay(text(a, "creation")))}</span></div>${statusBadge(stage, stageTone(stage))}</div>
+      ${stars(a.applicant_rating) ? `<div class="row gap t-meta">${stars(a.applicant_rating)}${text(a, "source") ? `<span>· ${esc(text(a, "source"))}</span>` : ""}</div>` : text(a, "source") ? `<span class="t-meta">Source: ${esc(text(a, "source"))}</span>` : ""}
+    </article>
+    ${contact}
+    ${hr ? `<form id="stage-form" class="card stack">
+      <h2 class="t-title">Move to stage</h2>
+      ${field("Stage", `<select name="stage">${stagesList.map((st) => `<option${st === stage ? " selected" : ""}>${esc(st)}</option>`).join("")}</select>`)}
+      ${field("Note (optional)", `<textarea name="note" maxlength="2000" placeholder="Why the move? Visible to HR and the hiring manager."></textarea>`)}
+      ${btn("Move applicant", { kind: "primary", block: true, attrs: 'type="submit"' })}
+    </form>` : ""}
+    <form id="note-form" class="card stack">
+      <h2 class="t-title">Add feedback</h2>
+      ${field("Note", `<textarea name="note" maxlength="2000" required placeholder="Interview notes, strengths, concerns"></textarea>`)}
+      ${btn("Add note", { kind: hr ? "secondary" : "primary", block: true, attrs: 'type="submit"' })}
+    </form>
+    ${hr && pools.length ? `<form id="pool-form" class="card stack">
+      <h2 class="t-title">Save to a talent pool</h2>
+      ${field("Pool", `<select name="pool">${pools.map((p) => `<option>${esc(p)}</option>`).join("")}</select>`)}
+      ${btn("Add to pool", { kind: "secondary", block: true, attrs: 'type="submit"' })}
+    </form>` : ""}
+    <div class="stack-sm" data-live="comments">${sectionTitle("Feedback")}${comments.length ? `<div class="list">${comments.map((c) => `<article class="list-row align-top">${avatar(text(c, "comment_by"))}<div class="grow"><strong>${esc(text(c, "comment_by"))}</strong><span class="t-meta">${esc(formatDay(text(c, "creation")))}</span><p class="t-body">${esc(text(c, "content"))}</p></div></article>`).join("")}</div>` : `<p class="t-meta">No feedback yet.</p>`}</div>
+  </section>`;
+}
+
+async function loadPipeline(opening: string) {
+  if (previewMode || !api) { render("pipeline"); return; }
+  try {
+    const data = await payload(await api.getPipeline({ opening }));
+    if (pipelineWanted !== opening) return;
+    pipelineData = data;
+  } catch (error) {
+    if (pipelineWanted === opening) pipelineData = { opening, error: error instanceof Error ? error.message : "Check your connection and try again." };
+  }
+  if (screen === "pipeline" && pipelineWanted === opening) render("pipeline");
+}
+
+async function loadApplicant(name: string) {
+  if (previewMode || !api) { render("applicant"); return; }
+  try {
+    const data = await payload(await api.getApplicant({ name }));
+    if (applicantWanted !== name) return;
+    applicantDetail = data;
+  } catch (error) {
+    if (applicantWanted === name) applicantDetail = { name, error: error instanceof Error ? error.message : "Check your connection and try again." };
+  }
+  if (screen === "applicant" && applicantWanted === name) render("applicant");
+}
+
+function bindHiringRows() {
+  document.querySelectorAll<HTMLButtonElement>("[data-opening]").forEach((button) => {
+    button.onclick = () => {
+      const opening = button.dataset.opening || "";
+      if (!(previewMode && text(pipelineData || {}, "opening") === opening)) { pipelineData = null; pipelineStage = ""; }
+      pipelineWanted = opening;
+      render("pipeline");
+      void loadPipeline(opening);
+    };
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-stage]").forEach((button) => {
+    button.onclick = () => { pipelineStage = button.dataset.stage || ""; render("pipeline"); };
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-applicant]").forEach((button) => {
+    button.onclick = () => {
+      const name = button.dataset.applicant || "";
+      if (!(previewMode && text(applicantDetail || {}, "name") === name)) applicantDetail = null;
+      applicantWanted = name;
+      render("applicant");
+      void loadApplicant(name);
+    };
+  });
+}
+
+function bindHiring() {
+  bindHiringRows();
+  const retryPipeline = document.querySelector<HTMLButtonElement>("[data-pipeline-retry]");
+  if (retryPipeline) retryPipeline.onclick = () => { pipelineData = null; render("pipeline"); void loadPipeline(pipelineWanted); };
+  const retryApplicant = document.querySelector<HTMLButtonElement>("[data-applicant-retry]");
+  if (retryApplicant) retryApplicant.onclick = () => { applicantDetail = null; render("applicant"); void loadApplicant(applicantWanted); };
+  const cv = document.querySelector<HTMLButtonElement>("[data-cv]");
+  if (cv) cv.onclick = () => {
+    const name = applicantWanted;
+    void runSelfService("Opening CV", async () => {
+      const data = await payload(await api!.getResume({ name }));
+      await saveFile(text(data, "filename") || "cv.pdf", text(data, "content"));
+    }, "applicant");
+  };
+  const refreshAfter = async (name: string) => {
+    const data = await payload(await api!.getApplicant({ name }));
+    if (applicantWanted === name) applicantDetail = data;
+    if (pipelineWanted) { try { const p = await payload(await api!.getPipeline({ opening: pipelineWanted })); if (text(p, "opening") === pipelineWanted) pipelineData = p; } catch { /* next open */ } }
+  };
+  document.querySelector<HTMLFormElement>("#stage-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget as HTMLFormElement);
+    const name = applicantWanted;
+    const stage = String(data.get("stage") || "");
+    const note = String(data.get("note") || "").trim();
+    if (stage === text(applicantDetail || {}, "hiring_stage") && !note) { setToast(`Already in ${stage}`, "info"); return; }
+    void runSelfService("Moving", async () => {
+      await payload(await api!.moveApplicant({ name, stage, note: note || undefined }));
+      pipelineStage = stage;
+      await refreshAfter(name);
+      setToast(`Moved to ${stage}`, "success");
+    }, "applicant");
+  });
+  document.querySelector<HTMLFormElement>("#note-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const note = String(new FormData(event.currentTarget as HTMLFormElement).get("note") || "").trim();
+    if (!note) { setToast("Write a note first", "warn"); return; }
+    const name = applicantWanted;
+    void runSelfService("Saving", async () => {
+      await payload(await api!.addApplicantNote({ name, note }));
+      await refreshAfter(name);
+      setToast("Feedback added", "success");
+    }, "applicant");
+  });
+  document.querySelector<HTMLFormElement>("#pool-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const pool = String(new FormData(event.currentTarget as HTMLFormElement).get("pool") || "");
+    const name = applicantWanted;
+    void runSelfService("Saving", async () => {
+      const res = await payload(await api!.addToPool({ name, pool }));
+      setToast(res.added ? `Added to ${pool}` : `Already in ${pool}`, res.added ? "success" : "info");
+    }, "applicant");
+  });
 }
 
 // ---------------------------------------------------------------- Phase 4 surveys
@@ -1901,7 +2119,7 @@ function bindTalent() {
   bindTalentRows();
   const range = document.querySelector<HTMLInputElement>("#gc-progress");
   const out = document.querySelector<HTMLOutputElement>("#gc-out");
-  if (range && out) range.oninput = () => { out.textContent = `${range.value}%`; };
+  if (range && out) range.oninput = () => { out.textContent = `${range.value}%`; range.style.setProperty("--pct", `${range.value}%`); };
   document.querySelector<HTMLFormElement>("#goal-checkin")?.addEventListener("submit", (event) => {
     event.preventDefault();
     const data = new FormData(event.currentTarget as HTMLFormElement);
@@ -2142,7 +2360,7 @@ function render(next: Screen = screen) {
     root.innerHTML = `${toastHtml()}<section class="auth"><div class="auth-hero">${brandMark()}<h1>Aimatic HR</h1><p>${esc(loading)}…</p></div><div class="auth-card"><div class="skeleton" aria-busy="true">${loadingSkeleton(4)}</div></div></section>`;
     return;
   }
-  const pages: Record<Screen, () => string> = { home, attendance, calendar: calendarScreen, leave, pay, enroll, profile, approvals: approvalsScreen, expenses: expensesScreen, notifications: notificationsScreen, editprofile: editProfileScreen, documents: documentsScreen, help: helpScreen, ticket: ticketScreen, policies: policiesScreen, policy: policyScreen, requests: requestsScreen, assets: assetsScreen, notices: noticesScreen, goals: goalsScreen, goal: goalScreen, meetings: meetingsScreen, meeting: meetingScreen, points: pointsScreen, surveys: surveysScreen, survey: surveyScreen };
+  const pages: Record<Screen, () => string> = { home, attendance, calendar: calendarScreen, leave, pay, enroll, profile, approvals: approvalsScreen, expenses: expensesScreen, notifications: notificationsScreen, editprofile: editProfileScreen, documents: documentsScreen, help: helpScreen, ticket: ticketScreen, policies: policiesScreen, policy: policyScreen, requests: requestsScreen, assets: assetsScreen, notices: noticesScreen, goals: goalsScreen, goal: goalScreen, meetings: meetingsScreen, meeting: meetingScreen, points: pointsScreen, surveys: surveysScreen, survey: surveyScreen, hiring: hiringScreen, pipeline: pipelineScreen, applicant: applicantScreen };
   // Exactly 5 tabs — never Enroll in the bar (wraps on ~360px / real phones). Enroll stays manager-only via Home tile + Profile.
   const nav: Array<{ id: Screen; label: string; icon: string }> = [
     { id: "home", label: "Home", icon: icon("home", 22) },
@@ -2152,7 +2370,7 @@ function render(next: Screen = screen) {
     { id: "profile", label: "Profile", icon: icon("user", 22) },
   ];
   if (!isManager() && screen === "enroll") screen = "home";
-  const navActive: Screen = screen === "enroll" || screen === "editprofile" || screen === "documents" ? "profile" : screen === "calendar" ? "attendance" : ["approvals", "expenses", "notifications", "help", "ticket", "policies", "policy", "requests", "assets", "notices", "goals", "goal", "meetings", "meeting", "points", "surveys", "survey"].includes(screen) ? "home" : screen;
+  const navActive: Screen = screen === "enroll" || screen === "editprofile" || screen === "documents" ? "profile" : screen === "calendar" ? "attendance" : ["approvals", "expenses", "notifications", "help", "ticket", "policies", "policy", "requests", "assets", "notices", "goals", "goal", "meetings", "meeting", "points", "surveys", "survey", "hiring", "pipeline", "applicant"].includes(screen) ? "home" : screen;
   // Pull the live enroll video out of the old DOM before it is discarded, so re-rendering the
   // capture step (new photo taken, retake, etc.) doesn't restart/black-flash the camera preview.
   const existingEnrollVideo = screen === "enroll" ? document.querySelector<HTMLVideoElement>("#enroll-video") : null;
@@ -2201,6 +2419,7 @@ function bind() {
   bindHrOps();
   bindTalent();
   bindSurveys();
+  bindHiring();
   // A manual refresh mid check-in would repaint #attend-video out from under the live capture.
   document.querySelector<HTMLButtonElement>("#refresh")?.addEventListener("click", () => { if (!attendBusy) void refresh(); });
   document.querySelector<HTMLButtonElement>("#cal-prev")?.addEventListener("click", () => void loadCalendar(shiftMonth(calendarMonth, -1)));
