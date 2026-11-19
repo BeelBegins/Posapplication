@@ -2811,6 +2811,8 @@ const attendCancelled = () => new DOMException("Attendance capture was cancelled
 // unlike enrollment, no still image is kept afterward; the frame is sent to the server and discarded.
 // `signal` comes from submitLog's AbortController: cancelAttend() aborts it on back/nav so this
 // function stops the camera as soon as possible instead of running to completion unseen.
+const CHALLENGE_EXPIRED_MESSAGE = "The check-in took too long and expired. Nothing was recorded. Tap IN or OUT again.";
+
 type LivenessSpec = { steps: string[]; framesPerStep: number };
 type LivenessFrame = { step: string; image: string };
 
@@ -2996,7 +2998,7 @@ async function submitLog(logType: "IN" | "OUT") {
   attendBusy = true;
   attendAbort = controller;
   const signal = controller.signal;
-  setToast("Requesting a server challenge", "info");
+  setToast("Getting your location", "info");
   render("attendance");
   let submitStarted = false;
   try {
@@ -3010,6 +3012,7 @@ async function submitLog(logType: "IN" | "OUT") {
     // The 120 s server challenge is requested only after location, so its clock covers just the
     // camera steps and the upload.
     const challengeApi = api;
+    setToast("Requesting a server challenge", "info");
     const challengeReply = await raceWithTimeout(
       async () => payload(await challengeApi.requestCheckinChallenge()),
       20_000,
@@ -3017,9 +3020,13 @@ async function submitLog(logType: "IN" | "OUT") {
     );
     const challenge = text(challengeReply, "challenge");
     const liveness = livenessSpec(challengeReply);
+    // Keep a safety margin for the upload; a challenge the server would refuse is not sent at all.
+    const expiresIn = Number((challengeReply as Record<string, unknown> | undefined)?.expires_in) || 120;
+    const sendBy = Date.now() + Math.max(30, expiresIn - 25) * 1000;
     if (signal.aborted) return;
     const { image, frames } = await captureFace(livenessPrompt(challenge), signal, liveness);
     if (signal.aborted) return;
+    if (Date.now() > sendBy) throw new Error(CHALLENGE_EXPIRED_MESSAGE);
     const body: Record<string, unknown> = { ...attendanceRequest({ logType, ...location, challenge, image }) };
     if (frames.length) body.liveness_frames = frames;
     submitStarted = true;
@@ -3075,7 +3082,10 @@ async function submitLog(logType: "IN" | "OUT") {
     void refresh();
   } catch (error) {
     if (signal.aborted && !submitStarted) return;
-    setToast(cameraPermissionDeniedMessage(error) || (error instanceof Error ? error.message : "Attendance was not recorded"), "danger");
+    const message = error instanceof Error ? error.message : "";
+    // The server refuses an expired challenge before recording anything, so say so plainly.
+    const expired = /challenge is missing or expired|liveness challenge expired/i.test(message);
+    setToast(cameraPermissionDeniedMessage(error) || (expired ? CHALLENGE_EXPIRED_MESSAGE : message || "Attendance was not recorded"), "danger");
   } finally {
     // Only act on state we still own — cancelAttend() may already have cleared it (and a new
     // submitLog call may already have installed its own controller) by the time this runs. When
