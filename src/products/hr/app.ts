@@ -2827,10 +2827,14 @@ function livenessSpec(reply: unknown): LivenessSpec | null {
   if (!raw || typeof raw !== "object") return null;
   const steps = (raw as Record<string, unknown>).steps;
   if (!Array.isArray(steps) || !steps.length) return null;
-  const clean = steps.map(String).filter((step) => step in LIVENESS_PROMPTS).slice(0, 4);
-  if (clean.length !== steps.length) throw new Error("This app version does not understand the server's liveness check. Update Aimatic HR.");
+  const clean = steps.map(String).filter((step) => step in LIVENESS_PROMPTS);
   const per = Number((raw as Record<string, unknown>).frames_per_step);
-  return { steps: clean, framesPerStep: Number.isFinite(per) ? Math.min(3, Math.max(1, Math.round(per))) : 2 };
+  // Never adjust what the server asked for: it requires exactly this many frames per step, so an
+  // unsupported challenge is refused here with a clear message instead of failing on submit.
+  if (clean.length !== steps.length || clean.length > 4 || !Number.isInteger(per) || per < 1 || per > 3) {
+    throw new Error("This app version does not understand the server's liveness check. Update Aimatic HR.");
+  }
+  return { steps: clean, framesPerStep: per };
 }
 
 function grabFrame(video: HTMLVideoElement, maxSide: number, quality: number): string {
@@ -2997,6 +3001,14 @@ async function submitLog(logType: "IN" | "OUT") {
   let submitStarted = false;
   try {
     if (offline()) throw new Error("You appear offline. Attendance was not recorded.");
+    const location = await raceWithTimeout(
+      () => captureLocation(),
+      45_000,
+      "Location did not respond. Turn on Location for Aimatic HR, then try again.",
+    );
+    if (signal.aborted) return;
+    // The 120 s server challenge is requested only after location, so its clock covers just the
+    // camera steps and the upload.
     const challengeApi = api;
     const challengeReply = await raceWithTimeout(
       async () => payload(await challengeApi.requestCheckinChallenge()),
@@ -3005,12 +3017,6 @@ async function submitLog(logType: "IN" | "OUT") {
     );
     const challenge = text(challengeReply, "challenge");
     const liveness = livenessSpec(challengeReply);
-    if (signal.aborted) return;
-    const location = await raceWithTimeout(
-      () => captureLocation(),
-      45_000,
-      "Location did not respond. Turn on Location for Aimatic HR, then try again.",
-    );
     if (signal.aborted) return;
     const { image, frames } = await captureFace(livenessPrompt(challenge), signal, liveness);
     if (signal.aborted) return;
