@@ -1,4 +1,7 @@
 import { App } from "@capacitor/app";
+import { Capacitor } from "@capacitor/core";
+import { Directory, Filesystem } from "@capacitor/filesystem";
+import { Share } from "@capacitor/share";
 import { Geolocation } from "@capacitor/geolocation";
 import { createHrApi } from "../../api/hr";
 import { createApiClient } from "../../api/client";
@@ -44,6 +47,7 @@ import {
   canWithdrawLeave,
   expenseClaimRequest,
   formatBytes,
+  formatFullDate,
   profileUpdates,
   safePdfName,
   uploadProblem,
@@ -188,7 +192,8 @@ function toastHtml(): string {
 
 function btn(label: string, opts: { id?: string; kind?: "primary" | "secondary" | "text" | "danger" | "danger-text"; block?: boolean; disabled?: boolean; attrs?: string } = {}): string {
   const kind = opts.kind || "primary";
-  return `<button type="button" class="btn btn-${kind}${opts.block ? " btn-block" : ""}" ${opts.id ? `id="${opts.id}"` : ""} ${opts.disabled ? "disabled" : ""} ${opts.attrs || ""}>${label}</button>`;
+  const typeAttr = /\btype\s*=/.test(opts.attrs || "") ? "" : 'type="button" ';
+  return `<button ${typeAttr}class="btn btn-${kind}${opts.block ? " btn-block" : ""}" ${opts.id ? `id="${opts.id}"` : ""} ${opts.disabled ? "disabled" : ""} ${opts.attrs || ""}>${label}</button>`;
 }
 
 function field(label: string, control: string): string {
@@ -324,6 +329,7 @@ async function ensureBackHandler(): Promise<void> {
       }
       if (screen === "enroll") { render("home"); return; }
       if (screen === "calendar") { render(calendarReturn); return; }
+      if (screen === "editprofile" || screen === "documents") { render("profile"); return; }
       if (screen !== "home") { render("home"); return; }
       void App.exitApp();
     });
@@ -685,7 +691,7 @@ function pay() {
   const latest = payslips[0];
   return `<section class="stack-lg">
     <article class="card pay-hero"><p class="t-label">Latest net pay</p><strong class="pay-amount">${esc(money(latest.net_pay))}</strong><p class="t-meta">${esc(formatMonthOf(text(latest, "start_date")) || text(latest, "name"))}</p></article>
-    <div class="stack-sm">${sectionTitle("All payslips")}<div class="list">${payslips.map((row) => `<article class="list-row"><span class="row-icon">${icon("credit-card", 18)}</span><div class="grow"><strong>${esc(formatMonthOf(text(row, "start_date")) || text(row, "name"))}</strong><span class="t-meta">${esc(formatDateRange(text(row, "start_date"), text(row, "end_date")))} · ${esc(text(row, "name"))}</span></div><span class="row-trail"><b>${esc(money(row.net_pay))}</b></span><button type="button" class="icon-btn" data-payslip="${esc(text(row, "name"))}" aria-label="${esc(`Download payslip ${formatMonthOf(text(row, "start_date")) || text(row, "name")}`)}" ${ssBusy ? "disabled" : ""}>${hrIcon("download", 18)}</button></article>`).join("")}</div></div>
+    <div class="stack-sm">${sectionTitle("All payslips")}<div class="list">${payslips.map((row) => `<article class="list-row pay-row"><span class="row-icon">${icon("credit-card", 18)}</span><div class="grow"><strong>${esc(formatMonthOf(text(row, "start_date")) || text(row, "name"))}</strong><span class="t-meta">${esc(formatDateRange(text(row, "start_date"), text(row, "end_date")))}</span></div><span class="row-trail pay-trail"><b>${esc(money(row.net_pay))}</b></span><button type="button" class="icon-btn" data-payslip="${esc(text(row, "name"))}" aria-label="${esc(`Download payslip ${formatMonthOf(text(row, "start_date")) || text(row, "name")}`)}" ${ssBusy ? "disabled" : ""}>${hrIcon("download", 18)}</button></article>`).join("")}</div></div>
   </section>`;
 }
 
@@ -915,7 +921,7 @@ function editProfileScreen() {
   };
   const [contact, address, emergency] = [PROFILE_FIELDS.slice(0, 2), PROFILE_FIELDS.slice(2, 4), PROFILE_FIELDS.slice(4)];
   return `<form id="profile-form" class="stack-lg">
-    <div class="card info-card">${infoRow("Work email", text(profileData, "company_email"))}${infoRow("Joined", formatDay(text(profileData, "date_of_joining")))}${infoRow("Employee ID", text(context, "employee"))}</div>
+    <div class="card info-card">${infoRow("Work email", text(profileData, "company_email"))}${infoRow("Joined", formatFullDate(text(profileData, "date_of_joining")))}${infoRow("Employee ID", text(context, "employee"))}</div>
     <div class="stack-sm">${sectionTitle("Contact")}<div class="card stack">${contact.map(([k, l, t]) => control(k, l, t)).join("")}</div></div>
     <div class="stack-sm">${sectionTitle("Address")}<div class="card stack">${address.map(([k, l, t]) => control(k, l, t)).join("")}</div></div>
     <div class="stack-sm">${sectionTitle("Emergency contact")}<div class="card stack">${emergency.map(([k, l, t]) => control(k, l, t)).join("")}</div></div>
@@ -947,19 +953,46 @@ function readFileAsBase64(file: File): Promise<string> {
   });
 }
 
-async function runSelfService(label: string, task: () => Promise<void>, rerender: Screen) {
+const SS_CONTROLS = 'main.page button[type="submit"], [data-approval], [data-withdraw], [data-payslip], #mark-all-read';
+function setBusyControls(busy: boolean) {
+  document.querySelectorAll<HTMLButtonElement>(SS_CONTROLS).forEach((button) => { button.disabled = busy; });
+}
+
+/**
+ * Runs one self-service action. Controls are disabled in place (no re-render) so a failed
+ * validation or request keeps what the employee typed and the file they picked. Only a
+ * successful action re-renders, and only the screen it belongs to; if the employee moved to
+ * another screen meanwhile, that screen just gets its controls re-enabled.
+ */
+async function runSelfService(label: string, task: () => Promise<void>, owner: Screen) {
   if (!api || previewMode || ssBusy) return;
   if (offline()) { setToast("You appear offline. Reconnect and try again.", "danger"); return; }
   ssBusy = label;
-  render(rerender);
+  setBusyControls(true);
+  let ok = false;
   try {
     await task();
+    ok = true;
   } catch (error) {
     setToast(error instanceof Error ? error.message : `${label} failed`, "danger");
   } finally {
     ssBusy = "";
-    if (screen === rerender) render(rerender);
+    if (ok && screen === owner) render(owner);
+    else setBusyControls(false);
   }
+}
+
+/** Best-effort list refresh after a successful create: a failure here must not look like the create failed. */
+async function refreshExpenseLists() {
+  try {
+    const fresh = await payload(await api!.getExpenses());
+    expenseClaims = list(fresh.claims); advances = list(fresh.advances);
+  } catch { /* the new item appears on the next refresh */ }
+}
+
+/** True once the employee has typed into or picked a file in a form on the current page. */
+function pageFormDirty(): boolean {
+  return Boolean(document.querySelector("main.page form[data-dirty]"));
 }
 
 async function openScreenData(next: Screen) {
@@ -973,13 +1006,18 @@ async function openScreenData(next: Screen) {
     else if (next === "editprofile") profileData = ((await payload(await api.getProfile())).profile || {}) as Row;
     else if (next === "documents") documents = list(await payload(await api.getDocuments()));
     else return;
-    if (screen === next) render(next);
+    if (screen === next && !pageFormDirty()) render(next);
   } catch (error) {
     if (screen === next) setToast(error instanceof Error ? error.message : "Could not load this page", "danger");
   }
 }
 
 function bindSelfService() {
+  document.querySelectorAll<HTMLFormElement>("main.page form").forEach((form) => {
+    const mark = () => { form.dataset.dirty = "1"; };
+    form.addEventListener("input", mark);
+    form.addEventListener("change", mark);
+  });
   document.querySelectorAll<HTMLButtonElement>("[data-exp-tab]").forEach((button) => {
     button.onclick = () => { expenseTab = button.dataset.expTab === "advances" ? "advances" : "claims"; render("expenses"); };
   });
@@ -1017,9 +1055,8 @@ function bindSelfService() {
         try { await payload(await api!.uploadDocument({ doctype: "Expense Claim", name: text(saved, "name"), filename: file.name, content: await readFileAsBase64(file) })); }
         catch { note = " (receipt upload failed — attach it again from ERP)"; }
       }
-      const fresh = await payload(await api!.getExpenses());
-      expenseClaims = list(fresh.claims); advances = list(fresh.advances);
       setToast(`Claim ${text(saved, "name")} sent for approval${note}`, note ? "warn" : "success");
+      await refreshExpenseLists();
     }, "expenses");
   });
   document.querySelector<HTMLFormElement>("#advance-form")?.addEventListener("submit", (event) => {
@@ -1028,9 +1065,8 @@ function bindSelfService() {
     void runSelfService("Requesting advance", async () => {
       const body = advanceRequest({ purpose: String(data.get("purpose") || ""), amount: String(data.get("amount") || "") });
       const saved = await payload(await api!.createEmployeeAdvance(body));
-      const fresh = await payload(await api!.getExpenses());
-      expenseClaims = list(fresh.claims); advances = list(fresh.advances);
       setToast(`Advance ${text(saved, "name")} requested`, "success");
+      await refreshExpenseLists();
     }, "expenses");
   });
   document.querySelectorAll<HTMLButtonElement>("[data-withdraw]").forEach((button) => {
@@ -1050,7 +1086,7 @@ function bindSelfService() {
       const name = button.dataset.payslip || "";
       void runSelfService("Preparing payslip", async () => {
         const file = await raceWithTimeout(async () => payload(await api!.getPayslipPdf({ name })), 60_000, "The payslip PDF took too long. Try again.");
-        savePdf(safePdfName(text(file, "filename")), text(file, "content"));
+        await savePdf(safePdfName(text(file, "filename")), text(file, "content"));
       }, "pay");
     };
   });
@@ -1093,24 +1129,32 @@ function bindSelfService() {
       const problem = uploadProblem(file);
       if (problem || !file) throw new Error(problem || "Choose a file first.");
       await payload(await api!.uploadDocument({ filename: file.name, content: await readFileAsBase64(file) }));
-      documents = list(await payload(await api!.getDocuments()));
       setToast(`${file.name} uploaded`, "success");
+      try { documents = list(await payload(await api!.getDocuments())); } catch { /* shown on next open */ }
     }, "documents");
   });
 }
 
-/** Hand the PDF to the system: share sheet when available, else a download link. */
-function savePdf(filename: string, base64: string) {
+/**
+ * Hand the payslip PDF to the system. On the phone it is written to the app cache with
+ * @capacitor/filesystem and opened in the Android share sheet (@capacitor/share), from where
+ * the employee can save it to Files/Drive, open it in a PDF viewer or send it. In a browser
+ * (preview/dev) it falls back to a normal download link.
+ */
+async function savePdf(filename: string, base64: string): Promise<void> {
   if (!base64) throw new Error("The server returned an empty PDF.");
-  const bytes = Uint8Array.from(atob(base64), (ch) => ch.charCodeAt(0));
-  const blob = new Blob([bytes], { type: "application/pdf" });
-  const file = typeof File === "function" ? new File([blob], filename, { type: "application/pdf" }) : null;
-  const nav = navigator as Navigator & { canShare?: (data: ShareData) => boolean };
-  if (file && nav.share && nav.canShare?.({ files: [file] })) {
-    void nav.share({ files: [file], title: filename }).catch(() => undefined);
+  if (Capacitor.isNativePlatform()) {
+    const written = await Filesystem.writeFile({ path: `payslips/${filename}`, data: base64, directory: Directory.Cache, recursive: true });
+    try {
+      await Share.share({ title: filename, dialogTitle: "Save or open your payslip", files: [written.uri] });
+    } catch (error) {
+      // Closing the share sheet without choosing an app is not an error for the employee.
+      if (!/cancel/i.test(error instanceof Error ? error.message : String(error))) throw new Error("Could not open the payslip. Install a PDF viewer or Files app and try again.");
+    }
     return;
   }
-  const url = URL.createObjectURL(blob);
+  const bytes = Uint8Array.from(atob(base64), (ch) => ch.charCodeAt(0));
+  const url = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
   const link = document.createElement("a");
   link.href = url;
   link.download = filename;

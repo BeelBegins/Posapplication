@@ -17,6 +17,8 @@ if (productId === "sales" || productId === "hr") {
   includePlugins.push("@capacitor/geolocation");
 }
 if (productId === "stock-receiving") includePlugins.push("@capacitor/local-notifications");
+// HR saves payslip PDFs to the app cache and hands them to the Android share sheet.
+if (productId === "hr") includePlugins.push("@capacitor/filesystem", "@capacitor/share");
 includePlugins.push("@capacitor/browser");
 
 module.exports = {

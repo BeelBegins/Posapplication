@@ -117,3 +117,14 @@ export function safePdfName(name: unknown): string {
   const raw = str(name).replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^[-.]+|-+$/g, "");
   return /\.pdf$/i.test(raw) ? raw : `${raw || "payslip"}.pdf`;
 }
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+/** "1 Mar 2021" from an ERP date (wall-clock, no timezone shift); "" when not a real date. */
+export function formatFullDate(value: unknown): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(str(value).trim());
+  if (!match) return "";
+  const [y, m, d] = [Number(match[1]), Number(match[2]), Number(match[3])];
+  const probe = new Date(Date.UTC(y, m - 1, d));
+  if (probe.getUTCFullYear() !== y || probe.getUTCMonth() !== m - 1 || probe.getUTCDate() !== d) return "";
+  return `${d} ${MONTHS[m - 1]} ${y}`;
+}
