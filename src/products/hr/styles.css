@@ -439,3 +439,49 @@ html[data-theme="dark"] .auth{background:linear-gradient(180deg,#0d2a2a 0,var(--
 .capture-bar .btn,.capture-bar button{white-space:nowrap;padding-left:var(--space-3);padding-right:var(--space-3);font-size:15px}
 .stage{border-radius:var(--radius-lg);min-height:280px}
 .consent{box-shadow:none;background:var(--surface-2)}
+
+/* ===== Phase 2 self-service (approvals, expenses, notifications, profile edit, documents) ===== */
+.qa-grid{grid-template-columns:repeat(4,minmax(0,1fr))}
+@media(max-width:380px){.qa-grid{grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}.qa-grid .qa-tile{font-size:11px;padding:10px 2px;min-height:78px}}
+.qa-icon{position:relative}
+.qa-badge,.ph-badge{position:absolute;top:-6px;right:-8px;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--danger-600);color:#fff;font-size:11px;font-weight:700;line-height:18px;text-align:center;box-shadow:0 0 0 2px var(--surface)}
+.ph-action{position:relative}
+.ph-action.bell .ph-badge{top:-4px;right:-4px}
+.page-header.home .ph-action+.ph-action{margin-left:8px}
+.row-icon.warn{background:var(--warn-50);color:var(--warn-700)}
+.approvals-cta{border-color:var(--warn-600);background:var(--warn-50)}
+.approvals-cta strong{color:var(--text)}
+.count-pill{display:inline-grid;place-items:center;min-width:24px;height:22px;padding:0 8px;border-radius:11px;background:var(--brand-50);color:var(--brand-700);font-size:12px;font-weight:700}
+.approval-card{display:grid;gap:12px}
+.approval-card .card-head{display:flex;align-items:center;gap:12px}
+.approval-card .card-head .grow{display:grid;gap:2px;min-width:0}
+.approval-amount{font-variant-numeric:tabular-nums;font-size:var(--fs-md);white-space:nowrap}
+.approval-when{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.approval-when .muted{color:var(--text-muted);font-size:12px}
+.segmented{display:grid;grid-template-columns:1fr 1fr;padding:4px;gap:4px;border-radius:var(--radius-md);background:var(--surface);border:1px solid var(--border)}
+.segmented .seg{min-height:40px;border-radius:calc(var(--radius-md) - 4px);font-weight:600;color:var(--text-muted)}
+.segmented .seg.active{background:var(--brand-600);color:#fff;box-shadow:var(--elev-1, 0 1px 2px rgba(0,0,0,.12))}
+.stat-hero{display:grid;gap:4px;background:linear-gradient(145deg,#0a7d6c,#05463c);border:0;color:#fff}
+.stat-hero .t-label,.stat-hero .t-meta{color:rgba(255,255,255,.82)}
+.row-trail-stack{display:grid;justify-items:end;gap:4px;flex:none;text-align:right;font-variant-numeric:tabular-nums}
+.row-trail-stack b{font-weight:700;color:var(--text)}
+.row-trail-stack small{font-size:11px}
+.link.danger{color:var(--danger-600)}
+.link:disabled,.icon-btn:disabled{opacity:.45}
+.icon-btn{flex:none;width:44px;height:44px;border-radius:50%;display:grid;place-items:center;color:var(--brand-700);background:var(--brand-50);margin-left:8px}
+.icon-btn:active{transform:scale(.96)}
+.list-row.notif{width:100%;text-align:left}
+.list-row.notif.unread{background:var(--brand-50)}
+.list-row.notif.unread strong{font-weight:700}
+.list-row.notif:not(.unread) strong{font-weight:500;color:var(--text-muted)}
+.unread-dot{flex:none;width:10px;height:10px;border-radius:50%;background:var(--brand-600)}
+.ellipsis{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.file-drop{display:grid;place-items:center;min-height:96px;border:2px dashed var(--border);border-radius:var(--radius-md);color:var(--brand-700);font-weight:600;cursor:pointer;position:relative}
+.file-drop span{display:inline-flex;align-items:center;gap:8px}
+.file-drop input{position:absolute;inset:0;opacity:0;cursor:pointer}
+.file-drop:focus-within{border-color:var(--brand-600)}
+input[type=file]{font-size:var(--fs-sm);max-width:100%}
+@media(prefers-color-scheme:dark){html:not([data-theme="light"]) .approvals-cta{background:rgba(217,119,6,.14)}html:not([data-theme="light"]) .list-row.notif.unread{background:rgba(16,163,127,.14)}}
+html[data-theme="dark"] .approvals-cta{background:rgba(217,119,6,.14)}
+html[data-theme="dark"] .list-row.notif.unread{background:rgba(16,163,127,.14)}
+html[data-theme="dark"] .segmented .seg.active{color:#fff}

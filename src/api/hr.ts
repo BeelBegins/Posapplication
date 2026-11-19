@@ -6,7 +6,26 @@ export function createHrApi(client: ApiClient) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
+  const ss = (name: string, body: Record<string, unknown> = {}) => client.callMethod(`aimatichr.hr_mobile.selfservice.${name}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
   return {
+    // Phase 2 self-service (aimatichr.hr_mobile.selfservice)
+    actOnApproval: (body: Record<string, unknown>) => ss("act_on_approval", body),
+    getExpenses: () => ss("get_expenses"),
+    getExpenseOptions: () => ss("get_expense_options"),
+    createExpenseClaim: (body: Record<string, unknown>) => ss("create_expense_claim", body),
+    createEmployeeAdvance: (body: Record<string, unknown>) => ss("create_employee_advance", body),
+    cancelLeaveApplication: (body: { name: string }) => ss("cancel_leave_application", body),
+    getPayslipPdf: (body: { name: string }) => ss("get_payslip_pdf", body),
+    getNotifications: () => ss("get_notifications"),
+    markNotificationsRead: (body: { name?: string }) => ss("mark_notifications_read", body),
+    getProfile: () => ss("get_profile"),
+    updateProfile: (body: { updates: Record<string, string> }) => ss("update_profile", body),
+    getDocuments: () => ss("get_documents"),
+    uploadDocument: (body: Record<string, unknown>) => ss("upload_document", body),
     getContext: () => post("get_context"),
     getLeaveSummary: () => post("get_leave_summary"),
     getPayslips: () => post("get_payslips"),

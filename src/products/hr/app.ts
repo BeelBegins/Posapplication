@@ -33,10 +33,26 @@ import {
   livenessPrompt,
   raceWithTimeout,
 } from "./domain";
+import {
+  PROFILE_FIELDS,
+  UPLOAD_ACCEPT,
+  advanceBalance,
+  advanceRequest,
+  approvalAction,
+  approvalItems,
+  base64FromDataUrl,
+  canWithdrawLeave,
+  expenseClaimRequest,
+  formatBytes,
+  profileUpdates,
+  safePdfName,
+  uploadProblem,
+  type ApprovalItem,
+} from "./selfservice";
 
 declare const __APP_VERSION__: string;
 type Row = Record<string, unknown>;
-type Screen = "home" | "attendance" | "calendar" | "leave" | "pay" | "enroll" | "profile";
+type Screen = "home" | "attendance" | "calendar" | "leave" | "pay" | "enroll" | "profile" | "approvals" | "expenses" | "notifications" | "editprofile" | "documents";
 type PreviewScreen = Screen | "setup" | "signin";
 type EnrollStep = "pick" | "consent" | "capture" | "review";
 type HrApi = ReturnType<typeof createHrApi>;
@@ -92,6 +108,17 @@ let attendStream: MediaStream | null = null;
 let attendSubmitToken: object | null = null;
 let backListenerReady = false;
 let toastTimer = 0;
+// Phase 2 self-service state
+let approvals: ApprovalItem[] = [];
+let expenseClaims: Row[] = [];
+let advances: Row[] = [];
+let expenseOptions: Row = {};
+let expenseTab: "claims" | "advances" = "claims";
+let notifications: Row[] = [];
+let unreadCount = 0;
+let profileData: Row = {};
+let documents: Row[] = [];
+let ssBusy = "";
 
 const text = (row: Row | undefined, ...keys: string[]) => {
   for (const key of keys) if (row?.[key] != null && row[key] !== "") return String(row[key]);
@@ -176,7 +203,7 @@ function brandMark(): string {
   return `<span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 3.5 4.5 7.2v4.9c0 4.6 3.1 8.8 7.5 10.4 4.4-1.6 7.5-5.8 7.5-10.4V7.2L12 3.5Z" stroke="currentColor" stroke-width="1.8"/><path d="M9.2 12.2h5.6M12 9.4v5.6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span>`;
 }
 
-const screenTitles: Record<Screen, string> = { home: "Home", attendance: "Attendance", calendar: "Attendance calendar", leave: "Leave", pay: "Payslips", enroll: "Face enrollment", profile: "Profile" };
+const screenTitles: Record<Screen, string> = { home: "Home", attendance: "Attendance", calendar: "Attendance calendar", leave: "Leave", pay: "Payslips", enroll: "Face enrollment", profile: "Profile", approvals: "Approvals", expenses: "Expenses & advances", notifications: "Notifications", editprofile: "Edit details", documents: "My documents" };
 
 /** Consistent page header: Home shows the greeting; sub-screens get a back arrow. */
 function pageHeader(current: Screen): string {
@@ -184,10 +211,27 @@ function pageHeader(current: Screen): string {
     const hour = new Date().getHours();
     const greet = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
     const name = text(context, "employee_name") || "Employee";
-    return `<header class="page-header home">${avatar(name)}<div class="grow"><p class="ph-kicker">${esc(greet)}</p><h1 class="ph-title">${esc(name.split(/\s+/)[0] || name)}</h1></div><button type="button" class="ph-action" id="refresh" aria-label="Refresh">${icon("refresh", 20)}</button></header>`;
+    return `<header class="page-header home">${avatar(name)}<div class="grow"><p class="ph-kicker">${esc(greet)}</p><h1 class="ph-title">${esc(name.split(/\s+/)[0] || name)}</h1></div><button type="button" class="ph-action bell" data-screen="notifications" aria-label="${unreadCount ? `Notifications, ${unreadCount} unread` : "Notifications"}">${hrIcon("bell", 20)}${unreadCount ? `<span class="ph-badge">${unreadCount > 99 ? "99+" : unreadCount}</span>` : ""}</button><button type="button" class="ph-action" id="refresh" aria-label="Refresh">${icon("refresh", 20)}</button></header>`;
   }
-  const back: Screen | null = current === "calendar" ? calendarReturn : current === "enroll" ? "home" : null;
+  const backTargets: Partial<Record<Screen, Screen>> = { enroll: "home", approvals: "home", expenses: "home", notifications: "home", editprofile: "profile", documents: "profile" };
+  const back: Screen | null = current === "calendar" ? calendarReturn : backTargets[current] || null;
   return `<header class="page-header">${back ? `<button type="button" class="ph-action" data-screen="${back}" aria-label="Back">${icon("chevron-left", 22)}</button>` : ""}<div class="grow"><h1 class="ph-title">${esc(screenTitles[current])}</h1></div></header>`;
+}
+
+const HR_ICONS: Record<string, string> = {
+  bell: '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>',
+  file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>',
+  download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
+  upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>',
+  receipt: '<path d="M4 2v20l3-2 3 2 2-2 2 2 3-2 3 2V2l-3 2-3-2-2 2-2-2-3 2z"/><line x1="8" y1="9" x2="16" y2="9"/><line x1="8" y1="13" x2="14" y2="13"/>',
+  wallet: '<rect x="2" y="6" width="20" height="14" rx="2"/><path d="M16 13h2"/><path d="M2 10h20"/><path d="M6 6V4h12v2"/>',
+  inbox: '<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
+  edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/>',
+};
+function hrIcon(name: string, size = 24): string {
+  const body = HR_ICONS[name];
+  if (!body) return icon(name, size);
+  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
 }
 
 function sectionTitle(title: string, trailing = ""): string {
@@ -387,6 +431,31 @@ function seedPreview(): void {
     const worked = status === "Present" || status === "Half Day";
     previewDays.push({ date, status, in_time: worked ? `${date}T09:0${dom % 6}:00` : null, out_time: worked ? `${date}T${status === "Half Day" ? "13" : "18"}:1${dom % 6}:00` : null, working_hours: worked ? (status === "Half Day" ? 4 : 9) : null, late_entry: dom === 9, early_exit: false, leave_type: status === "On Leave" ? "Casual Leave" : null });
   }
+  approvals = approvalItems({
+    leave: [{ name: "HR-LAP-2026-00041", employee_name: "Sara Khan", leave_type: "Annual Leave", status: "Open", from_date: "2026-11-24", to_date: "2026-11-26", total_leave_days: 3 }],
+    expenses: [{ name: "HR-EXP-2026-00017", employee_name: "Bilal Ahmed", expense_type: "Travel", approval_status: "Draft", posting_date: "2026-11-18", total_claimed_amount: 7450, currency: "PKR", total_expenses: 2 }],
+    shifts: [{ name: "HR-SHR-2026-00008", employee_name: "Sara Khan", shift_type: "Evening", status: "Draft", from_date: "2026-11-30", to_date: "2026-12-04" }],
+  });
+  expenseClaims = [
+    { name: "HR-EXP-2026-00015", expense_type: "Fuel", posting_date: "2026-11-12", total_claimed_amount: 3200, currency: "PKR", approval_status: "Approved", status: "Paid" },
+    { name: "HR-EXP-2026-00016", expense_type: "Meals", posting_date: "2026-11-17", total_claimed_amount: 1850, currency: "PKR", approval_status: "Draft", status: "Draft" },
+  ];
+  advances = [{ name: "HR-EAD-2026-00004", purpose: "Lahore site visit", posting_date: "2026-11-05", advance_amount: 20000, paid_amount: 20000, claimed_amount: 12500, return_amount: 0, currency: "PKR", status: "Paid", docstatus: 1 }];
+  expenseOptions = { types: [{ name: "Travel" }, { name: "Fuel" }, { name: "Meals" }], currency: "PKR", approver: { expense_approver_name: "Sara Khan" } };
+  expenseTab = new URLSearchParams(location.search).get("tab") === "advances" ? "advances" : "claims";
+  notifications = [
+    { name: "n1", subject: "Your leave HR-LAP-2026-00039 was approved", type: "Alert", document_type: "Leave Application", read: 0, creation: `${localIsoDate()} 08:41:00` },
+    { name: "n2", subject: "Salary slip for November is ready", type: "Alert", document_type: "Salary Slip", read: 0, creation: "2026-11-18 17:05:00" },
+    { name: "n3", subject: "Sara Khan assigned you an expense claim to review", type: "Assignment", document_type: "Expense Claim", read: 1, creation: "2026-11-17 11:20:00" },
+  ];
+  unreadCount = 2;
+  profileData = { cell_number: "+92 300 1234567", personal_email: "ahmed.n@example.com", current_address: "House 12, Street 4, DHA Phase 5, Lahore", permanent_address: "", person_to_be_contacted: "Ayesha Nabeel", emergency_phone_number: "+92 321 7654321", relation: "Spouse", date_of_joining: "2021-03-01", company_email: "nabeel@aimatic.tech" };
+  documents = [
+    { name: "f1", file_name: "CNIC-front.jpg", file_size: 412000, creation: "2026-11-10 10:02:00" },
+    { name: "f2", file_name: "Degree-certificate.pdf", file_size: 1830000, creation: "2026-11-02 15:44:00" },
+  ];
+  leaveRows = [{ name: "HR-LAP-2026-00040", leave_type: "Casual Leave", status: "Open", from_date: "2026-11-20", to_date: "2026-11-20" }, { name: "HR-LAP-2026-00031", leave_type: "Annual Leave", status: "Approved", from_date: "2026-10-06", to_date: "2026-10-08", docstatus: 1 }];
+  payslips = [{ name: "Sal Slip/HR-EMP-00063/00011", net_pay: 185000, start_date: "2026-11-01", end_date: "2026-11-30" }, { name: "Sal Slip/HR-EMP-00063/00010", net_pay: 182500, start_date: "2026-10-01", end_date: "2026-10-31" }];
   calendarData = { month: "2026-11", days: previewDays, summary: { present: 10, absent: 1, half_day: 1, on_leave: 1, holiday: 1, weekly_off: 6, no_record: 0 } };
 }
 
@@ -420,7 +489,17 @@ async function refresh() {
       tasks.push(api.getDirectory(enrollQuery).then(payload));
       tasks.push(api.getFacePolicy().then(payload));
     }
+    const optional = <T,>(task: () => Promise<T>) => raceWithTimeout(task, 15_000, "timeout").catch(() => null);
+    const extra = Promise.all([
+      optional(async () => payload(await api!.getApprovals())),
+      optional(async () => payload(await api!.getExpenses())),
+      optional(async () => payload(await api!.getNotifications())),
+    ]);
     const results = await Promise.all(tasks);
+    const [approvalData, expenseData, notificationData] = await extra;
+    if (approvalData) approvals = approvalItems(approvalData);
+    if (expenseData) { expenseClaims = list(expenseData.claims); advances = list(expenseData.advances); }
+    if (notificationData) { notifications = list(notificationData.items); unreadCount = Number(notificationData.unread) || 0; }
     const [leave, pay, requestRows, teamRows, logs, formOptions, area] = results as Row[];
     checkinArea = area && typeof area === "object" ? area : {};
     leaveRows = list(leave.applications);
@@ -453,8 +532,9 @@ function home() {
       <div class="today-head"><div><p class="t-label">Today</p><strong class="today-status">${latestToday ? (lastIn ? "Checked in" : "Checked out") : "Not checked in"}</strong><p class="t-meta">${esc(todayMeta)}</p></div>${enrollmentChip()}</div>
       ${btn(`${icon(lastIn ? "log-out" : "log-in", 18)} ${lastIn ? "Check out" : "Check in"}`, { kind: "primary", block: true, attrs: 'data-screen="attendance"' })}
     </article>`;
-  const actions: Array<[Screen, string, string]> = [["attendance", "map-pin", "Attendance"], ["calendar", "calendar", "Calendar"], ["leave", "clock", "Leave"], ["pay", "credit-card", "Payslips"]];
-  const quick = `<div class="qa-row">${actions.map(([id, ic, label]) => `<button type="button" class="qa-tile" data-screen="${id}"><span class="qa-icon">${icon(ic, 20)}</span><span>${esc(label)}</span></button>`).join("")}</div>`;
+  const actions: Array<[Screen, string, string, number]> = [["attendance", "map-pin", "Attendance", 0], ["calendar", "calendar", "Calendar", 0], ["leave", "clock", "Leave", 0], ["pay", "credit-card", "Payslips", 0], ["expenses", "receipt", "Expenses", 0], ["approvals", "inbox", "Approvals", approvals.length], ["documents", "file", "Documents", 0], ["editprofile", "edit", "My details", 0]];
+  const quick = `<div class="qa-row qa-grid">${actions.map(([id, ic, label, count]) => `<button type="button" class="qa-tile" data-screen="${id}"><span class="qa-icon">${hrIcon(ic, 20)}${count ? `<span class="qa-badge" aria-label="${count} pending">${count}</span>` : ""}</span><span>${esc(label)}</span></button>`).join("")}</div>`;
+  const pendingBanner = approvals.length ? `<button type="button" class="list-row nav-row approvals-cta" data-screen="approvals"><span class="row-icon warn">${hrIcon("inbox", 18)}</span><div class="grow"><strong>${approvals.length} request${approvals.length === 1 ? "" : "s"} waiting for you</strong><span class="t-meta">Leave, expenses and shifts you approve</span></div>${icon("chevron-right", 18)}</button>` : "";
   const balanceEntries = Object.entries(balances).slice(0, 4);
   const balanceTiles = balanceEntries.length
     ? `<div class="tiles">${balanceEntries.map(([name, value]) => {
@@ -468,6 +548,7 @@ function home() {
     : emptyState(icon("clock", 24), "No activity yet", "Check-ins you make will appear here.");
   return `<section class="stack-lg">
     ${todayCard}
+    ${pendingBanner}
     ${quick}
     <div class="stack-sm">${sectionTitle("Leave balance", `<button type="button" class="link" data-screen="leave">Apply</button>`)}${balanceTiles}</div>
     <div class="stack-sm">${sectionTitle("Recent activity", `<button type="button" class="link" data-screen="attendance">See all</button>`)}${activity}</div>
@@ -579,7 +660,8 @@ function leave() {
   const rows = leaveRows.length
     ? `<div class="list">${leaveRows.map((row) => {
       const status = text(row, "status") || "Open";
-      return `<article class="list-row"><span class="row-icon">${icon("calendar", 18)}</span><div class="grow"><strong>${esc(text(row, "leave_type"))}</strong><span class="t-meta">${esc(formatDateRange(text(row, "from_date"), text(row, "to_date")))}</span></div>${statusBadge(status, statusTone(status))}</article>`;
+      const withdraw = canWithdrawLeave(row) ? `<button type="button" class="link danger" data-withdraw="${esc(text(row, "name"))}" ${ssBusy ? "disabled" : ""}>Withdraw</button>` : "";
+      return `<article class="list-row"><span class="row-icon">${icon("calendar", 18)}</span><div class="grow"><strong>${esc(text(row, "leave_type"))}</strong><span class="t-meta">${esc(formatDateRange(text(row, "from_date"), text(row, "to_date")))}</span></div><div class="row-trail-stack">${statusBadge(status, statusTone(status))}${withdraw}</div></article>`;
     }).join("")}</div>`
     : emptyState(icon("calendar", 24), "No leave applications", "Leave you apply for will show here with its status.");
   return `<section class="stack-lg">
@@ -603,7 +685,7 @@ function pay() {
   const latest = payslips[0];
   return `<section class="stack-lg">
     <article class="card pay-hero"><p class="t-label">Latest net pay</p><strong class="pay-amount">${esc(money(latest.net_pay))}</strong><p class="t-meta">${esc(formatMonthOf(text(latest, "start_date")) || text(latest, "name"))}</p></article>
-    <div class="stack-sm">${sectionTitle("All payslips")}<div class="list">${payslips.map((row) => `<article class="list-row"><span class="row-icon">${icon("credit-card", 18)}</span><div class="grow"><strong>${esc(formatMonthOf(text(row, "start_date")) || text(row, "name"))}</strong><span class="t-meta">${esc(formatDateRange(text(row, "start_date"), text(row, "end_date")))} · ${esc(text(row, "name"))}</span></div><span class="row-trail"><b>${esc(money(row.net_pay))}</b></span></article>`).join("")}</div></div>
+    <div class="stack-sm">${sectionTitle("All payslips")}<div class="list">${payslips.map((row) => `<article class="list-row"><span class="row-icon">${icon("credit-card", 18)}</span><div class="grow"><strong>${esc(formatMonthOf(text(row, "start_date")) || text(row, "name"))}</strong><span class="t-meta">${esc(formatDateRange(text(row, "start_date"), text(row, "end_date")))} · ${esc(text(row, "name"))}</span></div><span class="row-trail"><b>${esc(money(row.net_pay))}</b></span><button type="button" class="icon-btn" data-payslip="${esc(text(row, "name"))}" aria-label="${esc(`Download payslip ${formatMonthOf(text(row, "start_date")) || text(row, "name")}`)}" ${ssBusy ? "disabled" : ""}>${hrIcon("download", 18)}</button></article>`).join("")}</div></div>
   </section>`;
 }
 
@@ -734,6 +816,10 @@ function profile() {
       ${infoRow("Department", text(context, "department"))}
       ${infoRow("Company", text(context, "company"))}
     </div>
+    <div class="list">
+      <button type="button" class="list-row nav-row" data-screen="editprofile"><span class="row-icon">${hrIcon("edit", 18)}</span><div class="grow"><strong>My details</strong><span class="t-meta">Phone, personal email, address, emergency contact</span></div>${icon("chevron-right", 18)}</button>
+      <button type="button" class="list-row nav-row" data-screen="documents"><span class="row-icon">${hrIcon("file", 18)}</span><div class="grow"><strong>My documents</strong><span class="t-meta">Upload CNIC, certificates and other papers</span></div>${icon("chevron-right", 18)}</button>
+    </div>
     <div class="stack-sm">${sectionTitle("Open requests")}<div class="tiles">${requestTiles}</div></div>
     <div class="stack-sm">${sectionTitle("My team")}${team.length ? `<div class="list">${team.map((row) => `<article class="list-row">${avatar(text(row, "employee_name"))}<div class="grow"><strong>${esc(text(row, "employee_name"))}</strong><span class="t-meta">${esc(text(row, "designation") || text(row, "department"))}</span></div></article>`).join("")}</div>` : emptyState(icon("users", 24), "No direct reports", "People who report to you will appear here.")}</div>
     <form id="correction" class="card stack">
@@ -748,6 +834,292 @@ function profile() {
     ${btn(`${icon("log-out", 16)} Sign out`, { id: "sign-out", kind: "danger-text", block: true })}
     <p class="t-meta center">Aimatic HR v${esc(__APP_VERSION__)}</p>
   </section>`;
+}
+
+function approvalsScreen() {
+  if (!approvals.length) return emptyState(hrIcon("inbox", 26), "Nothing to approve", "Leave, expense and shift requests sent to you will appear here.");
+  const groups: Array<[string, string]> = [["Leave Application", "Leave"], ["Expense Claim", "Expenses"], ["Shift Request", "Shifts"]];
+  return `<section class="stack-lg">${groups.map(([doctype, label]) => {
+    const items = approvals.filter((item) => item.doctype === doctype);
+    if (!items.length) return "";
+    return `<div class="stack-sm">${sectionTitle(label, `<span class="count-pill">${items.length}</span>`)}${items.map((item) => {
+      const when = item.to ? formatDateRange(item.from, item.to) : formatDay(item.from);
+      const amount = item.amount ? `<strong class="approval-amount">${esc(formatMoney(item.amount, item.currency || "PKR"))}</strong>` : "";
+      const key = `${esc(item.doctype)}|${esc(item.name)}`;
+      return `<article class="card approval-card">
+        <div class="card-head">${avatar(item.employee)}<div class="grow"><strong>${esc(item.employee || "Employee")}</strong><span class="t-meta">${esc([item.title, item.detail].filter(Boolean).join(" · "))}</span></div>${amount}</div>
+        <p class="t-meta approval-when">${icon("calendar", 14)} ${esc(when)} <span class="muted">· ${esc(item.name)}</span></p>
+        <div class="grid-2">${btn(`${icon("x", 16)} Reject`, { kind: "secondary", block: true, disabled: Boolean(ssBusy), attrs: `data-approval="${key}" data-decision="reject"` })}${btn(`${icon("check", 16)} Approve`, { kind: "primary", block: true, disabled: Boolean(ssBusy), attrs: `data-approval="${key}" data-decision="approve"` })}</div>
+      </article>`;
+    }).join("")}</div>`;
+  }).join("")}</section>`;
+}
+
+function expensesScreen() {
+  const currency = text(expenseOptions, "currency") || "PKR";
+  const tabs = `<div class="segmented" role="tablist">${(["claims", "advances"] as const).map((id) => `<button type="button" role="tab" class="seg${expenseTab === id ? " active" : ""}" data-exp-tab="${id}" aria-selected="${expenseTab === id}">${id === "claims" ? "Claims" : "Advances"}</button>`).join("")}</div>`;
+  if (expenseTab === "advances") {
+    const outstanding = advances.reduce((sum, row) => sum + advanceBalance(row), 0);
+    const rowsHtml = advances.length
+      ? `<div class="list">${advances.map((row) => { const status = text(row, "status") || "Draft"; return `<article class="list-row"><span class="row-icon">${hrIcon("wallet", 18)}</span><div class="grow"><strong>${esc(text(row, "purpose") || text(row, "name"))}</strong><span class="t-meta">${esc(formatDay(text(row, "posting_date")))} · ${esc(formatMoney(row.advance_amount, text(row, "currency") || currency))}</span></div><div class="row-trail-stack">${statusBadge(status, statusTone(status))}<small class="t-meta">Bal ${esc(formatMoney(advanceBalance(row), text(row, "currency") || currency))}</small></div></article>`; }).join("")}</div>`
+      : emptyState(hrIcon("wallet", 24), "No advances", "Advances you request will appear here.");
+    return `<section class="stack-lg">${tabs}
+      <article class="card stat-hero"><p class="t-label">Outstanding advance</p><strong class="pay-amount">${esc(formatMoney(outstanding, currency))}</strong><p class="t-meta">Paid to you and not yet claimed or returned</p></article>
+      <form id="advance-form" class="card stack">
+        <h2 class="t-title">Request an advance</h2>
+        ${field("Purpose", `<textarea name="purpose" required placeholder="e.g. Travel to Karachi branch"></textarea>`)}
+        ${field(`Amount (${currency})`, `<input name="amount" type="number" inputmode="decimal" min="1" step="0.01" required>`)}
+        ${btn("Send request", { kind: "primary", block: true, disabled: Boolean(ssBusy), attrs: 'type="submit"' })}
+      </form>
+      <div class="stack-sm">${sectionTitle("My advances")}${rowsHtml}</div>
+    </section>`;
+  }
+  const types = list(expenseOptions.types).map((row) => `<option>${esc(text(row, "name"))}</option>`).join("");
+  const approverName = text((expenseOptions.approver || {}) as Row, "expense_approver_name");
+  const pending = expenseClaims.filter((row) => text(row, "approval_status") === "Draft").reduce((sum, row) => sum + (Number(row.total_claimed_amount) || 0), 0);
+  const rowsHtml = expenseClaims.length
+    ? `<div class="list">${expenseClaims.map((row) => { const status = text(row, "approval_status") === "Draft" ? "Pending" : text(row, "status") || text(row, "approval_status"); return `<article class="list-row"><span class="row-icon">${hrIcon("receipt", 18)}</span><div class="grow"><strong>${esc(text(row, "expense_type") || "Expense")}</strong><span class="t-meta">${esc(formatDay(text(row, "posting_date")))} · ${esc(text(row, "name"))}</span></div><div class="row-trail-stack"><b>${esc(formatMoney(row.total_claimed_amount, text(row, "currency") || currency))}</b>${statusBadge(status, statusTone(status))}</div></article>`; }).join("")}</div>`
+    : emptyState(hrIcon("receipt", 24), "No expense claims", "Claims you submit will appear here with their status.");
+  return `<section class="stack-lg">${tabs}
+    <article class="card stat-hero"><p class="t-label">Waiting for approval</p><strong class="pay-amount">${esc(formatMoney(pending, currency))}</strong><p class="t-meta">${approverName ? `Approver: ${esc(approverName)}` : "Sent to your expense approver"}</p></article>
+    <form id="expense-form" class="card stack">
+      <h2 class="t-title">New expense claim</h2>
+      <div class="grid-2">${field("Date", `<input name="expenseDate" type="date" max="${localIsoDate()}" value="${localIsoDate()}" required>`)}${field(`Amount (${currency})`, `<input name="amount" type="number" inputmode="decimal" min="1" step="0.01" required>`)}</div>
+      ${field("Type", `<select name="expenseType" required>${types || "<option value=''>No expense types set up</option>"}</select>`)}
+      ${field("Description", `<textarea name="description" placeholder="What was it for?"></textarea>`)}
+      ${field("Receipt (optional)", `<input name="receipt" type="file" accept="${UPLOAD_ACCEPT}" capture="environment">`)}
+      ${btn("Submit claim", { kind: "primary", block: true, disabled: Boolean(ssBusy), attrs: 'type="submit"' })}
+    </form>
+    <div class="stack-sm">${sectionTitle("My claims")}${rowsHtml}</div>
+  </section>`;
+}
+
+function notificationsScreen() {
+  if (!notifications.length) return emptyState(hrIcon("bell", 26), "You're all caught up", "Approvals, payslips and HR updates will appear here.");
+  return `<section class="stack">
+    <div class="row-between">${sectionTitle(unreadCount ? `${unreadCount} unread` : "All read")}${unreadCount ? `<button type="button" class="link" id="mark-all-read" ${ssBusy ? "disabled" : ""}>Mark all read</button>` : ""}</div>
+    <div class="list">${notifications.map((row) => {
+      const unread = !Number(row.read);
+      return `<button type="button" class="list-row notif${unread ? " unread" : ""}" data-notification="${esc(text(row, "name"))}"><span class="row-icon">${hrIcon(text(row, "document_type") === "Salary Slip" ? "credit-card" : text(row, "document_type") === "Expense Claim" ? "receipt" : "bell", 18)}</span><div class="grow"><strong>${esc(text(row, "subject") || "Notification")}</strong><span class="t-meta">${esc(formatDateTime(text(row, "creation")))}${text(row, "document_type") ? ` · ${esc(text(row, "document_type"))}` : ""}</span></div>${unread ? `<i class="unread-dot" aria-label="Unread"></i>` : ""}</button>`;
+    }).join("")}</div>
+  </section>`;
+}
+
+function editProfileScreen() {
+  const control = (key: string, label: string, kind: string) => {
+    const value = esc(text(profileData, key));
+    const input = kind === "textarea"
+      ? `<textarea name="${key}" maxlength="500">${value}</textarea>`
+      : `<input name="${key}" type="${kind}" value="${value}" ${kind === "tel" ? 'inputmode="tel" maxlength="21"' : kind === "email" ? 'inputmode="email" maxlength="254"' : 'maxlength="140"'}>`;
+    return field(label, input);
+  };
+  const [contact, address, emergency] = [PROFILE_FIELDS.slice(0, 2), PROFILE_FIELDS.slice(2, 4), PROFILE_FIELDS.slice(4)];
+  return `<form id="profile-form" class="stack-lg">
+    <div class="card info-card">${infoRow("Work email", text(profileData, "company_email"))}${infoRow("Joined", formatDay(text(profileData, "date_of_joining")))}${infoRow("Employee ID", text(context, "employee"))}</div>
+    <div class="stack-sm">${sectionTitle("Contact")}<div class="card stack">${contact.map(([k, l, t]) => control(k, l, t)).join("")}</div></div>
+    <div class="stack-sm">${sectionTitle("Address")}<div class="card stack">${address.map(([k, l, t]) => control(k, l, t)).join("")}</div></div>
+    <div class="stack-sm">${sectionTitle("Emergency contact")}<div class="card stack">${emergency.map(([k, l, t]) => control(k, l, t)).join("")}</div></div>
+    <p class="t-meta">Name, job and bank details are managed by HR. Changes here are saved to your ERP employee record.</p>
+    <div class="sticky-actions">${btn("Save changes", { kind: "primary", block: true, disabled: Boolean(ssBusy), attrs: 'type="submit"' })}</div>
+  </form>`;
+}
+
+function documentsScreen() {
+  const rowsHtml = documents.length
+    ? `<div class="list">${documents.map((row) => `<article class="list-row"><span class="row-icon">${hrIcon("file", 18)}</span><div class="grow"><strong class="ellipsis">${esc(text(row, "file_name"))}</strong><span class="t-meta">${esc(formatDay(text(row, "creation")))} · ${esc(formatBytes(row.file_size))}</span></div>${statusBadge("Private", "neutral")}</article>`).join("")}</div>`
+    : emptyState(hrIcon("file", 24), "No documents yet", "Files you upload are stored privately on your employee record.");
+  return `<section class="stack-lg">
+    <form id="document-form" class="card stack">
+      <div class="card-head"><span class="row-icon">${hrIcon("upload", 18)}</span><div class="grow"><h2 class="t-title">Upload a document</h2><p class="t-meta">PDF, JPG or PNG up to 5 MB. Only you and HR can see it.</p></div></div>
+      <label class="file-drop"><input name="file" type="file" accept="${UPLOAD_ACCEPT}" required><span>${hrIcon("upload", 20)} Choose file</span></label>
+      ${btn("Upload", { kind: "primary", block: true, disabled: Boolean(ssBusy), attrs: 'type="submit"' })}
+    </form>
+    <div class="stack-sm">${sectionTitle("Uploaded")}${rowsHtml}</div>
+  </section>`;
+}
+
+function readFileAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(base64FromDataUrl(String(reader.result || "")));
+    reader.onerror = () => reject(new Error("The file could not be read."));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function runSelfService(label: string, task: () => Promise<void>, rerender: Screen) {
+  if (!api || previewMode || ssBusy) return;
+  if (offline()) { setToast("You appear offline. Reconnect and try again.", "danger"); return; }
+  ssBusy = label;
+  render(rerender);
+  try {
+    await task();
+  } catch (error) {
+    setToast(error instanceof Error ? error.message : `${label} failed`, "danger");
+  } finally {
+    ssBusy = "";
+    if (screen === rerender) render(rerender);
+  }
+}
+
+async function openScreenData(next: Screen) {
+  if (!api || previewMode) return;
+  try {
+    if (next === "expenses") {
+      const [data, opts] = await Promise.all([api.getExpenses().then(payload), api.getExpenseOptions().then(payload)]);
+      expenseClaims = list(data.claims); advances = list(data.advances); expenseOptions = opts;
+    } else if (next === "approvals") approvals = approvalItems(await payload(await api.getApprovals()));
+    else if (next === "notifications") { const data = await payload(await api.getNotifications()); notifications = list(data.items); unreadCount = Number(data.unread) || 0; }
+    else if (next === "editprofile") profileData = ((await payload(await api.getProfile())).profile || {}) as Row;
+    else if (next === "documents") documents = list(await payload(await api.getDocuments()));
+    else return;
+    if (screen === next) render(next);
+  } catch (error) {
+    if (screen === next) setToast(error instanceof Error ? error.message : "Could not load this page", "danger");
+  }
+}
+
+function bindSelfService() {
+  document.querySelectorAll<HTMLButtonElement>("[data-exp-tab]").forEach((button) => {
+    button.onclick = () => { expenseTab = button.dataset.expTab === "advances" ? "advances" : "claims"; render("expenses"); };
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-approval]").forEach((button) => {
+    button.onclick = () => {
+      const [doctype, name] = (button.dataset.approval || "").split("|");
+      const decision = button.dataset.decision || "";
+      let reason = "";
+      if (decision === "reject") {
+        const answer = window.prompt("Reason for rejecting (optional)", "");
+        if (answer === null) return;
+        reason = answer;
+      }
+      void runSelfService("Saving decision", async () => {
+        const body = approvalAction(doctype, name, decision, reason);
+        await payload(await api!.actOnApproval(body));
+        approvals = approvals.filter((item) => !(item.doctype === doctype && item.name === name));
+        setToast(`${name} ${decision === "approve" ? "approved" : "rejected"}`, "success");
+      }, "approvals");
+    };
+  });
+  document.querySelector<HTMLFormElement>("#expense-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const form = event.currentTarget as HTMLFormElement;
+    const data = new FormData(form);
+    const receipt = data.get("receipt");
+    const file = receipt instanceof File && receipt.size ? receipt : null;
+    void runSelfService("Submitting claim", async () => {
+      const problem = file ? uploadProblem(file) : null;
+      if (problem) throw new Error(problem);
+      const body = expenseClaimRequest({ expenseDate: String(data.get("expenseDate") || ""), expenseType: String(data.get("expenseType") || ""), amount: String(data.get("amount") || ""), description: String(data.get("description") || ""), today: localIsoDate() });
+      const saved = await payload(await api!.createExpenseClaim(body));
+      let note = "";
+      if (file) {
+        try { await payload(await api!.uploadDocument({ doctype: "Expense Claim", name: text(saved, "name"), filename: file.name, content: await readFileAsBase64(file) })); }
+        catch { note = " (receipt upload failed — attach it again from ERP)"; }
+      }
+      const fresh = await payload(await api!.getExpenses());
+      expenseClaims = list(fresh.claims); advances = list(fresh.advances);
+      setToast(`Claim ${text(saved, "name")} sent for approval${note}`, note ? "warn" : "success");
+    }, "expenses");
+  });
+  document.querySelector<HTMLFormElement>("#advance-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget as HTMLFormElement);
+    void runSelfService("Requesting advance", async () => {
+      const body = advanceRequest({ purpose: String(data.get("purpose") || ""), amount: String(data.get("amount") || "") });
+      const saved = await payload(await api!.createEmployeeAdvance(body));
+      const fresh = await payload(await api!.getExpenses());
+      expenseClaims = list(fresh.claims); advances = list(fresh.advances);
+      setToast(`Advance ${text(saved, "name")} requested`, "success");
+    }, "expenses");
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-withdraw]").forEach((button) => {
+    button.onclick = () => {
+      const name = button.dataset.withdraw || "";
+      if (!name || !window.confirm("Withdraw this leave application?")) return;
+      void runSelfService("Withdrawing leave", async () => {
+        await payload(await api!.cancelLeaveApplication({ name }));
+        leaveRows = leaveRows.map((row) => (text(row, "name") === name ? { ...row, status: "Cancelled" } : row));
+        setToast("Leave application withdrawn", "success");
+        void refresh();
+      }, "leave");
+    };
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-payslip]").forEach((button) => {
+    button.onclick = () => {
+      const name = button.dataset.payslip || "";
+      void runSelfService("Preparing payslip", async () => {
+        const file = await raceWithTimeout(async () => payload(await api!.getPayslipPdf({ name })), 60_000, "The payslip PDF took too long. Try again.");
+        savePdf(safePdfName(text(file, "filename")), text(file, "content"));
+      }, "pay");
+    };
+  });
+  document.querySelector<HTMLButtonElement>("#mark-all-read")?.addEventListener("click", () => {
+    void runSelfService("Updating", async () => {
+      await payload(await api!.markNotificationsRead({}));
+      notifications = notifications.map((row) => ({ ...row, read: 1 }));
+      unreadCount = 0;
+    }, "notifications");
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-notification]").forEach((button) => {
+    button.onclick = () => {
+      const name = button.dataset.notification || "";
+      const row = notifications.find((entry) => text(entry, "name") === name);
+      if (!row || Number(row.read) || !api || previewMode) return;
+      row.read = 1;
+      unreadCount = Math.max(0, unreadCount - 1);
+      render("notifications");
+      void api.markNotificationsRead({ name }).catch(() => undefined);
+    };
+  });
+  document.querySelector<HTMLFormElement>("#profile-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget as HTMLFormElement);
+    const form: Record<string, string> = {};
+    for (const [key] of PROFILE_FIELDS) form[key] = String(data.get(key) ?? "");
+    void runSelfService("Saving", async () => {
+      const updates = profileUpdates(form, profileData);
+      if (!updates) { setToast("Nothing changed", "info"); return; }
+      const saved = await payload(await api!.updateProfile({ updates }));
+      profileData = { ...profileData, ...((saved.profile || {}) as Row) };
+      setToast("Your details were saved", "success");
+    }, "editprofile");
+  });
+  document.querySelector<HTMLFormElement>("#document-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const picked = new FormData(event.currentTarget as HTMLFormElement).get("file");
+    const file = picked instanceof File && picked.size ? picked : null;
+    void runSelfService("Uploading", async () => {
+      const problem = uploadProblem(file);
+      if (problem || !file) throw new Error(problem || "Choose a file first.");
+      await payload(await api!.uploadDocument({ filename: file.name, content: await readFileAsBase64(file) }));
+      documents = list(await payload(await api!.getDocuments()));
+      setToast(`${file.name} uploaded`, "success");
+    }, "documents");
+  });
+}
+
+/** Hand the PDF to the system: share sheet when available, else a download link. */
+function savePdf(filename: string, base64: string) {
+  if (!base64) throw new Error("The server returned an empty PDF.");
+  const bytes = Uint8Array.from(atob(base64), (ch) => ch.charCodeAt(0));
+  const blob = new Blob([bytes], { type: "application/pdf" });
+  const file = typeof File === "function" ? new File([blob], filename, { type: "application/pdf" }) : null;
+  const nav = navigator as Navigator & { canShare?: (data: ShareData) => boolean };
+  if (file && nav.share && nav.canShare?.({ files: [file] })) {
+    void nav.share({ files: [file], title: filename }).catch(() => undefined);
+    return;
+  }
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.rel = "noopener";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  setToast(`${filename} downloaded`, "success");
 }
 
 function render(next: Screen = screen) {
@@ -769,7 +1141,7 @@ function render(next: Screen = screen) {
     root.innerHTML = `${toastHtml()}<section class="auth"><div class="auth-hero">${brandMark()}<h1>Aimatic HR</h1><p>${esc(loading)}…</p></div><div class="auth-card"><div class="skeleton" aria-busy="true">${loadingSkeleton(4)}</div></div></section>`;
     return;
   }
-  const pages: Record<Screen, () => string> = { home, attendance, calendar: calendarScreen, leave, pay, enroll, profile };
+  const pages: Record<Screen, () => string> = { home, attendance, calendar: calendarScreen, leave, pay, enroll, profile, approvals: approvalsScreen, expenses: expensesScreen, notifications: notificationsScreen, editprofile: editProfileScreen, documents: documentsScreen };
   // Exactly 5 tabs — never Enroll in the bar (wraps on ~360px / real phones). Enroll stays manager-only via Home tile + Profile.
   const nav: Array<{ id: Screen; label: string; icon: string }> = [
     { id: "home", label: "Home", icon: icon("home", 22) },
@@ -779,7 +1151,7 @@ function render(next: Screen = screen) {
     { id: "profile", label: "Profile", icon: icon("user", 22) },
   ];
   if (!isManager() && screen === "enroll") screen = "home";
-  const navActive: Screen = screen === "enroll" ? "profile" : screen === "calendar" ? "attendance" : screen;
+  const navActive: Screen = screen === "enroll" || screen === "editprofile" || screen === "documents" ? "profile" : screen === "calendar" ? "attendance" : ["approvals", "expenses", "notifications"].includes(screen) ? "home" : screen;
   // Pull the live enroll video out of the old DOM before it is discarded, so re-rendering the
   // capture step (new photo taken, retake, etc.) doesn't restart/black-flash the camera preview.
   const existingEnrollVideo = screen === "enroll" ? document.querySelector<HTMLVideoElement>("#enroll-video") : null;
@@ -819,9 +1191,12 @@ function bind() {
         void loadCalendar(localIsoDate().slice(0, 7));
         return;
       }
-      render(button.dataset.screen as Screen);
+      const target = button.dataset.screen as Screen;
+      render(target);
+      void openScreenData(target);
     };
   });
+  bindSelfService();
   // A manual refresh mid check-in would repaint #attend-video out from under the live capture.
   document.querySelector<HTMLButtonElement>("#refresh")?.addEventListener("click", () => { if (!attendBusy) void refresh(); });
   document.querySelector<HTMLButtonElement>("#cal-prev")?.addEventListener("click", () => void loadCalendar(shiftMonth(calendarMonth, -1)));
