@@ -22,6 +22,11 @@ export function createHrApi(client: ApiClient) {
     body: JSON.stringify(body),
   });
   return {
+    // Phase 4 360 feedback (aimatichr.hr_mobile.feedback)
+    getFeedback: () => client.callMethod("aimatichr.hr_mobile.feedback.get_feedback", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }),
+    getFeedbackRequest: (body: { name: string }) => client.callMethod("aimatichr.hr_mobile.feedback.get_request", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
+    submitFeedbackRequest: (body: { name: string; answers: Record<string, unknown> }) => client.callMethod("aimatichr.hr_mobile.feedback.submit_request", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
+    getMyFeedbackResults: (body: { cycle: string }) => client.callMethod("aimatichr.hr_mobile.feedback.get_my_results", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
     // Phase 4 hiring (aimatichr.hr_mobile.hiring)
     getOpenings: () => client.callMethod("aimatichr.hr_mobile.hiring.get_openings", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }),
     getPipeline: (body: { opening: string }) => client.callMethod("aimatichr.hr_mobile.hiring.get_pipeline", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
