@@ -4,6 +4,7 @@ import { Directory, Filesystem } from "@capacitor/filesystem";
 import { Share } from "@capacitor/share";
 import { Geolocation } from "@capacitor/geolocation";
 import { createHrApi } from "../../api/hr";
+import { sanitizeRichText } from "./richtext";
 import { createApiClient } from "../../api/client";
 import { normalizeErpDisplayText } from "../../core/display-branding";
 import { capacitorOAuthBrowser } from "../../mobile/capacitor-oauth-browser";
@@ -130,6 +131,9 @@ let profileFormBase: Row = {};
 let helpData: Row = {};
 let helpQuery = "";
 let ticketDetail: Row | null = null;
+/** The ticket / policy the employee opened last; late responses for another item are ignored. */
+let ticketWanted = "";
+let policyWanted = "";
 let policies: Row[] = [];
 let policyPending = 0;
 let policyDetail: Row | null = null;
@@ -1045,7 +1049,7 @@ async function runSelfService(label: string, task: () => Promise<void>, owner: S
   } finally {
     ssBusy = "";
     // A form the employee started after leaving and returning (not the one being submitted) is kept.
-    const freshEdits = Boolean(document.querySelector("main.page form[data-dirty]:not([data-submitting])"));
+    const freshEdits = Boolean(document.querySelector("main.page form[data-dirty]:not([data-submitting]):not([role=search])"));
     if (ok && screen === owner && !freshEdits) render(owner);
     else setBusyControls(false);
   }
@@ -1070,10 +1074,20 @@ function patchLiveParts(current: Screen) {
     const fresh = document.createElement("div");
     fresh.innerHTML = build();
     document.querySelectorAll<HTMLElement>("main.page [data-live]").forEach((el) => {
+      // A section holding a form the employee is filling in (e.g. a picked upload) is left alone.
+      if (el.querySelector("form[data-dirty]")) return;
       const next = fresh.querySelector<HTMLElement>(`[data-live="${el.dataset.live}"]`);
       if (next) el.replaceWith(next);
     });
   }
+  if (current === "requests") syncSelect(document.querySelector<HTMLSelectElement>('#letter-form select[name="documentType"]'), letterTypes.map((t) => `<option>${esc(t)}</option>`).join(""));
+  if (current === "assets") {
+    syncSelect(document.querySelector<HTMLSelectElement>('#asset-form select[name="requestType"]'), assetTypeOptions());
+    syncSelect(document.querySelector<HTMLSelectElement>('#asset-form select[name="asset"]'), `<option value="">—</option>${myAssets.map((row) => `<option value="${esc(text(row, "name"))}">${esc(text(row, "asset_name") || text(row, "name"))}</option>`).join("")}`);
+    const assetField = document.querySelector<HTMLElement>("#asset-form [data-asset-field]");
+    if (assetField) assetField.hidden = !myAssets.length;
+  }
+  if (screen === current) bindLiveRows();
   const select = current === "expenses" ? document.querySelector<HTMLSelectElement>('#expense-form select[name="expenseType"]') : null;
   const types = list(expenseOptions.types).map((row) => text(row, "name")).filter(Boolean);
   if (select && types.length) {
@@ -1088,7 +1102,7 @@ function patchLiveParts(current: Screen) {
 
 /** True once the employee has typed into or picked a file in a form on the current page. */
 function pageFormDirty(): boolean {
-  return Boolean(document.querySelector("main.page form[data-dirty]"));
+  return Boolean(document.querySelector("main.page form[data-dirty]:not([role=search])"));
 }
 
 async function openScreenData(next: Screen) {
@@ -1116,12 +1130,19 @@ async function openScreenData(next: Screen) {
   }
 }
 
-function bindSelfService() {
+/** Mark a form dirty once the employee types or picks something; safe to call again on new nodes. */
+function trackDirtyForms() {
   document.querySelectorAll<HTMLFormElement>("main.page form").forEach((form) => {
+    if (form.dataset.tracked) return;
+    form.dataset.tracked = "1";
     const mark = () => { form.dataset.dirty = "1"; };
     form.addEventListener("input", mark);
     form.addEventListener("change", mark);
   });
+}
+
+function bindSelfService() {
+  trackDirtyForms();
   document.querySelectorAll<HTMLButtonElement>("[data-exp-tab]").forEach((button) => {
     button.onclick = () => { expenseTab = button.dataset.expTab === "advances" ? "advances" : "claims"; render("expenses"); };
   });
@@ -1247,18 +1268,18 @@ function bindSelfService() {
  */
 async function saveFile(filename: string, base64: string): Promise<void> {
   const safe = filename.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^[-.]+/, "") || "document.pdf";
-  return savePdf(safe, base64);
+  return savePdf(safe, base64, "Save or open this document");
 }
 
-async function savePdf(filename: string, base64: string): Promise<void> {
+async function savePdf(filename: string, base64: string, dialogTitle = "Save or open your payslip"): Promise<void> {
   if (!base64) throw new Error("The server returned an empty PDF.");
   if (Capacitor.isNativePlatform()) {
     const written = await Filesystem.writeFile({ path: `payslips/${filename}`, data: base64, directory: Directory.Cache, recursive: true });
     try {
-      await Share.share({ title: filename, dialogTitle: "Save or open your payslip", files: [written.uri] });
+      await Share.share({ title: filename, dialogTitle, files: [written.uri] });
     } catch (error) {
       // Closing the share sheet without choosing an app is not an error for the employee.
-      if (!/cancel/i.test(error instanceof Error ? error.message : String(error))) throw new Error("Could not open the payslip. Install a PDF viewer or Files app and try again.");
+      if (!/cancel/i.test(error instanceof Error ? error.message : String(error))) throw new Error("Could not open the file. Install a PDF viewer or Files app and try again.");
     }
     return;
   }
@@ -1280,14 +1301,14 @@ function helpScreen() {
   const tickets = list(helpData.tickets);
   const categories = (Array.isArray(helpData.categories) ? helpData.categories : []).map((c) => `<option>${esc(String(c))}</option>`).join("");
   const faqHtml = faqs.length
-    ? `<div class="list">${faqs.map((row) => `<details class="list-row faq"><summary><strong>${esc(text(row, "question"))}</strong>${icon("chevron-right", 16)}</summary><div class="rich">${String(row.answer || "")}</div></details>`).join("")}</div>`
+    ? `<div class="list">${faqs.map((row) => `<details class="list-row faq"><summary><strong>${esc(text(row, "question"))}</strong>${icon("chevron-right", 16)}</summary><div class="rich">${sanitizeRichText(row.answer)}</div></details>`).join("")}</div>`
     : `<p class="t-meta">${helpQuery ? "No answers matched. Ask HR below." : "No FAQs published yet."}</p>`;
   const ticketHtml = tickets.length
     ? `<div class="list">${tickets.map((row) => { const st = text(row, "status"); return `<button type="button" class="list-row nav-row" data-ticket="${esc(text(row, "name"))}"><span class="row-icon">${hrIcon("help", 18)}</span><div class="grow"><strong class="ellipsis">${esc(text(row, "subject"))}</strong><span class="t-meta">${esc(text(row, "category"))} · ${esc(formatDay(text(row, "creation")))}</span></div>${statusBadge(st, statusTone(st))}</button>`; }).join("")}</div>`
     : emptyState(hrIcon("help", 24), "No tickets yet", "Questions you send to HR will appear here.");
   return `<section class="stack-lg">
     <form id="faq-search" class="search-bar" role="search">${icon("search", 18)}<input name="q" type="search" placeholder="Search answers" value="${esc(helpQuery)}" aria-label="Search answers"></form>
-    <div class="stack-sm">${sectionTitle("Common questions")}${faqHtml}</div>
+    <div class="stack-sm" data-live="faq">${sectionTitle("Common questions")}${faqHtml}</div>
     <form id="ticket-form" class="card stack">
       <h2 class="t-title">Ask HR</h2>
       ${field("Subject", `<input name="subject" maxlength="140" required placeholder="Short summary">`)}
@@ -1341,7 +1362,8 @@ function policyScreen() {
       <div class="row-between"><span class="t-label">Version ${esc(text(doc, "policy_version") || "1")} · from ${esc(formatDay(text(doc, "effective_from")))}</span>${doc.acknowledged ? statusBadge("Acknowledged", "success") : ""}</div>
       <h2 class="t-title">${esc(text(doc, "title"))}</h2>
       ${text(doc, "summary") ? `<p class="t-meta">${esc(text(doc, "summary"))}</p>` : ""}
-      <div class="rich policy-body">${String(doc.content || "") || "<p>See the attached document in the ERP.</p>"}</div>
+      ${doc.has_attachment ? btn(`${hrIcon("file", 16)} Open attached document`, { id: "policy-file", kind: "secondary", block: true }) : ""}
+      <div class="rich policy-body">${sanitizeRichText(doc.content) || (doc.has_attachment ? "<p>The full policy is in the attached document.</p>" : "<p>No text published.</p>")}</div>
     </article>
     ${needs ? `<div class="sticky-actions"><label class="check-row"><input type="checkbox" id="policy-read"> I have read and understood this policy.</label>${btn("Acknowledge", { id: "policy-ack", kind: "primary", block: true, disabled: true })}</div>` : ""}
   </section>`;
@@ -1356,7 +1378,7 @@ function requestsScreen() {
     : emptyState(hrIcon("file", 24), "No letter requests", "Letters you ask HR for will appear here.");
   const types = letterTypes.map((t) => `<option>${esc(t)}</option>`).join("");
   return `<section class="stack-lg">
-    ${hrHtml}
+    <div data-live="hr-asks">${hrHtml}</div>
     <form id="letter-form" class="card stack">
       <h2 class="t-title">Request a letter</h2>
       ${field("Letter", `<select name="documentType" required>${types}</select>`)}
@@ -1368,6 +1390,25 @@ function requestsScreen() {
   </section>`;
 }
 
+function assetTypeOptions(): string {
+  const types: Array<[string, string]> = [["Request", "Request an item"]];
+  if (myAssets.length) types.push(["Return", "Return an item"], ["Report Issue", "Report a problem"]);
+  return types.map(([value, label]) => `<option value="${value}">${label}</option>`).join("");
+}
+
+/** Replace a select's options when they changed, keeping the employee's choice if it still exists. */
+function syncSelect(select: HTMLSelectElement | null, optionsHtml: string) {
+  if (!select) return;
+  const probe = document.createElement("select");
+  probe.innerHTML = optionsHtml;
+  const next = Array.from(probe.options).map((o) => `${o.value}\u0001${o.text}`).join("\u0000");
+  const shown = Array.from(select.options).map((o) => `${o.value}\u0001${o.text}`).join("\u0000");
+  if (next === shown) return;
+  const keep = select.value;
+  select.innerHTML = optionsHtml;
+  if (Array.from(select.options).some((o) => o.value === keep)) select.value = keep;
+}
+
 function assetsScreen() {
   const assetsHtml = myAssets.length
     ? `<div class="list">${myAssets.map((row) => `<article class="list-row"><span class="row-icon">${hrIcon("box", 18)}</span><div class="grow"><strong>${esc(text(row, "asset_name") || text(row, "name"))}</strong><span class="t-meta">${esc([text(row, "name"), text(row, "location")].filter(Boolean).join(" · "))}</span></div>${statusBadge(text(row, "status") || "In use", "info")}</article>`).join("")}</div>`
@@ -1377,12 +1418,12 @@ function assetsScreen() {
     : `<p class="t-meta">No requests yet.</p>`;
   const assetOptions = myAssets.map((row) => `<option value="${esc(text(row, "name"))}">${esc(text(row, "asset_name") || text(row, "name"))}</option>`).join("");
   return `<section class="stack-lg">
-    <div class="stack-sm">${sectionTitle("Assigned to me")}${assetsHtml}</div>
+    <div class="stack-sm" data-live="assets">${sectionTitle("Assigned to me")}${assetsHtml}</div>
     <form id="asset-form" class="card stack">
       <h2 class="t-title">New asset request</h2>
-      ${field("Type", `<select name="requestType"><option value="Request">Request an item</option>${myAssets.length ? `<option value="Return">Return an item</option><option value="Report Issue">Report a problem</option>` : ""}</select>`)}
+      ${field("Type", `<select name="requestType">${assetTypeOptions()}</select>`)}
       ${field("Item", `<input name="item" maxlength="140" required placeholder="e.g. Laptop charger">`)}
-      ${myAssets.length ? field("Asset (for return / problem)", `<select name="asset"><option value="">—</option>${assetOptions}</select>`) : ""}
+      <div data-asset-field${myAssets.length ? "" : " hidden"}>${field("Asset (for return / problem)", `<select name="asset"><option value="">—</option>${assetOptions}</select>`)}</div>
       <div class="grid-2">${field("Needed by", `<input name="neededBy" type="date">`)}<div></div></div>
       ${field("Reason", `<textarea name="reason" maxlength="1000" placeholder="Why, or what is wrong?"></textarea>`)}
       ${btn("Send request", { kind: "primary", block: true, attrs: 'type="submit"' })}
@@ -1401,85 +1442,38 @@ function noticesScreen() {
       <div class="row-between"><span class="t-label">${esc(text(row, "action_type"))}</span>${statusBadge(st, statusTone(st))}</div>
       <h2 class="t-title">${esc(text(row, "subject"))}</h2>
       <p class="t-meta">Incident ${esc(formatDay(text(row, "incident_date")))}${text(row, "effective_from") ? ` · effective ${esc(formatDateRange(text(row, "effective_from"), text(row, "effective_to") || text(row, "effective_from")))}` : ""}</p>
-      <div class="rich">${String(row.description || "")}</div>
+      <div class="rich">${sanitizeRichText(row.description)}</div>
       ${text(row, "employee_response") ? `<div class="banner info"><span>Your response: ${esc(text(row, "employee_response"))}</span></div>` : ""}
       ${canAppeal ? `<form class="stack" data-notice="${esc(text(row, "name"))}">${field("Your response", `<textarea name="response" maxlength="2000" placeholder="Required for an appeal, optional when acknowledging"></textarea>`)}<div class="grid-2">${btn("Appeal", { kind: "secondary", block: true, attrs: 'type="submit" data-notice-action="appeal"' })}${canAck ? btn("Acknowledge", { kind: "primary", block: true, attrs: 'type="submit" data-notice-action="acknowledge"' }) : ""}</div></form>` : ""}
     </article>`;
   }).join("")}</section>`;
 }
 
-function bindHrOps() {
-  document.querySelector<HTMLFormElement>("#faq-search")?.addEventListener("submit", (event) => {
-    event.preventDefault();
-    helpQuery = String(new FormData(event.currentTarget as HTMLFormElement).get("q") || "").trim().slice(0, 100);
-    if (previewMode || !api) { render("help"); return; }
-    void (async () => { try { helpData = await payload(await api!.getHelp({ query: helpQuery })); } catch (error) { setToast(error instanceof Error ? error.message : "Search failed", "danger"); } if (screen === "help") render("help"); })();
-  });
-  document.querySelector<HTMLFormElement>("#ticket-form")?.addEventListener("submit", (event) => {
-    event.preventDefault();
-    const data = new FormData(event.currentTarget as HTMLFormElement);
-    void runSelfService("Sending", async () => {
-      const saved = await payload(await api!.createTicket({ subject: String(data.get("subject") || ""), category: String(data.get("category") || ""), priority: String(data.get("priority") || "Medium"), description: String(data.get("description") || "") }));
-      setToast(`Ticket ${text(saved, "name")} sent to HR`, "success");
-      try { helpData = await payload(await api!.getHelp({ query: helpQuery })); } catch { /* next open */ }
-    }, "help");
-  });
+/**
+ * Bindings for rows inside [data-live] sections. They use onclick/onsubmit so calling this again
+ * after patchLiveParts() replaced the nodes rebinds them without stacking handlers.
+ */
+function bindLiveRows() {
+  trackDirtyForms();
   document.querySelectorAll<HTMLButtonElement>("[data-ticket]").forEach((button) => {
-    button.onclick = () => { ticketDetail = null; render("ticket"); void loadTicket(button.dataset.ticket || ""); };
-  });
-  document.querySelector<HTMLFormElement>("#ticket-reply")?.addEventListener("submit", (event) => {
-    event.preventDefault();
-    const name = text((ticketDetail?.ticket || {}) as Row, "name");
-    const message = String(new FormData(event.currentTarget as HTMLFormElement).get("message") || "");
-    void runSelfService("Sending", async () => {
-      await payload(await api!.addTicketComment({ name, message }));
-      setToast("Reply sent", "success");
-      await loadTicketData(name);
-    }, "ticket");
-  });
-  document.querySelectorAll<HTMLButtonElement>("[data-ticket-action], [data-rate]").forEach((button) => {
-    button.onclick = () => {
-      const name = text((ticketDetail?.ticket || {}) as Row, "name");
-      const action = button.dataset.rate ? "rate" : button.dataset.ticketAction || "";
-      void runSelfService("Updating", async () => {
-        await payload(await api!.ticketAction({ name, action, rating: button.dataset.rate ? Number(button.dataset.rate) : undefined }));
-        setToast(action === "rate" ? "Thanks for the rating" : action === "close" ? "Ticket closed" : "Ticket reopened", "success");
-        await loadTicketData(name);
-      }, "ticket");
-    };
+    button.onclick = () => { ticketDetail = null; ticketWanted = button.dataset.ticket || ""; render("ticket"); void loadTicket(ticketWanted); };
   });
   document.querySelectorAll<HTMLButtonElement>("[data-policy]").forEach((button) => {
     button.onclick = () => {
       const name = button.dataset.policy || "";
       if (previewMode || !api) { render("policy"); return; }
       policyDetail = null;
+      policyWanted = name;
       render("policy");
-      void (async () => { try { policyDetail = await payload(await api!.getPolicy({ name })); } catch (error) { setToast(error instanceof Error ? error.message : "Could not open the policy", "danger"); } if (screen === "policy") render("policy"); })();
+      void (async () => {
+        try {
+          const doc = await payload(await api!.getPolicy({ name }));
+          if (policyWanted !== name) return; // the employee opened another policy meanwhile
+          policyDetail = doc;
+        } catch (error) { if (policyWanted === name) setToast(error instanceof Error ? error.message : "Could not open the policy", "danger"); }
+        if (screen === "policy" && policyWanted === name) render("policy");
+      })();
     };
-  });
-  const readBox = document.querySelector<HTMLInputElement>("#policy-read");
-  const ackButton = document.querySelector<HTMLButtonElement>("#policy-ack");
-  if (readBox && ackButton) {
-    readBox.onchange = () => { ackButton.disabled = !readBox.checked || Boolean(ssBusy); };
-    ackButton.onclick = () => {
-      const doc = policyDetail || {};
-      void runSelfService("Saving", async () => {
-        await payload(await api!.acknowledgePolicy({ name: text(doc, "name"), policy_version: Number(doc.policy_version) || 1 }));
-        policyDetail = { ...doc, acknowledged: true };
-        policies = policies.map((row) => (text(row, "name") === text(doc, "name") ? { ...row, acknowledged: true, pending: false } : row));
-        policyPending = policies.filter((row) => row.pending).length;
-        setToast("Policy acknowledged", "success");
-      }, "policy");
-    };
-  }
-  document.querySelector<HTMLFormElement>("#letter-form")?.addEventListener("submit", (event) => {
-    event.preventDefault();
-    const data = new FormData(event.currentTarget as HTMLFormElement);
-    void runSelfService("Sending", async () => {
-      const saved = await payload(await api!.createLetterRequest({ document_type: String(data.get("documentType") || ""), addressed_to: String(data.get("addressedTo") || ""), purpose: String(data.get("purpose") || "") }));
-      setToast(`Request ${text(saved, "name")} sent to HR`, "success");
-      try { const fresh = await payload(await api!.getDocumentRequests()); docRequests = list(fresh.requests); } catch { /* next open */ }
-    }, "requests");
   });
   document.querySelectorAll<HTMLFormElement>("[data-upload-request]").forEach((form) => {
     form.onsubmit = (event) => {
@@ -1504,6 +1498,90 @@ function bindHrOps() {
         await saveFile(text(file, "filename") || `${name}.pdf`, text(file, "content"));
       }, "requests");
     };
+  });
+}
+
+function bindHrOps() {
+  bindLiveRows();
+  document.querySelector<HTMLFormElement>("#faq-search")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    helpQuery = String(new FormData(event.currentTarget as HTMLFormElement).get("q") || "").trim().slice(0, 100);
+    if (previewMode || !api) { render("help"); return; }
+    const asked = helpQuery;
+    void (async () => {
+      try {
+        const data = await payload(await api!.getHelp({ query: asked }));
+        if (asked !== helpQuery) return; // a newer search is on its way
+        helpData = data;
+      } catch (error) { setToast(error instanceof Error ? error.message : "Search failed", "danger"); return; }
+      // Only the answers and ticket list are refreshed, so a half-written ticket stays as typed.
+      if (screen === "help") patchLiveParts("help");
+    })();
+  });
+  document.querySelector<HTMLFormElement>("#ticket-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget as HTMLFormElement);
+    void runSelfService("Sending", async () => {
+      const saved = await payload(await api!.createTicket({ subject: String(data.get("subject") || ""), category: String(data.get("category") || ""), priority: String(data.get("priority") || "Medium"), description: String(data.get("description") || "") }));
+      setToast(`Ticket ${text(saved, "name")} sent to HR`, "success");
+      try { helpData = await payload(await api!.getHelp({ query: helpQuery })); } catch { /* next open */ }
+    }, "help");
+  });
+  document.querySelector<HTMLFormElement>("#ticket-reply")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const name = text((ticketDetail?.ticket || {}) as Row, "name");
+    const message = String(new FormData(event.currentTarget as HTMLFormElement).get("message") || "");
+    void runSelfService("Sending", async () => {
+      await payload(await api!.addTicketComment({ name, message }));
+      setToast("Reply sent", "success");
+      await loadTicketData(name);
+    }, "ticket");
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-ticket-action], [data-rate]").forEach((button) => {
+    button.onclick = () => {
+      const name = text((ticketDetail?.ticket || {}) as Row, "name");
+      const action = button.dataset.rate ? "rate" : button.dataset.ticketAction || "";
+      void runSelfService("Updating", async () => {
+        await payload(await api!.ticketAction({ name, action, rating: button.dataset.rate ? Number(button.dataset.rate) : undefined }));
+        setToast(action === "rate" ? "Thanks for the rating" : action === "close" ? "Ticket closed" : "Ticket reopened", "success");
+        await loadTicketData(name);
+      }, "ticket");
+    };
+  });
+  const readBox = document.querySelector<HTMLInputElement>("#policy-read");
+  const ackButton = document.querySelector<HTMLButtonElement>("#policy-ack");
+  if (readBox && ackButton) {
+    readBox.onchange = () => { ackButton.disabled = !readBox.checked || Boolean(ssBusy); };
+    ackButton.onclick = () => {
+      const doc = policyDetail || {};
+      void runSelfService("Saving", async () => {
+        await payload(await api!.acknowledgePolicy({ name: text(doc, "name"), policy_version: Number(doc.policy_version) || 1 }));
+        policyDetail = { ...doc, acknowledged: true };
+        policies = policies.map((row) => (text(row, "name") === text(doc, "name") ? { ...row, acknowledged: true, pending: false } : row));
+        policyPending = policies.filter((row) => row.pending).length;
+        setToast("Policy acknowledged", "success");
+      }, "policy");
+    };
+  }
+  const policyFile = document.querySelector<HTMLButtonElement>("#policy-file");
+  if (policyFile) {
+    policyFile.onclick = () => {
+      const name = text(policyDetail || {}, "name");
+      if (previewMode || !api) { setToast("Attachments open on a connected phone", "info"); return; }
+      void runSelfService("Opening document", async () => {
+        const file = await raceWithTimeout(async () => payload(await api!.getPolicyAttachment({ name })), 60_000, "The document took too long. Try again.");
+        await saveFile(text(file, "filename") || `${name}.pdf`, text(file, "content"));
+      }, "policy");
+    };
+  }
+  document.querySelector<HTMLFormElement>("#letter-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget as HTMLFormElement);
+    void runSelfService("Sending", async () => {
+      const saved = await payload(await api!.createLetterRequest({ document_type: String(data.get("documentType") || ""), addressed_to: String(data.get("addressedTo") || ""), purpose: String(data.get("purpose") || "") }));
+      setToast(`Request ${text(saved, "name")} sent to HR`, "success");
+      try { const fresh = await payload(await api!.getDocumentRequests()); docRequests = list(fresh.requests); } catch { /* next open */ }
+    }, "requests");
   });
   document.querySelector<HTMLFormElement>("#asset-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -1533,17 +1611,22 @@ function bindHrOps() {
 }
 
 async function loadTicketData(name: string) {
-  try { ticketDetail = await payload(await api!.getTicket({ name })); } catch { /* keep current */ }
+  try {
+    const data = await payload(await api!.getTicket({ name }));
+    if (ticketWanted === name) ticketDetail = data;
+  } catch { /* keep current */ }
 }
 
 async function loadTicket(name: string) {
   if (previewMode || !api) { render("ticket"); return; }
   try {
-    ticketDetail = await payload(await api.getTicket({ name }));
+    const data = await payload(await api.getTicket({ name }));
+    if (ticketWanted !== name) return; // the employee opened another ticket meanwhile
+    ticketDetail = data;
   } catch (error) {
-    setToast(error instanceof Error ? error.message : "Could not open the ticket", "danger");
+    if (ticketWanted === name) setToast(error instanceof Error ? error.message : "Could not open the ticket", "danger");
   }
-  if (screen === "ticket") render("ticket");
+  if (screen === "ticket" && ticketWanted === name) render("ticket");
 }
 
 function render(next: Screen = screen) {
