@@ -123,6 +123,9 @@ let unreadCount = 0;
 let profileData: Row = {};
 let documents: Row[] = [];
 let ssBusy = "";
+// The profile values the edit form was rendered with: changes are computed against what the
+// employee saw, so a reload that lands after they started typing can't turn untouched fields into edits.
+let profileFormBase: Row = {};
 
 const text = (row: Row | undefined, ...keys: string[]) => {
   for (const key of keys) if (row?.[key] != null && row[key] !== "") return String(row[key]);
@@ -912,6 +915,7 @@ function notificationsScreen() {
 }
 
 function editProfileScreen() {
+  profileFormBase = { ...profileData };
   const control = (key: string, label: string, kind: string) => {
     const value = esc(text(profileData, key));
     const input = kind === "textarea"
@@ -953,9 +957,12 @@ function readFileAsBase64(file: File): Promise<string> {
   });
 }
 
-const SS_CONTROLS = 'main.page button[type="submit"], [data-approval], [data-withdraw], [data-payslip], #mark-all-read';
+const SS_CONTROLS = 'main.page button[type="submit"], [data-approval], [data-withdraw], [data-payslip], #mark-all-read, main.page form input, main.page form select, main.page form textarea';
+// FormData is always read before runSelfService starts, so disabling the inputs is safe and
+// stops edits made during the request from being lost when the success re-render lands.
 function setBusyControls(busy: boolean) {
-  document.querySelectorAll<HTMLButtonElement>(SS_CONTROLS).forEach((button) => { button.disabled = busy; });
+  document.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(SS_CONTROLS).forEach((control) => { control.disabled = busy; });
+  document.querySelectorAll<HTMLFormElement>("main.page form").forEach((form) => { if (busy) form.dataset.submitting = "1"; else delete form.dataset.submitting; });
 }
 
 /**
@@ -977,7 +984,9 @@ async function runSelfService(label: string, task: () => Promise<void>, owner: S
     setToast(error instanceof Error ? error.message : `${label} failed`, "danger");
   } finally {
     ssBusy = "";
-    if (ok && screen === owner) render(owner);
+    // A form the employee started after leaving and returning (not the one being submitted) is kept.
+    const freshEdits = Boolean(document.querySelector("main.page form[data-dirty]:not([data-submitting])"));
+    if (ok && screen === owner && !freshEdits) render(owner);
     else setBusyControls(false);
   }
 }
@@ -1006,7 +1015,14 @@ async function openScreenData(next: Screen) {
     else if (next === "editprofile") profileData = ((await payload(await api.getProfile())).profile || {}) as Row;
     else if (next === "documents") documents = list(await payload(await api.getDocuments()));
     else return;
-    if (screen === next && !pageFormDirty()) render(next);
+    if (screen !== next) return;
+    if (!pageFormDirty()) { render(next); return; }
+    // The employee already started typing: keep their input, but still fill in expense types.
+    const select = next === "expenses" ? document.querySelector<HTMLSelectElement>('#expense-form select[name="expenseType"]') : null;
+    const types = list(expenseOptions.types).map((row) => text(row, "name")).filter(Boolean);
+    if (select && types.length && !select.value) {
+      select.innerHTML = types.map((name) => `<option>${esc(name)}</option>`).join("");
+    }
   } catch (error) {
     if (screen === next) setToast(error instanceof Error ? error.message : "Could not load this page", "danger");
   }
@@ -1114,7 +1130,7 @@ function bindSelfService() {
     const form: Record<string, string> = {};
     for (const [key] of PROFILE_FIELDS) form[key] = String(data.get(key) ?? "");
     void runSelfService("Saving", async () => {
-      const updates = profileUpdates(form, profileData);
+      const updates = profileUpdates(form, profileFormBase);
       if (!updates) { setToast("Nothing changed", "info"); return; }
       const saved = await payload(await api!.updateProfile({ updates }));
       profileData = { ...profileData, ...((saved.profile || {}) as Row) };
