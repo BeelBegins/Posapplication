@@ -491,3 +491,31 @@ html[data-theme="dark"] .segmented .seg.active{color:#fff}
 .pay-row .grow{min-width:0}
 .pay-row .grow strong{white-space:nowrap}
 .pay-trail b{white-space:nowrap}
+
+/* ===== Phase 3 HR operations ===== */
+.count-pill.warn{background:var(--warn-50);color:var(--warn-700)}
+details.faq{display:block;padding:0}
+details.faq summary{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;cursor:pointer;list-style:none;min-height:var(--touch)}
+details.faq summary::-webkit-details-marker{display:none}
+details.faq[open] summary svg{transform:rotate(90deg)}
+details.faq .rich{padding:0 16px 14px}
+.rich{font-size:var(--fs-sm);line-height:1.55;color:var(--text);overflow-wrap:anywhere}
+.rich h1,.rich h2,.rich h3,.rich h4{font-size:var(--fs-md);margin:14px 0 6px}
+.rich p{margin:0 0 8px}
+.rich ul,.rich ol{margin:0 0 8px 18px}
+.rich img{max-width:100%;height:auto}
+.rich table{display:block;max-width:100%;overflow-x:auto}
+.policy-body{border-top:1px solid var(--border);padding-top:12px}
+.thread{display:grid;gap:8px}
+.bubble{max-width:86%;padding:10px 12px;border-radius:14px 14px 14px 4px;background:var(--surface);border:1px solid var(--border)}
+.bubble.mine{justify-self:end;border-radius:14px 14px 4px 14px;background:var(--brand-50);border-color:transparent}
+.bubble p{margin:4px 0 0;font-size:var(--fs-sm);overflow-wrap:anywhere}
+.stars{display:flex;gap:4px}
+.star{width:44px;height:44px;font-size:26px;line-height:1;color:var(--border);border-radius:50%}
+.star.on{color:#f5a524}
+.check-row{display:flex;align-items:center;gap:10px;font-size:var(--fs-sm);font-weight:600;min-height:var(--touch)}
+.check-row input{width:22px;height:22px;accent-color:var(--brand-600)}
+.file-drop.compact{min-height:64px}
+.notice .t-label{color:var(--danger-700)}
+html[data-theme="dark"] .bubble.mine{background:rgba(16,163,127,.18)}
+@media(prefers-color-scheme:dark){html:not([data-theme="light"]) .bubble.mine{background:rgba(16,163,127,.18)}}

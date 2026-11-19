@@ -11,7 +11,30 @@ export function createHrApi(client: ApiClient) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
+  const ops = (name: string, body: Record<string, unknown> = {}) => client.callMethod(`aimatichr.hr_mobile.hrops.${name}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
   return {
+    // Phase 3 HR operations (aimatichr.hr_mobile.hrops)
+    getHelp: (body: { query?: string }) => ops("get_help", body),
+    createTicket: (body: Record<string, unknown>) => ops("create_ticket", body),
+    getTicket: (body: { name: string }) => ops("get_ticket", body),
+    addTicketComment: (body: { name: string; message: string }) => ops("add_ticket_comment", body),
+    ticketAction: (body: Record<string, unknown>) => ops("ticket_action", body),
+    getPolicies: () => ops("get_policies"),
+    getPolicy: (body: { name: string }) => ops("get_policy", body),
+    acknowledgePolicy: (body: { name: string; policy_version: number }) => ops("acknowledge_policy", body),
+    getDocumentRequests: () => ops("get_document_requests"),
+    createLetterRequest: (body: Record<string, unknown>) => ops("create_letter_request", body),
+    uploadRequestedDocument: (body: Record<string, unknown>) => ops("upload_requested_document", body),
+    getIssuedLetter: (body: { name: string }) => ops("get_issued_letter", body),
+    getAssets: () => ops("get_assets"),
+    createAssetRequest: (body: Record<string, unknown>) => ops("create_asset_request", body),
+    getDisciplinary: () => ops("get_disciplinary"),
+    respondDisciplinary: (body: Record<string, unknown>) => ops("respond_disciplinary", body),
+    getLoans: () => ops("get_loans"),
     // Phase 2 self-service (aimatichr.hr_mobile.selfservice)
     actOnApproval: (body: Record<string, unknown>) => ss("act_on_approval", body),
     getExpenses: () => ss("get_expenses"),

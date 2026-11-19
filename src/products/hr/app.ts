@@ -56,7 +56,7 @@ import {
 
 declare const __APP_VERSION__: string;
 type Row = Record<string, unknown>;
-type Screen = "home" | "attendance" | "calendar" | "leave" | "pay" | "enroll" | "profile" | "approvals" | "expenses" | "notifications" | "editprofile" | "documents";
+type Screen = "home" | "attendance" | "calendar" | "leave" | "pay" | "enroll" | "profile" | "approvals" | "expenses" | "notifications" | "editprofile" | "documents" | "help" | "ticket" | "policies" | "policy" | "requests" | "assets" | "notices";
 type PreviewScreen = Screen | "setup" | "signin";
 type EnrollStep = "pick" | "consent" | "capture" | "review";
 type HrApi = ReturnType<typeof createHrApi>;
@@ -126,6 +126,19 @@ let ssBusy = "";
 // The profile values the edit form was rendered with: changes are computed against what the
 // employee saw, so a reload that lands after they started typing can't turn untouched fields into edits.
 let profileFormBase: Row = {};
+// Phase 3 HR operations state
+let helpData: Row = {};
+let helpQuery = "";
+let ticketDetail: Row | null = null;
+let policies: Row[] = [];
+let policyPending = 0;
+let policyDetail: Row | null = null;
+let docRequests: Row[] = [];
+let letterTypes: string[] = [];
+let myAssets: Row[] = [];
+let assetRequests: Row[] = [];
+let notices: Row[] = [];
+let noticesPending = 0;
 
 const text = (row: Row | undefined, ...keys: string[]) => {
   for (const key of keys) if (row?.[key] != null && row[key] !== "") return String(row[key]);
@@ -211,7 +224,7 @@ function brandMark(): string {
   return `<span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 3.5 4.5 7.2v4.9c0 4.6 3.1 8.8 7.5 10.4 4.4-1.6 7.5-5.8 7.5-10.4V7.2L12 3.5Z" stroke="currentColor" stroke-width="1.8"/><path d="M9.2 12.2h5.6M12 9.4v5.6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span>`;
 }
 
-const screenTitles: Record<Screen, string> = { home: "Home", attendance: "Attendance", calendar: "Attendance calendar", leave: "Leave", pay: "Payslips", enroll: "Face enrollment", profile: "Profile", approvals: "Approvals", expenses: "Expenses & advances", notifications: "Notifications", editprofile: "Edit details", documents: "My documents" };
+const screenTitles: Record<Screen, string> = { home: "Home", attendance: "Attendance", calendar: "Attendance calendar", leave: "Leave", pay: "Payslips", enroll: "Face enrollment", profile: "Profile", approvals: "Approvals", expenses: "Expenses & advances", notifications: "Notifications", editprofile: "Edit details", documents: "My documents", help: "Help desk", ticket: "Ticket", policies: "Company policies", policy: "Policy", requests: "Letters & documents", assets: "My assets", notices: "Notices" };
 
 /** Consistent page header: Home shows the greeting; sub-screens get a back arrow. */
 function pageHeader(current: Screen): string {
@@ -221,7 +234,7 @@ function pageHeader(current: Screen): string {
     const name = text(context, "employee_name") || "Employee";
     return `<header class="page-header home">${avatar(name)}<div class="grow"><p class="ph-kicker">${esc(greet)}</p><h1 class="ph-title">${esc(name.split(/\s+/)[0] || name)}</h1></div><button type="button" class="ph-action bell" data-screen="notifications" aria-label="${unreadCount ? `Notifications, ${unreadCount} unread` : "Notifications"}">${hrIcon("bell", 20)}${unreadCount ? `<span class="ph-badge">${unreadCount > 99 ? "99+" : unreadCount}</span>` : ""}</button><button type="button" class="ph-action" id="refresh" aria-label="Refresh">${icon("refresh", 20)}</button></header>`;
   }
-  const backTargets: Partial<Record<Screen, Screen>> = { enroll: "home", approvals: "home", expenses: "home", notifications: "home", editprofile: "profile", documents: "profile" };
+  const backTargets: Partial<Record<Screen, Screen>> = { enroll: "home", approvals: "home", expenses: "home", notifications: "home", editprofile: "profile", documents: "profile", help: "home", ticket: "help", policies: "home", policy: "policies", requests: "home", assets: "home", notices: "home" };
   const back: Screen | null = current === "calendar" ? calendarReturn : backTargets[current] || null;
   return `<header class="page-header">${back ? `<button type="button" class="ph-action" data-screen="${back}" aria-label="Back">${icon("chevron-left", 22)}</button>` : ""}<div class="grow"><h1 class="ph-title">${esc(screenTitles[current])}</h1></div></header>`;
 }
@@ -235,6 +248,10 @@ const HR_ICONS: Record<string, string> = {
   wallet: '<rect x="2" y="6" width="20" height="14" rx="2"/><path d="M16 13h2"/><path d="M2 10h20"/><path d="M6 6V4h12v2"/>',
   inbox: '<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
   edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/>',
+  help: '<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
+  book: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>',
+  box: '<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/>',
+  send: '<line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>',
 };
 function hrIcon(name: string, size = 24): string {
   const body = HR_ICONS[name];
@@ -333,6 +350,8 @@ async function ensureBackHandler(): Promise<void> {
       if (screen === "enroll") { render("home"); return; }
       if (screen === "calendar") { render(calendarReturn); return; }
       if (screen === "editprofile" || screen === "documents") { render("profile"); return; }
+      if (screen === "ticket") { render("help"); return; }
+      if (screen === "policy") { render("policies"); return; }
       if (screen !== "home") { render("home"); return; }
       void App.exitApp();
     });
@@ -465,6 +484,34 @@ function seedPreview(): void {
   ];
   leaveRows = [{ name: "HR-LAP-2026-00040", leave_type: "Casual Leave", status: "Open", from_date: "2026-11-20", to_date: "2026-11-20" }, { name: "HR-LAP-2026-00031", leave_type: "Annual Leave", status: "Approved", from_date: "2026-10-06", to_date: "2026-10-08", docstatus: 1 }];
   payslips = [{ name: "Sal Slip/HR-EMP-00063/00011", net_pay: 185000, start_date: "2026-11-01", end_date: "2026-11-30" }, { name: "Sal Slip/HR-EMP-00063/00010", net_pay: 182500, start_date: "2026-10-01", end_date: "2026-10-31" }];
+  helpData = {
+    categories: ["Payroll", "Leave & attendance", "IT access", "Other"],
+    faqs: [
+      { name: "q1", question: "When is salary credited?", answer: "<p>Salary is credited on the <b>last working day</b> of each month.</p>", category: "Payroll" },
+      { name: "q2", question: "How do I correct a missed check-in?", answer: "<p>Open Attendance → Attendance request and choose the day.</p>", category: "Leave & attendance" },
+    ],
+    tickets: [
+      { name: "HR-TKT-2026-00012", subject: "Overtime not in October slip", category: "Payroll", priority: "High", status: "In Progress", creation: "2026-11-15 10:12:00" },
+      { name: "HR-TKT-2026-00009", subject: "ERP password reset", category: "IT access", priority: "Medium", status: "Resolved", creation: "2026-11-03 09:40:00" },
+    ],
+  };
+  ticketDetail = { ticket: { name: "HR-TKT-2026-00012", subject: "Overtime not in October slip", category: "Payroll", priority: "High", status: "In Progress", description: "I worked 6 hours overtime on 21 Oct but it is not on my slip.", creation: "2026-11-15 10:12:00", due_by: "2026-11-17 10:12:00", assigned_to: "Sara Khan" }, comments: [{ author: "Sara Khan", mine: false, content: "Checking with payroll, will update by tomorrow.", creation: "2026-11-15 14:03:00" }, { author: "You", mine: true, content: "Thanks, attendance shows the hours.", creation: "2026-11-15 14:20:00" }] };
+  policies = [
+    { name: "HR-POL-00003", title: "Code of conduct", policy_version: 2, effective_from: "2026-11-01", requires_acknowledgement: 1, summary: "Behaviour, conflicts of interest and gifts.", acknowledged: false, pending: true },
+    { name: "HR-POL-00002", title: "Leave policy 2026", policy_version: 1, effective_from: "2026-01-01", requires_acknowledgement: 1, summary: "Annual, casual and sick leave rules.", acknowledged: true, pending: false },
+    { name: "HR-POL-00001", title: "IT acceptable use", policy_version: 1, effective_from: "2025-07-01", requires_acknowledgement: 0, summary: "Laptops, email and passwords.", acknowledged: false, pending: false },
+  ];
+  policyPending = 1;
+  policyDetail = { name: "HR-POL-00003", title: "Code of conduct", policy_version: 2, effective_from: "2026-11-01", requires_acknowledgement: 1, summary: "Behaviour, conflicts of interest and gifts.", content: "<h3>1. Respect at work</h3><p>Treat colleagues and customers with respect. Harassment of any kind is not tolerated.</p><h3>2. Conflicts of interest</h3><p>Declare any personal interest in a supplier or customer to HR.</p><h3>3. Gifts</h3><p>Gifts above PKR 5,000 must be declared.</p>", acknowledged: false };
+  docRequests = [
+    { name: "HR-DOC-2026-00021", direction: "Employee requests letter", document_type: "Salary Certificate", purpose: "Bank loan", status: "Issued", has_issued_file: true, creation: "2026-11-12 11:00:00" },
+    { name: "HR-DOC-2026-00024", direction: "HR requests document", document_type: "Updated CNIC copy", status: "Requested", due_date: "2026-11-25", hr_note: "Your CNIC on file has expired.", creation: "2026-11-18 09:00:00" },
+  ];
+  letterTypes = ["Experience Letter", "Salary Certificate", "Employment Verification", "NOC", "Other"];
+  myAssets = [{ name: "AST-0007", asset_name: "Dell Latitude 5440", item_code: "LAPTOP", status: "In Use", location: "Head Office" }, { name: "AST-0019", asset_name: "Office SIM (Jazz)", item_code: "SIM", status: "In Use" }];
+  assetRequests = [{ name: "HR-AST-2026-00005", request_type: "Request", item_description: "Second monitor", status: "Approved", creation: "2026-11-14 12:00:00" }];
+  notices = [{ name: "HR-DIS-2026-00002", action_type: "Written Warning", subject: "Repeated late arrival", description: "<p>You were late on 6 occasions in October.</p>", incident_date: "2026-10-31", status: "Issued" }];
+  noticesPending = 1;
   calendarData = { month: "2026-11", days: previewDays, summary: { present: 10, absent: 1, half_day: 1, on_leave: 1, holiday: 1, weekly_off: 6, no_record: 0 } };
 }
 
@@ -503,9 +550,13 @@ async function refresh() {
       optional(async () => payload(await api!.getApprovals())),
       optional(async () => payload(await api!.getExpenses())),
       optional(async () => payload(await api!.getNotifications())),
+      optional(async () => payload(await api!.getPolicies())),
+      optional(async () => payload(await api!.getDisciplinary())),
     ]);
     const results = await Promise.all(tasks);
-    const [approvalData, expenseData, notificationData] = await extra;
+    const [approvalData, expenseData, notificationData, policyData, noticeData] = await extra;
+    if (policyData) { policies = list(policyData.policies); policyPending = Number(policyData.pending) || 0; }
+    if (noticeData) { notices = list(noticeData.notices); noticesPending = Number(noticeData.pending) || 0; }
     if (approvalData) approvals = approvalItems(approvalData);
     if (expenseData) { expenseClaims = list(expenseData.claims); advances = list(expenseData.advances); }
     if (notificationData) { notifications = list(notificationData.items); unreadCount = Number(notificationData.unread) || 0; }
@@ -522,7 +573,7 @@ async function refresh() {
       directory = list(results[7]);
       facePolicy = (results[8] && typeof results[8] === "object" ? results[8] as Row : facePolicy);
     }
-    if (!loading) render(screen);
+    if (!loading) { if (pageFormDirty()) patchLiveParts(screen); else render(screen); }
   } catch (error) {
     setToast(error instanceof Error ? error.message : "Could not refresh HR data", "danger");
     render(screen);
@@ -555,10 +606,19 @@ function home() {
   const activity = recent.length
     ? `<div class="list">${recent.map((row) => checkinRow(row)).join("")}</div>`
     : emptyState(icon("clock", 24), "No activity yet", "Check-ins you make will appear here.");
+  const services: Array<[Screen, string, string, string, number]> = [
+    ["help", "help", "Help desk", "Ask HR, track your tickets, FAQs", 0],
+    ["policies", "book", "Company policies", policyPending ? `${policyPending} waiting for your acknowledgement` : "Read company policies", policyPending],
+    ["requests", "file", "Letters & documents", "Salary certificate, experience letter, papers HR asked for", 0],
+    ["assets", "box", "My assets", "Laptop, SIM and other company items", 0],
+  ];
+  if (notices.length) services.push(["notices", "alert-circle", "Notices", noticesPending ? `${noticesPending} needs your response` : "Notices from HR", noticesPending]);
+  const servicesHtml = `<div class="stack-sm">${sectionTitle("HR services")}<div class="list">${services.map(([id, ic, label, sub, count]) => `<button type="button" class="list-row nav-row" data-screen="${id}"><span class="row-icon${count ? " warn" : ""}">${hrIcon(ic, 18)}</span><div class="grow"><strong>${esc(label)}</strong><span class="t-meta">${esc(sub)}</span></div>${count ? `<span class="count-pill warn">${count}</span>` : ""}${icon("chevron-right", 18)}</button>`).join("")}</div></div>`;
   return `<section class="stack-lg">
     ${todayCard}
     ${pendingBanner}
     ${quick}
+    ${servicesHtml}
     <div class="stack-sm">${sectionTitle("Leave balance", `<button type="button" class="link" data-screen="leave">Apply</button>`)}${balanceTiles}</div>
     <div class="stack-sm">${sectionTitle("Recent activity", `<button type="button" class="link" data-screen="attendance">See all</button>`)}${activity}</div>
   </section>`;
@@ -873,14 +933,14 @@ function expensesScreen() {
       ? `<div class="list">${advances.map((row) => { const status = text(row, "status") || "Draft"; return `<article class="list-row"><span class="row-icon">${hrIcon("wallet", 18)}</span><div class="grow"><strong>${esc(text(row, "purpose") || text(row, "name"))}</strong><span class="t-meta">${esc(formatDay(text(row, "posting_date")))} · ${esc(formatMoney(row.advance_amount, text(row, "currency") || currency))}</span></div><div class="row-trail-stack">${statusBadge(status, statusTone(status))}<small class="t-meta">Bal ${esc(formatMoney(advanceBalance(row), text(row, "currency") || currency))}</small></div></article>`; }).join("")}</div>`
       : emptyState(hrIcon("wallet", 24), "No advances", "Advances you request will appear here.");
     return `<section class="stack-lg">${tabs}
-      <article class="card stat-hero"><p class="t-label">Outstanding advance</p><strong class="pay-amount">${esc(formatMoney(outstanding, currency))}</strong><p class="t-meta">Paid to you and not yet claimed or returned</p></article>
+      <article class="card stat-hero" data-live="hero"><p class="t-label">Outstanding advance</p><strong class="pay-amount">${esc(formatMoney(outstanding, currency))}</strong><p class="t-meta">Paid to you and not yet claimed or returned</p></article>
       <form id="advance-form" class="card stack">
         <h2 class="t-title">Request an advance</h2>
         ${field("Purpose", `<textarea name="purpose" required placeholder="e.g. Travel to Karachi branch"></textarea>`)}
         ${field(`Amount (${currency})`, `<input name="amount" type="number" inputmode="decimal" min="1" step="0.01" required>`)}
         ${btn("Send request", { kind: "primary", block: true, disabled: Boolean(ssBusy), attrs: 'type="submit"' })}
       </form>
-      <div class="stack-sm">${sectionTitle("My advances")}${rowsHtml}</div>
+      <div class="stack-sm" data-live="list">${sectionTitle("My advances")}${rowsHtml}</div>
     </section>`;
   }
   const types = list(expenseOptions.types).map((row) => `<option>${esc(text(row, "name"))}</option>`).join("");
@@ -890,7 +950,7 @@ function expensesScreen() {
     ? `<div class="list">${expenseClaims.map((row) => { const status = text(row, "approval_status") === "Draft" ? "Pending" : text(row, "status") || text(row, "approval_status"); return `<article class="list-row"><span class="row-icon">${hrIcon("receipt", 18)}</span><div class="grow"><strong>${esc(text(row, "expense_type") || "Expense")}</strong><span class="t-meta">${esc(formatDay(text(row, "posting_date")))} · ${esc(text(row, "name"))}</span></div><div class="row-trail-stack"><b>${esc(formatMoney(row.total_claimed_amount, text(row, "currency") || currency))}</b>${statusBadge(status, statusTone(status))}</div></article>`; }).join("")}</div>`
     : emptyState(hrIcon("receipt", 24), "No expense claims", "Claims you submit will appear here with their status.");
   return `<section class="stack-lg">${tabs}
-    <article class="card stat-hero"><p class="t-label">Waiting for approval</p><strong class="pay-amount">${esc(formatMoney(pending, currency))}</strong><p class="t-meta">${approverName ? `Approver: ${esc(approverName)}` : "Sent to your expense approver"}</p></article>
+    <article class="card stat-hero" data-live="hero"><p class="t-label">Waiting for approval</p><strong class="pay-amount">${esc(formatMoney(pending, currency))}</strong><p class="t-meta">${approverName ? `Approver: ${esc(approverName)}` : "Sent to your expense approver"}</p></article>
     <form id="expense-form" class="card stack">
       <h2 class="t-title">New expense claim</h2>
       <div class="grid-2">${field("Date", `<input name="expenseDate" type="date" max="${localIsoDate()}" value="${localIsoDate()}" required>`)}${field(`Amount (${currency})`, `<input name="amount" type="number" inputmode="decimal" min="1" step="0.01" required>`)}</div>
@@ -899,7 +959,7 @@ function expensesScreen() {
       ${field("Receipt (optional)", `<input name="receipt" type="file" accept="${UPLOAD_ACCEPT}" capture="environment">`)}
       ${btn("Submit claim", { kind: "primary", block: true, disabled: Boolean(ssBusy), attrs: 'type="submit"' })}
     </form>
-    <div class="stack-sm">${sectionTitle("My claims")}${rowsHtml}</div>
+    <div class="stack-sm" data-live="list">${sectionTitle("My claims")}${rowsHtml}</div>
   </section>`;
 }
 
@@ -944,7 +1004,7 @@ function documentsScreen() {
       <label class="file-drop"><input name="file" type="file" accept="${UPLOAD_ACCEPT}" required><span>${hrIcon("upload", 20)} Choose file</span></label>
       ${btn("Upload", { kind: "primary", block: true, disabled: Boolean(ssBusy), attrs: 'type="submit"' })}
     </form>
-    <div class="stack-sm">${sectionTitle("Uploaded")}${rowsHtml}</div>
+    <div class="stack-sm" data-live="list">${sectionTitle("Uploaded")}${rowsHtml}</div>
   </section>`;
 }
 
@@ -999,6 +1059,33 @@ async function refreshExpenseLists() {
   } catch { /* the new item appears on the next refresh */ }
 }
 
+/**
+ * Re-render only the read-only parts ([data-live] lists/totals) of the current page and sync the
+ * expense-type options, leaving every form field the employee is editing untouched.
+ */
+function patchLiveParts(current: Screen) {
+  const builders: Partial<Record<Screen, () => string>> = { expenses: expensesScreen, documents: documentsScreen, help: helpScreen, requests: requestsScreen, assets: assetsScreen };
+  const build = builders[current];
+  if (build && screen === current) {
+    const fresh = document.createElement("div");
+    fresh.innerHTML = build();
+    document.querySelectorAll<HTMLElement>("main.page [data-live]").forEach((el) => {
+      const next = fresh.querySelector<HTMLElement>(`[data-live="${el.dataset.live}"]`);
+      if (next) el.replaceWith(next);
+    });
+  }
+  const select = current === "expenses" ? document.querySelector<HTMLSelectElement>('#expense-form select[name="expenseType"]') : null;
+  const types = list(expenseOptions.types).map((row) => text(row, "name")).filter(Boolean);
+  if (select && types.length) {
+    const shown = Array.from(select.options).map((option) => option.value);
+    if (shown.join("\u0000") !== types.join("\u0000")) {
+      const keep = types.includes(select.value) ? select.value : "";
+      select.innerHTML = types.map((name) => `<option>${esc(name)}</option>`).join("");
+      if (keep) select.value = keep;
+    }
+  }
+}
+
 /** True once the employee has typed into or picked a file in a form on the current page. */
 function pageFormDirty(): boolean {
   return Boolean(document.querySelector("main.page form[data-dirty]"));
@@ -1014,15 +1101,16 @@ async function openScreenData(next: Screen) {
     else if (next === "notifications") { const data = await payload(await api.getNotifications()); notifications = list(data.items); unreadCount = Number(data.unread) || 0; }
     else if (next === "editprofile") profileData = ((await payload(await api.getProfile())).profile || {}) as Row;
     else if (next === "documents") documents = list(await payload(await api.getDocuments()));
+    else if (next === "help") helpData = await payload(await api.getHelp({ query: helpQuery }));
+    else if (next === "policies") { const data = await payload(await api.getPolicies()); policies = list(data.policies); policyPending = Number(data.pending) || 0; }
+    else if (next === "requests") { const data = await payload(await api.getDocumentRequests()); docRequests = list(data.requests); letterTypes = (Array.isArray(data.letter_types) ? data.letter_types : []).map(String); }
+    else if (next === "assets") { const data = await payload(await api.getAssets()); myAssets = list(data.assets); assetRequests = list(data.requests); }
+    else if (next === "notices") { const data = await payload(await api.getDisciplinary()); notices = list(data.notices); noticesPending = Number(data.pending) || 0; }
     else return;
     if (screen !== next) return;
     if (!pageFormDirty()) { render(next); return; }
-    // The employee already started typing: keep their input, but still fill in expense types.
-    const select = next === "expenses" ? document.querySelector<HTMLSelectElement>('#expense-form select[name="expenseType"]') : null;
-    const types = list(expenseOptions.types).map((row) => text(row, "name")).filter(Boolean);
-    if (select && types.length && !select.value) {
-      select.innerHTML = types.map((name) => `<option>${esc(name)}</option>`).join("");
-    }
+    // The employee already started typing: keep their input, refresh only the read-only parts.
+    patchLiveParts(next);
   } catch (error) {
     if (screen === next) setToast(error instanceof Error ? error.message : "Could not load this page", "danger");
   }
@@ -1157,6 +1245,11 @@ function bindSelfService() {
  * the employee can save it to Files/Drive, open it in a PDF viewer or send it. In a browser
  * (preview/dev) it falls back to a normal download link.
  */
+async function saveFile(filename: string, base64: string): Promise<void> {
+  const safe = filename.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^[-.]+/, "") || "document.pdf";
+  return savePdf(safe, base64);
+}
+
 async function savePdf(filename: string, base64: string): Promise<void> {
   if (!base64) throw new Error("The server returned an empty PDF.");
   if (Capacitor.isNativePlatform()) {
@@ -1182,6 +1275,277 @@ async function savePdf(filename: string, base64: string): Promise<void> {
   setToast(`${filename} downloaded`, "success");
 }
 
+function helpScreen() {
+  const faqs = list(helpData.faqs);
+  const tickets = list(helpData.tickets);
+  const categories = (Array.isArray(helpData.categories) ? helpData.categories : []).map((c) => `<option>${esc(String(c))}</option>`).join("");
+  const faqHtml = faqs.length
+    ? `<div class="list">${faqs.map((row) => `<details class="list-row faq"><summary><strong>${esc(text(row, "question"))}</strong>${icon("chevron-right", 16)}</summary><div class="rich">${String(row.answer || "")}</div></details>`).join("")}</div>`
+    : `<p class="t-meta">${helpQuery ? "No answers matched. Ask HR below." : "No FAQs published yet."}</p>`;
+  const ticketHtml = tickets.length
+    ? `<div class="list">${tickets.map((row) => { const st = text(row, "status"); return `<button type="button" class="list-row nav-row" data-ticket="${esc(text(row, "name"))}"><span class="row-icon">${hrIcon("help", 18)}</span><div class="grow"><strong class="ellipsis">${esc(text(row, "subject"))}</strong><span class="t-meta">${esc(text(row, "category"))} · ${esc(formatDay(text(row, "creation")))}</span></div>${statusBadge(st, statusTone(st))}</button>`; }).join("")}</div>`
+    : emptyState(hrIcon("help", 24), "No tickets yet", "Questions you send to HR will appear here.");
+  return `<section class="stack-lg">
+    <form id="faq-search" class="search-bar" role="search">${icon("search", 18)}<input name="q" type="search" placeholder="Search answers" value="${esc(helpQuery)}" aria-label="Search answers"></form>
+    <div class="stack-sm">${sectionTitle("Common questions")}${faqHtml}</div>
+    <form id="ticket-form" class="card stack">
+      <h2 class="t-title">Ask HR</h2>
+      ${field("Subject", `<input name="subject" maxlength="140" required placeholder="Short summary">`)}
+      <div class="grid-2">${field("Category", `<select name="category" required>${categories || "<option value=''>No categories yet</option>"}</select>`)}${field("Priority", `<select name="priority"><option>Low</option><option selected>Medium</option><option>High</option><option>Urgent</option></select>`)}</div>
+      ${field("Details", `<textarea name="description" required maxlength="5000" placeholder="What do you need help with?"></textarea>`)}
+      ${btn(`${hrIcon("send", 16)} Send to HR`, { kind: "primary", block: true, attrs: 'type="submit"' })}
+    </form>
+    <div class="stack-sm" data-live="list">${sectionTitle("My tickets")}${ticketHtml}</div>
+  </section>`;
+}
+
+function ticketScreen() {
+  const ticket = (ticketDetail?.ticket || {}) as Row;
+  if (!text(ticket, "name")) return `<div class="skeleton" aria-busy="true">${loadingSkeleton(4)}</div>`;
+  const st = text(ticket, "status");
+  const comments = list(ticketDetail?.comments);
+  const closed = st === "Closed";
+  const resolved = st === "Resolved" || closed;
+  const thread = comments.length
+    ? `<div class="thread">${comments.map((c) => `<div class="bubble${c.mine ? " mine" : ""}"><span class="t-meta">${esc(text(c, "author"))} · ${esc(formatDateTime(text(c, "creation")))}</span><p>${esc(text(c, "content"))}</p></div>`).join("")}</div>`
+    : `<p class="t-meta">No replies yet.</p>`;
+  return `<section class="stack-lg">
+    <article class="card stack">
+      <div class="row-between"><span class="t-label">${esc(text(ticket, "name"))}</span>${statusBadge(st, statusTone(st))}</div>
+      <h2 class="t-title">${esc(text(ticket, "subject"))}</h2>
+      <p>${esc(text(ticket, "description"))}</p>
+      <div class="info-card">${infoRow("Category", text(ticket, "category"))}${infoRow("Priority", text(ticket, "priority"))}${infoRow("Assigned to", text(ticket, "assigned_to"))}${infoRow("Reply expected by", formatDateTime(text(ticket, "due_by")))}</div>
+      ${text(ticket, "resolution") ? `<div class="banner success">${esc(text(ticket, "resolution"))}</div>` : ""}
+    </article>
+    <div class="stack-sm">${sectionTitle("Conversation")}${thread}</div>
+    ${closed ? "" : `<form id="ticket-reply" class="card stack">${field("Reply", `<textarea name="message" required maxlength="3000" placeholder="Add a message for HR"></textarea>`)}${btn(`${hrIcon("send", 16)} Send reply`, { kind: "primary", block: true, attrs: 'type="submit"' })}</form>`}
+    ${resolved ? `<div class="card stack"><p class="t-label">How did HR do?</p><div class="stars" role="group" aria-label="Rate this ticket">${[1, 2, 3, 4, 5].map((n) => `<button type="button" class="star${Math.round(Number(ticket.rating || 0) * 5) >= n ? " on" : ""}" data-rate="${n}" aria-label="${n} star${n === 1 ? "" : "s"}">★</button>`).join("")}</div></div>` : ""}
+    <div class="grid-2">${resolved ? btn("Reopen", { kind: "secondary", block: true, attrs: 'data-ticket-action="reopen"' }) : ""}${closed ? "" : btn("Close ticket", { kind: "secondary", block: true, attrs: 'data-ticket-action="close"' })}</div>
+  </section>`;
+}
+
+function policiesScreen() {
+  if (!policies.length) return emptyState(hrIcon("book", 26), "No policies yet", "Company policies published by HR will appear here.");
+  return `<section class="stack-lg">
+    ${policyPending ? `<div class="banner warn">${icon("alert-circle", 16)}<span>${policyPending} polic${policyPending === 1 ? "y needs" : "ies need"} your acknowledgement.</span></div>` : ""}
+    <div class="list">${policies.map((row) => { const chip = row.pending ? statusBadge("Acknowledge", "warning") : row.acknowledged ? statusBadge("Acknowledged", "success") : ""; return `<button type="button" class="list-row nav-row" data-policy="${esc(text(row, "name"))}"><span class="row-icon${row.pending ? " warn" : ""}">${hrIcon("book", 18)}</span><div class="grow"><strong>${esc(text(row, "title"))}</strong><span class="t-meta">v${esc(text(row, "policy_version") || "1")} · from ${esc(formatDay(text(row, "effective_from")))}${text(row, "summary") ? ` · ${esc(text(row, "summary"))}` : ""}</span></div>${chip}</button>`; }).join("")}</div>
+  </section>`;
+}
+
+function policyScreen() {
+  const doc = policyDetail || {};
+  if (!text(doc, "name")) return `<div class="skeleton" aria-busy="true">${loadingSkeleton(5)}</div>`;
+  const needs = Number(doc.requires_acknowledgement) && !doc.acknowledged;
+  return `<section class="stack-lg">
+    <article class="card stack">
+      <div class="row-between"><span class="t-label">Version ${esc(text(doc, "policy_version") || "1")} · from ${esc(formatDay(text(doc, "effective_from")))}</span>${doc.acknowledged ? statusBadge("Acknowledged", "success") : ""}</div>
+      <h2 class="t-title">${esc(text(doc, "title"))}</h2>
+      ${text(doc, "summary") ? `<p class="t-meta">${esc(text(doc, "summary"))}</p>` : ""}
+      <div class="rich policy-body">${String(doc.content || "") || "<p>See the attached document in the ERP.</p>"}</div>
+    </article>
+    ${needs ? `<div class="sticky-actions"><label class="check-row"><input type="checkbox" id="policy-read"> I have read and understood this policy.</label>${btn("Acknowledge", { id: "policy-ack", kind: "primary", block: true, disabled: true })}</div>` : ""}
+  </section>`;
+}
+
+function requestsScreen() {
+  const fromHr = docRequests.filter((row) => text(row, "direction") === "HR requests document");
+  const letters = docRequests.filter((row) => text(row, "direction") !== "HR requests document");
+  const hrHtml = fromHr.length ? `<div class="stack-sm">${sectionTitle("HR asked you for")}${fromHr.map((row) => { const st = text(row, "status"); const open = st === "Requested" || st === "Rejected"; return `<article class="card stack"><div class="row-between"><strong>${esc(text(row, "document_type"))}</strong>${statusBadge(st, statusTone(st))}</div>${text(row, "hr_note") ? `<p class="t-meta">${esc(text(row, "hr_note"))}</p>` : ""}${text(row, "due_date") ? `<p class="t-meta">Due ${esc(formatDay(text(row, "due_date")))}</p>` : ""}${open ? `<form class="stack" data-upload-request="${esc(text(row, "name"))}"><label class="file-drop compact"><input name="file" type="file" accept="${UPLOAD_ACCEPT}" required><span>${hrIcon("upload", 18)} Choose file</span></label>${btn("Upload", { kind: "primary", block: true, attrs: 'type="submit"' })}</form>` : ""}</article>`; }).join("")}</div>` : "";
+  const letterHtml = letters.length
+    ? `<div class="list">${letters.map((row) => { const st = text(row, "status"); return `<article class="list-row"><span class="row-icon">${hrIcon("file", 18)}</span><div class="grow"><strong>${esc(text(row, "document_type"))}</strong><span class="t-meta">${esc(formatDay(text(row, "creation")))}${text(row, "purpose") ? ` · ${esc(text(row, "purpose"))}` : ""}</span></div><div class="row-trail-stack">${statusBadge(st, statusTone(st))}${row.has_issued_file ? `<button type="button" class="link" data-letter="${esc(text(row, "name"))}">Download</button>` : ""}</div></article>`; }).join("")}</div>`
+    : emptyState(hrIcon("file", 24), "No letter requests", "Letters you ask HR for will appear here.");
+  const types = letterTypes.map((t) => `<option>${esc(t)}</option>`).join("");
+  return `<section class="stack-lg">
+    ${hrHtml}
+    <form id="letter-form" class="card stack">
+      <h2 class="t-title">Request a letter</h2>
+      ${field("Letter", `<select name="documentType" required>${types}</select>`)}
+      ${field("Addressed to (optional)", `<input name="addressedTo" maxlength="140" placeholder="e.g. HBL, Embassy of …">`)}
+      ${field("Purpose", `<textarea name="purpose" maxlength="1000" placeholder="Why do you need it?"></textarea>`)}
+      ${btn("Send request", { kind: "primary", block: true, attrs: 'type="submit"' })}
+    </form>
+    <div class="stack-sm" data-live="list">${sectionTitle("My letter requests")}${letterHtml}</div>
+  </section>`;
+}
+
+function assetsScreen() {
+  const assetsHtml = myAssets.length
+    ? `<div class="list">${myAssets.map((row) => `<article class="list-row"><span class="row-icon">${hrIcon("box", 18)}</span><div class="grow"><strong>${esc(text(row, "asset_name") || text(row, "name"))}</strong><span class="t-meta">${esc([text(row, "name"), text(row, "location")].filter(Boolean).join(" · "))}</span></div>${statusBadge(text(row, "status") || "In use", "info")}</article>`).join("")}</div>`
+    : emptyState(hrIcon("box", 24), "No assets assigned", "Company items assigned to you will appear here.");
+  const reqHtml = assetRequests.length
+    ? `<div class="list">${assetRequests.map((row) => { const st = text(row, "status"); return `<article class="list-row"><span class="row-icon">${hrIcon("box", 18)}</span><div class="grow"><strong>${esc(text(row, "item_description"))}</strong><span class="t-meta">${esc(text(row, "request_type"))} · ${esc(formatDay(text(row, "creation")))}</span></div>${statusBadge(st, statusTone(st))}</article>`; }).join("")}</div>`
+    : `<p class="t-meta">No requests yet.</p>`;
+  const assetOptions = myAssets.map((row) => `<option value="${esc(text(row, "name"))}">${esc(text(row, "asset_name") || text(row, "name"))}</option>`).join("");
+  return `<section class="stack-lg">
+    <div class="stack-sm">${sectionTitle("Assigned to me")}${assetsHtml}</div>
+    <form id="asset-form" class="card stack">
+      <h2 class="t-title">New asset request</h2>
+      ${field("Type", `<select name="requestType"><option value="Request">Request an item</option>${myAssets.length ? `<option value="Return">Return an item</option><option value="Report Issue">Report a problem</option>` : ""}</select>`)}
+      ${field("Item", `<input name="item" maxlength="140" required placeholder="e.g. Laptop charger">`)}
+      ${myAssets.length ? field("Asset (for return / problem)", `<select name="asset"><option value="">—</option>${assetOptions}</select>`) : ""}
+      <div class="grid-2">${field("Needed by", `<input name="neededBy" type="date">`)}<div></div></div>
+      ${field("Reason", `<textarea name="reason" maxlength="1000" placeholder="Why, or what is wrong?"></textarea>`)}
+      ${btn("Send request", { kind: "primary", block: true, attrs: 'type="submit"' })}
+    </form>
+    <div class="stack-sm" data-live="list">${sectionTitle("My requests")}${reqHtml}</div>
+  </section>`;
+}
+
+function noticesScreen() {
+  if (!notices.length) return emptyState(icon("check-circle", 26), "No notices", "You have no notices from HR.");
+  return `<section class="stack-lg">${notices.map((row) => {
+    const st = text(row, "status");
+    const canAck = st === "Issued";
+    const canAppeal = st === "Issued" || st === "Acknowledged";
+    return `<article class="card stack notice">
+      <div class="row-between"><span class="t-label">${esc(text(row, "action_type"))}</span>${statusBadge(st, statusTone(st))}</div>
+      <h2 class="t-title">${esc(text(row, "subject"))}</h2>
+      <p class="t-meta">Incident ${esc(formatDay(text(row, "incident_date")))}${text(row, "effective_from") ? ` · effective ${esc(formatDateRange(text(row, "effective_from"), text(row, "effective_to") || text(row, "effective_from")))}` : ""}</p>
+      <div class="rich">${String(row.description || "")}</div>
+      ${text(row, "employee_response") ? `<div class="banner info"><span>Your response: ${esc(text(row, "employee_response"))}</span></div>` : ""}
+      ${canAppeal ? `<form class="stack" data-notice="${esc(text(row, "name"))}">${field("Your response", `<textarea name="response" maxlength="2000" placeholder="Required for an appeal, optional when acknowledging"></textarea>`)}<div class="grid-2">${btn("Appeal", { kind: "secondary", block: true, attrs: 'type="submit" data-notice-action="appeal"' })}${canAck ? btn("Acknowledge", { kind: "primary", block: true, attrs: 'type="submit" data-notice-action="acknowledge"' }) : ""}</div></form>` : ""}
+    </article>`;
+  }).join("")}</section>`;
+}
+
+function bindHrOps() {
+  document.querySelector<HTMLFormElement>("#faq-search")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    helpQuery = String(new FormData(event.currentTarget as HTMLFormElement).get("q") || "").trim().slice(0, 100);
+    if (previewMode || !api) { render("help"); return; }
+    void (async () => { try { helpData = await payload(await api!.getHelp({ query: helpQuery })); } catch (error) { setToast(error instanceof Error ? error.message : "Search failed", "danger"); } if (screen === "help") render("help"); })();
+  });
+  document.querySelector<HTMLFormElement>("#ticket-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget as HTMLFormElement);
+    void runSelfService("Sending", async () => {
+      const saved = await payload(await api!.createTicket({ subject: String(data.get("subject") || ""), category: String(data.get("category") || ""), priority: String(data.get("priority") || "Medium"), description: String(data.get("description") || "") }));
+      setToast(`Ticket ${text(saved, "name")} sent to HR`, "success");
+      try { helpData = await payload(await api!.getHelp({ query: helpQuery })); } catch { /* next open */ }
+    }, "help");
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-ticket]").forEach((button) => {
+    button.onclick = () => { ticketDetail = null; render("ticket"); void loadTicket(button.dataset.ticket || ""); };
+  });
+  document.querySelector<HTMLFormElement>("#ticket-reply")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const name = text((ticketDetail?.ticket || {}) as Row, "name");
+    const message = String(new FormData(event.currentTarget as HTMLFormElement).get("message") || "");
+    void runSelfService("Sending", async () => {
+      await payload(await api!.addTicketComment({ name, message }));
+      setToast("Reply sent", "success");
+      await loadTicketData(name);
+    }, "ticket");
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-ticket-action], [data-rate]").forEach((button) => {
+    button.onclick = () => {
+      const name = text((ticketDetail?.ticket || {}) as Row, "name");
+      const action = button.dataset.rate ? "rate" : button.dataset.ticketAction || "";
+      void runSelfService("Updating", async () => {
+        await payload(await api!.ticketAction({ name, action, rating: button.dataset.rate ? Number(button.dataset.rate) : undefined }));
+        setToast(action === "rate" ? "Thanks for the rating" : action === "close" ? "Ticket closed" : "Ticket reopened", "success");
+        await loadTicketData(name);
+      }, "ticket");
+    };
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-policy]").forEach((button) => {
+    button.onclick = () => {
+      const name = button.dataset.policy || "";
+      if (previewMode || !api) { render("policy"); return; }
+      policyDetail = null;
+      render("policy");
+      void (async () => { try { policyDetail = await payload(await api!.getPolicy({ name })); } catch (error) { setToast(error instanceof Error ? error.message : "Could not open the policy", "danger"); } if (screen === "policy") render("policy"); })();
+    };
+  });
+  const readBox = document.querySelector<HTMLInputElement>("#policy-read");
+  const ackButton = document.querySelector<HTMLButtonElement>("#policy-ack");
+  if (readBox && ackButton) {
+    readBox.onchange = () => { ackButton.disabled = !readBox.checked || Boolean(ssBusy); };
+    ackButton.onclick = () => {
+      const doc = policyDetail || {};
+      void runSelfService("Saving", async () => {
+        await payload(await api!.acknowledgePolicy({ name: text(doc, "name"), policy_version: Number(doc.policy_version) || 1 }));
+        policyDetail = { ...doc, acknowledged: true };
+        policies = policies.map((row) => (text(row, "name") === text(doc, "name") ? { ...row, acknowledged: true, pending: false } : row));
+        policyPending = policies.filter((row) => row.pending).length;
+        setToast("Policy acknowledged", "success");
+      }, "policy");
+    };
+  }
+  document.querySelector<HTMLFormElement>("#letter-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget as HTMLFormElement);
+    void runSelfService("Sending", async () => {
+      const saved = await payload(await api!.createLetterRequest({ document_type: String(data.get("documentType") || ""), addressed_to: String(data.get("addressedTo") || ""), purpose: String(data.get("purpose") || "") }));
+      setToast(`Request ${text(saved, "name")} sent to HR`, "success");
+      try { const fresh = await payload(await api!.getDocumentRequests()); docRequests = list(fresh.requests); } catch { /* next open */ }
+    }, "requests");
+  });
+  document.querySelectorAll<HTMLFormElement>("[data-upload-request]").forEach((form) => {
+    form.onsubmit = (event) => {
+      event.preventDefault();
+      const name = form.dataset.uploadRequest || "";
+      const picked = new FormData(form).get("file");
+      const file = picked instanceof File && picked.size ? picked : null;
+      void runSelfService("Uploading", async () => {
+        const problem = uploadProblem(file);
+        if (problem || !file) throw new Error(problem || "Choose a file first.");
+        await payload(await api!.uploadRequestedDocument({ name, filename: file.name, content: await readFileAsBase64(file) }));
+        docRequests = docRequests.map((row) => (text(row, "name") === name ? { ...row, status: "Uploaded" } : row));
+        setToast(`${file.name} sent to HR`, "success");
+      }, "requests");
+    };
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-letter]").forEach((button) => {
+    button.onclick = () => {
+      const name = button.dataset.letter || "";
+      void runSelfService("Preparing letter", async () => {
+        const file = await raceWithTimeout(async () => payload(await api!.getIssuedLetter({ name })), 60_000, "The letter took too long. Try again.");
+        await saveFile(text(file, "filename") || `${name}.pdf`, text(file, "content"));
+      }, "requests");
+    };
+  });
+  document.querySelector<HTMLFormElement>("#asset-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget as HTMLFormElement);
+    void runSelfService("Sending", async () => {
+      const saved = await payload(await api!.createAssetRequest({ request_type: String(data.get("requestType") || "Request"), item_description: String(data.get("item") || ""), asset: String(data.get("asset") || ""), needed_by: String(data.get("neededBy") || ""), reason: String(data.get("reason") || "") }));
+      setToast(`Request ${text(saved, "name")} sent to HR`, "success");
+      try { const fresh = await payload(await api!.getAssets()); myAssets = list(fresh.assets); assetRequests = list(fresh.requests); } catch { /* next open */ }
+    }, "assets");
+  });
+  document.querySelectorAll<HTMLFormElement>("[data-notice]").forEach((form) => {
+    form.onsubmit = (event) => {
+      event.preventDefault();
+      const submitter = (event as SubmitEvent).submitter as HTMLButtonElement | null;
+      const action = submitter?.dataset.noticeAction || "acknowledge";
+      const name = form.dataset.notice || "";
+      const response = String(new FormData(form).get("response") || "");
+      if (action === "appeal" && !response.trim()) { setToast("Write your response to appeal.", "warn"); return; }
+      void runSelfService("Saving", async () => {
+        const saved = await payload(await api!.respondDisciplinary({ name, action, response }));
+        notices = notices.map((row) => (text(row, "name") === name ? { ...row, status: text(saved, "status"), employee_response: response.trim() || row.employee_response } : row));
+        noticesPending = notices.filter((row) => text(row, "status") === "Issued").length;
+        setToast(action === "appeal" ? "Appeal sent to HR" : "Notice acknowledged", "success");
+      }, "notices");
+    };
+  });
+}
+
+async function loadTicketData(name: string) {
+  try { ticketDetail = await payload(await api!.getTicket({ name })); } catch { /* keep current */ }
+}
+
+async function loadTicket(name: string) {
+  if (previewMode || !api) { render("ticket"); return; }
+  try {
+    ticketDetail = await payload(await api.getTicket({ name }));
+  } catch (error) {
+    setToast(error instanceof Error ? error.message : "Could not open the ticket", "danger");
+  }
+  if (screen === "ticket") render("ticket");
+}
+
 function render(next: Screen = screen) {
   // Navigation during a live check-in/out capture must go through cancelAttend() first (hardware
   // back and [data-screen] clicks both do this) so the camera is released before the DOM
@@ -1201,7 +1565,7 @@ function render(next: Screen = screen) {
     root.innerHTML = `${toastHtml()}<section class="auth"><div class="auth-hero">${brandMark()}<h1>Aimatic HR</h1><p>${esc(loading)}…</p></div><div class="auth-card"><div class="skeleton" aria-busy="true">${loadingSkeleton(4)}</div></div></section>`;
     return;
   }
-  const pages: Record<Screen, () => string> = { home, attendance, calendar: calendarScreen, leave, pay, enroll, profile, approvals: approvalsScreen, expenses: expensesScreen, notifications: notificationsScreen, editprofile: editProfileScreen, documents: documentsScreen };
+  const pages: Record<Screen, () => string> = { home, attendance, calendar: calendarScreen, leave, pay, enroll, profile, approvals: approvalsScreen, expenses: expensesScreen, notifications: notificationsScreen, editprofile: editProfileScreen, documents: documentsScreen, help: helpScreen, ticket: ticketScreen, policies: policiesScreen, policy: policyScreen, requests: requestsScreen, assets: assetsScreen, notices: noticesScreen };
   // Exactly 5 tabs — never Enroll in the bar (wraps on ~360px / real phones). Enroll stays manager-only via Home tile + Profile.
   const nav: Array<{ id: Screen; label: string; icon: string }> = [
     { id: "home", label: "Home", icon: icon("home", 22) },
@@ -1211,7 +1575,7 @@ function render(next: Screen = screen) {
     { id: "profile", label: "Profile", icon: icon("user", 22) },
   ];
   if (!isManager() && screen === "enroll") screen = "home";
-  const navActive: Screen = screen === "enroll" || screen === "editprofile" || screen === "documents" ? "profile" : screen === "calendar" ? "attendance" : ["approvals", "expenses", "notifications"].includes(screen) ? "home" : screen;
+  const navActive: Screen = screen === "enroll" || screen === "editprofile" || screen === "documents" ? "profile" : screen === "calendar" ? "attendance" : ["approvals", "expenses", "notifications", "help", "ticket", "policies", "policy", "requests", "assets", "notices"].includes(screen) ? "home" : screen;
   // Pull the live enroll video out of the old DOM before it is discarded, so re-rendering the
   // capture step (new photo taken, retake, etc.) doesn't restart/black-flash the camera preview.
   const existingEnrollVideo = screen === "enroll" ? document.querySelector<HTMLVideoElement>("#enroll-video") : null;
@@ -1257,6 +1621,7 @@ function bind() {
     };
   });
   bindSelfService();
+  bindHrOps();
   // A manual refresh mid check-in would repaint #attend-video out from under the live capture.
   document.querySelector<HTMLButtonElement>("#refresh")?.addEventListener("click", () => { if (!attendBusy) void refresh(); });
   document.querySelector<HTMLButtonElement>("#cal-prev")?.addEventListener("click", () => void loadCalendar(shiftMonth(calendarMonth, -1)));
