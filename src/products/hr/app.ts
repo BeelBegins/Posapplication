@@ -1070,8 +1070,9 @@ function readFileAsBase64(file: File): Promise<string> {
 const SS_CONTROLS = 'main.page button[type="submit"], [data-approval], [data-withdraw], [data-payslip], #mark-all-read, main.page form input, main.page form select, main.page form textarea';
 // FormData is always read before runSelfService starts, so disabling the inputs is safe and
 // stops edits made during the request from being lost when the success re-render lands.
+// Controls rendered with data-locked (e.g. no allowance left, cancelled meeting) stay disabled.
 function setBusyControls(busy: boolean) {
-  document.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(SS_CONTROLS).forEach((control) => { control.disabled = busy; });
+  document.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(SS_CONTROLS).forEach((control) => { control.disabled = busy || control.hasAttribute("data-locked"); });
   document.querySelectorAll<HTMLFormElement>("main.page form").forEach((form) => { if (busy) form.dataset.submitting = "1"; else delete form.dataset.submitting; });
 }
 
@@ -1081,6 +1082,10 @@ function setBusyControls(busy: boolean) {
  * successful action re-renders, and only the screen it belongs to; if the employee moved to
  * another screen meanwhile, that screen just gets its controls re-enabled.
  */
+/** The form whose submit started the current action, so other forms' drafts can be kept. */
+let lastSubmittedForm: HTMLFormElement | null = null;
+if (typeof document !== "undefined") document.addEventListener("submit", (event) => { lastSubmittedForm = event.target instanceof HTMLFormElement ? event.target : null; }, true);
+
 async function runSelfService(label: string, task: () => Promise<void>, owner: Screen) {
   if (!api || previewMode || ssBusy) return;
   if (offline()) { setToast("You appear offline. Reconnect and try again.", "danger"); return; }
@@ -1096,8 +1101,17 @@ async function runSelfService(label: string, task: () => Promise<void>, owner: S
     ssBusy = "";
     // A form the employee started after leaving and returning (not the one being submitted) is kept.
     const freshEdits = Boolean(document.querySelector("main.page form[data-dirty]:not([data-submitting]):not([role=search])"));
-    if (ok && screen === owner && !freshEdits) render(owner);
-    else setBusyControls(false);
+    const submitted = lastSubmittedForm && lastSubmittedForm.isConnected ? lastSubmittedForm : null;
+    lastSubmittedForm = null;
+    // Another form on the same page has a draft (e.g. redeem while giving points): keep it.
+    const otherDraft = Array.from(document.querySelectorAll<HTMLFormElement>("main.page form[data-dirty]:not([role=search])")).some((form) => form !== submitted);
+    if (ok && screen === owner && !freshEdits && !otherDraft) render(owner);
+    else if (ok && screen === owner && submitted && otherDraft) {
+      submitted.reset();
+      delete submitted.dataset.dirty;
+      setBusyControls(false);
+      patchLiveParts(owner);
+    } else setBusyControls(false);
   }
 }
 
@@ -1635,7 +1649,7 @@ function meetingScreen() {
   const locked = st === "Cancelled";
   const other = manager ? text(m, "employee_name") : text(m, "manager_name");
   const items = list(m.action_items);
-  const dis = locked ? " disabled" : "";
+  const dis = locked ? " disabled data-locked" : "";
   const itemRows = items.map((a, i) => `<div class="action-row"><label class="check-row"><input type="checkbox" name="a_done_${i}"${Number(a.done) ? " checked" : ""}${dis}><span class="grow">${esc(text(a, "description"))}</span></label><input type="hidden" name="a_desc_${i}" value="${esc(text(a, "description"))}"><input type="hidden" name="a_owner_${i}" value="${esc(text(a, "owner_role") || "Employee")}"><input type="hidden" name="a_due_${i}" value="${esc(text(a, "due_date"))}"><span class="t-meta">${esc(text(a, "owner_role") === "Manager" ? (manager ? "You" : other) : (manager ? other : "You"))}${text(a, "due_date") ? ` · ${esc(formatDay(text(a, "due_date")))}` : ""}</span></div>`).join("");
   return `<section class="stack-lg">
     <article class="card stack-sm">
@@ -1683,18 +1697,18 @@ function pointsScreen() {
       <form id="colleague-search" class="search-bar" role="search">${icon("search", 18)}<input name="q" type="search" placeholder="Search by name" value="${esc(colleagueQuery)}" aria-label="Search colleagues"></form>
       <div data-live="colleagues">${people}</div>
       <form id="points-give" class="stack">
-        <div class="grid-2">${field("Points", `<input name="points" type="number" min="1" max="${Math.min(maxEntry, Math.max(left, 1))}" value="${Math.min(5, maxEntry)}" required${left ? "" : " disabled"}>`)}${field("For", `<select name="category">${cats}</select>`)}</div>
+        <div class="grid-2">${field("Points", `<input name="points" type="number" min="1" max="${Math.min(maxEntry, Math.max(left, 1))}" value="${Math.max(1, Math.min(5, maxEntry, left))}" required${left ? "" : " disabled data-locked"}>`)}${field("For", `<select name="category">${cats}</select>`)}</div>
         ${field("Why?", `<textarea name="reason" required maxlength="500" placeholder="What did they do?"></textarea>`)}
-        ${btn(`${hrIcon("award", 16)} Give points`, { kind: "primary", block: true, attrs: `type="submit"${left ? "" : " disabled"}` })}
+        ${btn(`${hrIcon("award", 16)} Give points`, { kind: "primary", block: true, attrs: `type="submit"${left ? "" : " disabled data-locked"}` })}
         ${Number(settings.approval_above) ? `<p class="t-meta">Awards above ${Number(settings.approval_above)} points go to HR for approval.</p>` : ""}
       </form>
     </div>
     ${redeemOn ? `<form id="points-redeem" class="card stack">
       <h2 class="t-title">Redeem points</h2>
       <p class="t-meta">HR reviews each request and pays out by hand. Nothing is added to your salary automatically.</p>
-      <div class="grid-2">${field("Points", `<input name="points" type="number" min="${minRedeem}" max="${Math.max(balance, minRedeem)}" value="${minRedeem}" required${balance >= minRedeem ? "" : " disabled"}>`)}<div></div></div>
+      <div class="grid-2">${field("Points", `<input name="points" type="number" min="${minRedeem}" max="${Math.max(balance, minRedeem)}" value="${minRedeem}" required${balance >= minRedeem ? "" : " disabled data-locked"}>`)}<div></div></div>
       ${field("Note (optional)", `<input name="note" maxlength="500" placeholder="e.g. Shopping voucher">`)}
-      ${btn("Request redemption", { kind: "secondary", block: true, attrs: `type="submit"${balance >= minRedeem ? "" : " disabled"}` })}
+      ${btn("Request redemption", { kind: "secondary", block: true, attrs: `type="submit"${balance >= minRedeem ? "" : " disabled data-locked"}` })}
       ${balance >= minRedeem ? "" : `<p class="t-meta">You need at least ${minRedeem} points to redeem.</p>`}
     </form>` : ""}
     <div class="stack-sm" data-live="received">${sectionTitle("Received")}${received.length ? `<div class="list">${received.map((r) => pointRow(r, false)).join("")}</div>` : `<p class="t-meta">No points yet.</p>`}</div>
@@ -1785,8 +1799,16 @@ function bindTalent() {
     button.onclick = () => {
       const name = meetingWanted;
       const status = button.dataset.meetingStatus || "";
+      const form = document.querySelector<HTMLFormElement>("#meeting-edit");
+      // Save whatever is in the form together with the status so unsaved notes are not lost.
+      const body: Record<string, unknown> = { name, status, modified: text(meetingDetail || {}, "modified") };
+      if (form) {
+        const data = new FormData(form);
+        Object.assign(body, { agenda: String(data.get("agenda") || ""), shared_notes: String(data.get("shared_notes") || ""), actions: meetingActions(form), private_notes: String(data.get("private_notes") || "") });
+        lastSubmittedForm = form;
+      }
       void runSelfService("Updating", async () => {
-        const saved = await payload(await api!.updateOneOnOne({ name, status, modified: text(meetingDetail || {}, "modified") }));
+        const saved = await payload(await api!.updateOneOnOne(body));
         if (meetingWanted === name) meetingDetail = saved;
         meetings = meetings.map((m) => (text(m, "name") === name ? { ...m, status } : m));
         setToast(status === "Completed" ? "Marked completed" : "1-on-1 cancelled", "success");
