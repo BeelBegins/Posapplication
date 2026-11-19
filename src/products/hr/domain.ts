@@ -236,12 +236,13 @@ const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MONTHS_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 function parseParts(value: unknown): { y: number; m: number; d: number; time: string } | null {
-  const match = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/.exec(typeof value === "string" ? value.trim() : "");
+  const match = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(?:Z|[+-](\d{2}):?(\d{2}))?)?$/.exec(typeof value === "string" ? value.trim() : "");
   if (!match) return null;
   const y = Number(match[1]), m = Number(match[2]), d = Number(match[3]);
   const probe = new Date(Date.UTC(y, m - 1, d));
   if (m < 1 || m > 12 || probe.getUTCFullYear() !== y || probe.getUTCMonth() !== m - 1 || probe.getUTCDate() !== d) return null;
-  if (match[4] && (Number(match[4]) > 23 || Number(match[5]) > 59)) return null;
+  if (match[4] && (Number(match[4]) > 23 || Number(match[5]) > 59 || Number(match[6] ?? 0) > 59)) return null;
+  if (match[7] && (Number(match[7]) > 14 || Number(match[8]) > 59)) return null;
   return { y, m, d, time: match[4] ? `${match[4]}:${match[5]}` : "" };
 }
 
