@@ -57,7 +57,7 @@ import {
 
 declare const __APP_VERSION__: string;
 type Row = Record<string, unknown>;
-type Screen = "home" | "attendance" | "calendar" | "leave" | "pay" | "enroll" | "profile" | "approvals" | "expenses" | "notifications" | "editprofile" | "documents" | "help" | "ticket" | "policies" | "policy" | "requests" | "assets" | "notices" | "goals" | "goal" | "meetings" | "meeting" | "points" | "surveys" | "survey" | "hiring" | "pipeline" | "applicant";
+type Screen = "home" | "attendance" | "calendar" | "leave" | "pay" | "enroll" | "profile" | "approvals" | "expenses" | "notifications" | "editprofile" | "documents" | "help" | "ticket" | "policies" | "policy" | "requests" | "assets" | "notices" | "goals" | "goal" | "meetings" | "meeting" | "points" | "surveys" | "survey" | "hiring" | "pipeline" | "applicant" | "feedback" | "feedbackform" | "feedbackresults";
 type PreviewScreen = Screen | "setup" | "signin";
 type EnrollStep = "pick" | "consent" | "capture" | "review";
 type HrApi = ReturnType<typeof createHrApi>;
@@ -163,6 +163,13 @@ let pipelineData: Row | null = null;
 let pipelineStage = "";
 let applicantWanted = "";
 let applicantDetail: Row | null = null;
+let feedbackAsks: Row[] = [];
+let feedbackResultsList: Row[] = [];
+let feedbackPending = 0;
+let feedbackWanted = "";
+let feedbackDetail: Row | null = null;
+let feedbackResultWanted = "";
+let feedbackResult: Row | null = null;
 let surveyDetail: Row | null = null;
 let surveyWanted = "";
 
@@ -250,7 +257,7 @@ function brandMark(): string {
   return `<span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 3.5 4.5 7.2v4.9c0 4.6 3.1 8.8 7.5 10.4 4.4-1.6 7.5-5.8 7.5-10.4V7.2L12 3.5Z" stroke="currentColor" stroke-width="1.8"/><path d="M9.2 12.2h5.6M12 9.4v5.6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span>`;
 }
 
-const screenTitles: Record<Screen, string> = { home: "Home", attendance: "Attendance", calendar: "Attendance calendar", leave: "Leave", pay: "Payslips", enroll: "Face enrollment", profile: "Profile", approvals: "Approvals", expenses: "Expenses & advances", notifications: "Notifications", editprofile: "Edit details", documents: "My documents", help: "Help desk", ticket: "Ticket", policies: "Company policies", policy: "Policy", requests: "Letters & documents", assets: "My assets", notices: "Notices", goals: "My goals", goal: "Goal check-in", meetings: "1-on-1s", meeting: "1-on-1", points: "Bonus points", surveys: "Surveys", survey: "Survey", hiring: "Hiring", pipeline: "Pipeline", applicant: "Applicant" };
+const screenTitles: Record<Screen, string> = { home: "Home", attendance: "Attendance", calendar: "Attendance calendar", leave: "Leave", pay: "Payslips", enroll: "Face enrollment", profile: "Profile", approvals: "Approvals", expenses: "Expenses & advances", notifications: "Notifications", editprofile: "Edit details", documents: "My documents", help: "Help desk", ticket: "Ticket", policies: "Company policies", policy: "Policy", requests: "Letters & documents", assets: "My assets", notices: "Notices", goals: "My goals", goal: "Goal check-in", meetings: "1-on-1s", meeting: "1-on-1", points: "Bonus points", surveys: "Surveys", survey: "Survey", hiring: "Hiring", pipeline: "Pipeline", applicant: "Applicant", feedback: "360 feedback", feedbackform: "Give feedback", feedbackresults: "My 360 results" };
 
 /** Consistent page header: Home shows the greeting; sub-screens get a back arrow. */
 function pageHeader(current: Screen): string {
@@ -260,7 +267,7 @@ function pageHeader(current: Screen): string {
     const name = text(context, "employee_name") || "Employee";
     return `<header class="page-header home">${avatar(name)}<div class="grow"><p class="ph-kicker">${esc(greet)}</p><h1 class="ph-title">${esc(name.split(/\s+/)[0] || name)}</h1></div><button type="button" class="ph-action bell" data-screen="notifications" aria-label="${unreadCount ? `Notifications, ${unreadCount} unread` : "Notifications"}">${hrIcon("bell", 20)}${unreadCount ? `<span class="ph-badge">${unreadCount > 99 ? "99+" : unreadCount}</span>` : ""}</button><button type="button" class="ph-action" id="refresh" aria-label="Refresh">${icon("refresh", 20)}</button></header>`;
   }
-  const backTargets: Partial<Record<Screen, Screen>> = { enroll: "home", approvals: "home", expenses: "home", notifications: "home", editprofile: "profile", documents: "profile", help: "home", ticket: "help", policies: "home", policy: "policies", requests: "home", assets: "home", notices: "home", goals: "home", goal: "goals", meetings: "home", meeting: "meetings", points: "home", surveys: "home", survey: "surveys", hiring: "home", pipeline: "hiring", applicant: "pipeline" };
+  const backTargets: Partial<Record<Screen, Screen>> = { enroll: "home", approvals: "home", expenses: "home", notifications: "home", editprofile: "profile", documents: "profile", help: "home", ticket: "help", policies: "home", policy: "policies", requests: "home", assets: "home", notices: "home", goals: "home", goal: "goals", meetings: "home", meeting: "meetings", points: "home", surveys: "home", survey: "surveys", hiring: "home", pipeline: "hiring", applicant: "pipeline", feedback: "home", feedbackform: "feedback", feedbackresults: "feedback" };
   const back: Screen | null = current === "calendar" ? calendarReturn : backTargets[current] || null;
   return `<header class="page-header">${back ? `<button type="button" class="ph-action" data-screen="${back}" aria-label="Back">${icon("chevron-left", 22)}</button>` : ""}<div class="grow"><h1 class="ph-title">${esc(screenTitles[current])}</h1></div></header>`;
 }
@@ -280,6 +287,7 @@ const HR_ICONS: Record<string, string> = {
   send: '<line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>',
   target: '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>',
   briefcase: '<rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/><path d="M2 13h20"/>',
+  message: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
   mail: '<path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/>',
   phone: '<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z"/>',
   star: '<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>',
@@ -391,6 +399,7 @@ async function ensureBackHandler(): Promise<void> {
       if (screen === "meeting") { render("meetings"); return; }
       if (screen === "survey") { render("surveys"); return; }
       if (screen === "applicant") { render("pipeline"); return; }
+      if (screen === "feedbackform" || screen === "feedbackresults") { render("feedback"); return; }
       if (screen === "pipeline") { render("hiring"); return; }
       if (screen !== "home") { render("home"); return; }
       void App.exitApp();
@@ -595,6 +604,26 @@ function seedPreview(): void {
     { stage: "On Hold", applicants: [] }, { stage: "Hired", applicants: [] },
     { stage: "Rejected", applicants: [cand("HR-APP-2026-00125", "Usama Tariq", "Rejected", 0.2, "Website", "2026-11-11 10:00:00")] },
   ] };
+  feedbackAsks = [
+    { name: "fbr-1", cycle_title: "H2 2026 360 review", subject_name: "Hina Malik", relation: "Peer", closes_on: "2026-11-30" },
+    { name: "fbr-2", cycle_title: "H2 2026 360 review", subject_name: "Ahmed", relation: "Self", self: true, closes_on: "2026-11-30" },
+  ];
+  feedbackPending = 2;
+  feedbackResultsList = [{ cycle: "HR-FBC-2026-0001", title: "H1 2026 360 review", closes_on: "2026-06-30" }];
+  feedbackWanted = "fbr-1";
+  feedbackDetail = { name: "fbr-1", cycle_title: "H2 2026 360 review", subject_name: "Hina Malik", relation: "Peer", pooled: true, min_group_size: 3, hr_sees_individual: 0, closes_on: "2026-11-30", questions: [
+    { label: "Communicates clearly and on time", question_type: "Rating", required: 1 },
+    { label: "Helps the team when it is busy", question_type: "Rating", required: 1 },
+    { label: "One thing to keep doing", question_type: "Text", required: 0 },
+    { label: "One thing to do differently", question_type: "Text", required: 0 },
+  ] };
+  feedbackResultWanted = "HR-FBC-2026-0001";
+  const rq = (avg: number, dist: number[]) => ({ type: "Rating", average: avg, distribution: { 1: dist[0], 2: dist[1], 3: dist[2], 4: dist[3], 5: dist[4] } });
+  feedbackResult = { cycle: "HR-FBC-2026-0001", title: "H1 2026 360 review", asked: 7, answered: 6, min_group_size: 3, groups: [
+    { group: "Self", responses: 1, hidden: false, questions: [{ idx: 1, label: "Communicates clearly and on time", answered: 1, ...rq(4, [0, 0, 0, 1, 0]) }, { idx: 2, label: "Helps the team when it is busy", answered: 1, ...rq(4, [0, 0, 0, 1, 0]) }] },
+    { group: "Manager", responses: 1, hidden: false, questions: [{ idx: 1, label: "Communicates clearly and on time", answered: 1, ...rq(5, [0, 0, 0, 0, 1]) }, { idx: 2, label: "Helps the team when it is busy", answered: 1, ...rq(4, [0, 0, 0, 1, 0]) }, { idx: 3, label: "One thing to keep doing", answered: 1, type: "Text", texts: ["Calm with customers during the Eid rush."] }] },
+    { group: "Peers and reports", responses: 4, hidden: false, questions: [{ idx: 1, label: "Communicates clearly and on time", answered: 4, ...rq(4.25, [0, 0, 1, 1, 2]) }, { idx: 2, label: "Helps the team when it is busy", answered: 4, ...rq(4.5, [0, 0, 0, 2, 2]) }, { idx: 3, label: "One thing to keep doing", answered: 3, type: "Text", texts: ["Covering shifts without being asked.", "Explaining the new POS to new joiners.", "Keeping the stock room tidy."] }, { idx: 4, label: "One thing to do differently", answered: 2, hidden: true, type: "Text" }] },
+  ] };
   applicantWanted = "HR-APP-2026-00122";
   applicantDetail = { name: "HR-APP-2026-00122", applicant_name: "Ayesha Noor", job_title: "HR-OPN-2026-0007", hiring_stage: "Interview", status: "Shortlisted", source: "Referral", applicant_rating: 0.8, email_id: "ayesha.noor@example.com", phone_number: "+92 300 1234567", creation: "2026-11-10 10:00:00", has_resume: true, role: "hr",
     stages: ["Applied", "Screening", "Interview", "Offer", "On Hold", "Hired", "Rejected"], pools: ["Retail leads 2026", "Future supervisors"],
@@ -648,9 +677,11 @@ async function refresh() {
       optional(async () => payload(await api!.getDisciplinary())),
       optional(async () => payload(await api!.getSurveys())),
       optional(async () => payload(await api!.getOpenings())),
+      optional(async () => payload(await api!.getFeedback())),
     ]);
     const results = await Promise.all(tasks);
-    const [approvalData, expenseData, notificationData, policyData, noticeData, surveyData, openingData] = await extra;
+    const [approvalData, expenseData, notificationData, policyData, noticeData, surveyData, openingData, feedbackData] = await extra;
+    if (feedbackData) { feedbackAsks = list(feedbackData.requests); feedbackResultsList = list(feedbackData.results); feedbackPending = Number(feedbackData.pending) || 0; }
     if (openingData) { openings = list(openingData.openings); hiringIsHr = Boolean(openingData.is_hr); }
     if (surveyData) { surveys = list(surveyData.surveys); surveysPending = Number(surveyData.pending) || 0; }
     if (policyData) { policies = list(policyData.policies); policyPending = Number(policyData.pending) || 0; }
@@ -717,6 +748,7 @@ function home() {
     ["meetings", "users", "1-on-1s", "Agenda, notes and action items with your manager"],
     ["points", "award", "Bonus points", "Thank a colleague, see your points"],
   ];
+  if (feedbackAsks.length || feedbackResultsList.length) growth.push(["feedback", "message", "360 feedback", feedbackPending ? `${feedbackPending} waiting for your feedback` : "See your results"]);
   if (openings.length || hiringIsHr) growth.push(["hiring", "briefcase", "Hiring", openings.length ? `${openings.length} open ${openings.length === 1 ? "role" : "roles"} · ${openings.reduce((n, o) => n + (Number(o.applicants) || 0), 0)} applicants` : "No open roles"]);
   const growthHtml = `<div class="stack-sm">${sectionTitle("Growth")}<div class="list">${growth.map(([id, ic, label, sub]) => `<button type="button" class="list-row nav-row" data-screen="${id}"><span class="row-icon">${hrIcon(ic, 18)}</span><div class="grow"><strong>${esc(label)}</strong><span class="t-meta">${esc(sub)}</span></div>${icon("chevron-right", 18)}</button>`).join("")}</div></div>`;
   const servicesHtml = `<div class="stack-sm">${sectionTitle("HR services")}<div class="list">${services.map(([id, ic, label, sub, count]) => `<button type="button" class="list-row nav-row" data-screen="${id}"><span class="row-icon${count ? " warn" : ""}">${hrIcon(ic, 18)}</span><div class="grow"><strong>${esc(label)}</strong><span class="t-meta">${esc(sub)}</span></div>${count ? `<span class="count-pill warn">${count}</span>` : ""}${icon("chevron-right", 18)}</button>`).join("")}</div></div>`;
@@ -1215,7 +1247,7 @@ function patchLiveParts(current: Screen) {
     const now = text(applicantDetail || {}, "hiring_stage");
     if (stageSelect && now) { Array.from(stageSelect.options).forEach((o) => { o.defaultSelected = o.value === now; }); stageSelect.value = now; }
   }
-  if (screen === current) { bindLiveRows(); bindTalentRows(); bindHiringRows(); }
+  if (screen === current) { bindLiveRows(); bindTalentRows(); bindHiringRows(); bindFeedbackRows(); }
   const select = current === "expenses" ? document.querySelector<HTMLSelectElement>('#expense-form select[name="expenseType"]') : null;
   const types = list(expenseOptions.types).map((row) => text(row, "name")).filter(Boolean);
   if (select && types.length) {
@@ -1251,6 +1283,7 @@ async function openScreenData(next: Screen) {
     else if (next === "meetings") { const data = await payload(await api.getOneOnOnes()); meetings = list(data.meetings); meetingReports = list(data.reports); meetingHasManager = Boolean(data.has_manager); }
     else if (next === "points") pointsData = await payload(await api.getPoints());
     else if (next === "surveys") { const data = await payload(await api.getSurveys()); surveys = list(data.surveys); surveysPending = Number(data.pending) || 0; }
+    else if (next === "feedback") { const data = await payload(await api.getFeedback()); feedbackAsks = list(data.requests); feedbackResultsList = list(data.results); feedbackPending = Number(data.pending) || 0; }
     else if (next === "hiring") { const data = await payload(await api.getOpenings()); openings = list(data.openings); hiringIsHr = Boolean(data.is_hr); }
     else if (next === "notices") { const data = await payload(await api.getDisciplinary()); notices = list(data.notices); noticesPending = Number(data.pending) || 0; }
     else return;
@@ -1807,6 +1840,138 @@ function syncPointLimits() {
   if (redeem) redeem.max = String(Math.max(balance, minRedeem));
   setLock(redeem, balance < minRedeem);
   setLock(document.querySelector<HTMLButtonElement>('#points-redeem button[type="submit"]'), balance < minRedeem);
+}
+
+// ---------------------------------------------------------------- Phase 4 360 feedback
+
+function feedbackScreen() {
+  if (!feedbackAsks.length && !feedbackResultsList.length) return emptyState(hrIcon("message", 26), "No feedback requests", "When HR runs a 360 review, the people you are asked about appear here.");
+  const asks = feedbackAsks.length
+    ? `<div class="list">${feedbackAsks.map((r) => `<button type="button" class="list-row nav-row" data-fb="${esc(text(r, "name"))}">${r.self ? `<span class="row-icon warn">${hrIcon("edit", 18)}</span>` : avatar(text(r, "subject_name"))}<div class="grow"><strong>${r.self ? "Your self review" : esc(text(r, "subject_name"))}</strong><span class="t-meta">${esc(text(r, "cycle_title"))} · ${r.self ? "self" : esc(text(r, "relation").toLowerCase())}${text(r, "closes_on") ? ` · due ${esc(formatDay(text(r, "closes_on")))}` : ""}</span></div>${icon("chevron-right", 18)}</button>`).join("")}</div>`
+    : `<p class="t-meta">You're all caught up.</p>`;
+  const results = feedbackResultsList.length
+    ? `<div class="stack-sm">${sectionTitle("My results")}<div class="list">${feedbackResultsList.map((r) => `<button type="button" class="list-row nav-row" data-fb-result="${esc(text(r, "cycle"))}"><span class="row-icon">${hrIcon("award", 18)}</span><div class="grow"><strong>${esc(text(r, "title"))}</strong><span class="t-meta">closed ${esc(formatDay(text(r, "closes_on")))}</span></div>${icon("chevron-right", 18)}</button>`).join("")}</div></div>`
+    : "";
+  return `<section class="stack-lg" data-live="feedback"><div class="stack-sm">${sectionTitle("Waiting for you", feedbackPending ? `<span class="count-pill warn">${feedbackPending}</span>` : "")}${asks}</div>${results}</section>`;
+}
+
+function feedbackFormScreen() {
+  const f = feedbackDetail;
+  if (f && f.error && text(f, "name") === feedbackWanted) return `<section class="stack">${emptyState(icon("alert-circle", 26), "Could not open this request", text(f, "error"))}${btn("Try again", { kind: "primary", block: true, attrs: 'data-fb-retry="1"' })}</section>`;
+  if (!f || text(f, "name") !== feedbackWanted) return `<div class="skeleton" aria-busy="true">${loadingSkeleton(5)}</div>`;
+  if (f.submitted) return emptyState(icon("check-circle", 26), "Thanks for your feedback", "It has been recorded.");
+  const self = text(f, "relation") === "Self";
+  const privacy = self
+    ? "Your self review is shown to you alongside the others when the cycle closes."
+    : f.pooled
+      ? `${esc(text(f, "subject_name"))} sees peer and team answers only pooled with others, and only once at least ${Number(f.min_group_size) || 3} people have answered. Never your name.`
+      : `${esc(text(f, "subject_name"))} sees your answers marked as their manager's once the cycle closes.`;
+  const hr = Number(f.hr_sees_individual) ? " HR can read individual answers for this review." : " HR sees pooled results only.";
+  const qs = list(f.questions);
+  return `<section class="stack-lg">
+    <article class="card stack-sm"><div class="row gap">${self ? `<span class="row-icon">${hrIcon("edit", 18)}</span>` : avatar(text(f, "subject_name"))}<div class="grow"><h2 class="t-title">${self ? "Your self review" : esc(text(f, "subject_name"))}</h2><span class="t-meta">${esc(text(f, "cycle_title"))}${text(f, "closes_on") ? ` · due ${esc(formatDay(text(f, "closes_on")))}` : ""}</span></div></div>
+      <div class="banner info"><span>${privacy}${hr}</span></div></article>
+    <form id="fb-form" class="card stack-lg" data-count="${qs.length}">
+      ${qs.map((q, i) => surveyQuestion(q, i + 1)).join("")}
+      ${btn("Send feedback", { kind: "primary", block: true, attrs: 'type="submit"' })}
+    </form>
+  </section>`;
+}
+
+function ratingBar(q: Row): string {
+  const avg = Number(q.average) || 0;
+  return `<div class="stack-xs"><div class="row-between"><span class="t-meta">Average</span><strong>${avg.toFixed(1)} / 5</strong></div><div class="bar" role="img" aria-label="${avg.toFixed(1)} out of 5"><span style="width:${Math.max(0, Math.min(100, (avg / 5) * 100))}%"></span></div></div>`;
+}
+
+function feedbackResultsScreen() {
+  const r = feedbackResult;
+  if (r && r.error && text(r, "cycle") === feedbackResultWanted) return `<section class="stack">${emptyState(icon("alert-circle", 26), "Could not open your results", text(r, "error"))}${btn("Try again", { kind: "primary", block: true, attrs: 'data-fbres-retry="1"' })}</section>`;
+  if (!r || text(r, "cycle") !== feedbackResultWanted) return `<div class="skeleton" aria-busy="true">${loadingSkeleton(5)}</div>`;
+  const groups = list(r.groups);
+  return `<section class="stack-lg">
+    <article class="card stack-sm"><h2 class="t-title">${esc(text(r, "title"))}</h2><span class="t-meta">${Number(r.answered) || 0} of ${Number(r.asked) || 0} people answered</span></article>
+    ${groups.map((g) => {
+      const qs = list(g.questions);
+      const body = g.hidden
+        ? `<p class="t-meta">Fewer than ${Number(r.min_group_size) || 3} people answered, so this group stays hidden to protect them.</p>`
+        : qs.map((q) => {
+          if (q.hidden) return `<div class="q-result"><strong>${esc(text(q, "label"))}</strong><p class="t-meta">Too few answers to show.</p></div>`;
+          if (text(q, "type") === "Rating") return `<div class="q-result"><strong>${esc(text(q, "label"))}</strong>${ratingBar(q)}</div>`;
+          const texts = (Array.isArray(q.texts) ? q.texts : []).map(String);
+          if (texts.length) return `<div class="q-result"><strong>${esc(text(q, "label"))}</strong><ul class="quote-list">${texts.map((t) => `<li>${esc(t)}</li>`).join("")}</ul></div>`;
+          const counts = (q.counts && typeof q.counts === "object" ? q.counts : {}) as Record<string, number>;
+          const keys = Object.keys(counts);
+          return keys.length ? `<div class="q-result"><strong>${esc(text(q, "label"))}</strong><div class="list">${keys.map((k) => `<div class="list-row"><div class="grow">${esc(k)}</div><strong>${Number(counts[k]) || 0}</strong></div>`).join("")}</div></div>` : "";
+        }).join("");
+      return `<article class="card stack">${sectionTitle(text(g, "group"), `<span class="t-meta">${Number(g.responses) || 0} answered</span>`)}${body}</article>`;
+    }).join("")}
+  </section>`;
+}
+
+async function loadFeedbackRequest(name: string) {
+  if (previewMode || !api) { if (feedbackDetail && text(feedbackDetail, "name") !== name) { const row = feedbackAsks.find((a) => text(a, "name") === name) || {}; feedbackDetail = { ...feedbackDetail, ...row, name, pooled: text(row, "relation") === "Peer" || text(row, "relation") === "Direct report" }; } render("feedbackform"); return; }
+  try {
+    const data = await payload(await api.getFeedbackRequest({ name }));
+    if (feedbackWanted !== name) return;
+    feedbackDetail = data;
+  } catch (error) {
+    if (feedbackWanted === name) feedbackDetail = { name, error: error instanceof Error ? error.message : "Check your connection and try again." };
+  }
+  if (screen === "feedbackform" && feedbackWanted === name) render("feedbackform");
+}
+
+async function loadFeedbackResult(cycle: string) {
+  if (previewMode || !api) { render("feedbackresults"); return; }
+  try {
+    const data = await payload(await api.getMyFeedbackResults({ cycle }));
+    if (feedbackResultWanted !== cycle) return;
+    feedbackResult = data;
+  } catch (error) {
+    if (feedbackResultWanted === cycle) feedbackResult = { cycle, error: error instanceof Error ? error.message : "Check your connection and try again." };
+  }
+  if (screen === "feedbackresults" && feedbackResultWanted === cycle) render("feedbackresults");
+}
+
+function bindFeedbackRows() {
+  document.querySelectorAll<HTMLButtonElement>("[data-fb]").forEach((button) => {
+    button.onclick = () => { const name = button.dataset.fb || ""; if (!previewMode) feedbackDetail = null; feedbackWanted = name; render("feedbackform"); void loadFeedbackRequest(name); };
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-fb-result]").forEach((button) => {
+    button.onclick = () => { const cycle = button.dataset.fbResult || ""; if (!previewMode) feedbackResult = null; feedbackResultWanted = cycle; render("feedbackresults"); void loadFeedbackResult(cycle); };
+  });
+}
+
+function bindFeedback() {
+  bindFeedbackRows();
+  const retry = document.querySelector<HTMLButtonElement>("[data-fb-retry]");
+  if (retry) retry.onclick = () => { feedbackDetail = null; render("feedbackform"); void loadFeedbackRequest(feedbackWanted); };
+  const retryRes = document.querySelector<HTMLButtonElement>("[data-fbres-retry]");
+  if (retryRes) retryRes.onclick = () => { feedbackResult = null; render("feedbackresults"); void loadFeedbackResult(feedbackResultWanted); };
+  document.querySelector<HTMLFormElement>("#fb-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const form = event.currentTarget as HTMLFormElement;
+    const data = new FormData(form);
+    const count = Number(form.dataset.count) || 0;
+    const qs = list(feedbackDetail?.questions);
+    const answers: Record<string, unknown> = {};
+    for (let i = 1; i <= count; i += 1) {
+      const type = text(qs[i - 1], "question_type");
+      if (type === "Multiple choice") {
+        const picked = data.getAll(`q${i}`).map(String);
+        if (!picked.length && Number(qs[i - 1]?.required)) { setToast(`Please answer: ${text(qs[i - 1], "label")}`, "warn"); return; }
+        if (picked.length) answers[String(i)] = picked;
+      } else if (type === "Rating") { const v = data.get(`q${i}`); if (v) answers[String(i)] = Number(v); }
+      else { const v = String(data.get(`q${i}`) || "").trim(); if (v) answers[String(i)] = v; }
+    }
+    const name = feedbackWanted;
+    void runSelfService("Sending", async () => {
+      await payload(await api!.submitFeedbackRequest({ name, answers }));
+      if (feedbackWanted === name && feedbackDetail) feedbackDetail = { ...feedbackDetail, submitted: true };
+      feedbackAsks = feedbackAsks.filter((r) => text(r, "name") !== name);
+      feedbackPending = feedbackAsks.length;
+      setToast("Thanks, your feedback was sent", "success");
+    }, "feedbackform");
+  });
 }
 
 // ---------------------------------------------------------------- Phase 4 hiring
@@ -2391,7 +2556,7 @@ function render(next: Screen = screen) {
     root.innerHTML = `${toastHtml()}<section class="auth"><div class="auth-hero">${brandMark()}<h1>Aimatic HR</h1><p>${esc(loading)}…</p></div><div class="auth-card"><div class="skeleton" aria-busy="true">${loadingSkeleton(4)}</div></div></section>`;
     return;
   }
-  const pages: Record<Screen, () => string> = { home, attendance, calendar: calendarScreen, leave, pay, enroll, profile, approvals: approvalsScreen, expenses: expensesScreen, notifications: notificationsScreen, editprofile: editProfileScreen, documents: documentsScreen, help: helpScreen, ticket: ticketScreen, policies: policiesScreen, policy: policyScreen, requests: requestsScreen, assets: assetsScreen, notices: noticesScreen, goals: goalsScreen, goal: goalScreen, meetings: meetingsScreen, meeting: meetingScreen, points: pointsScreen, surveys: surveysScreen, survey: surveyScreen, hiring: hiringScreen, pipeline: pipelineScreen, applicant: applicantScreen };
+  const pages: Record<Screen, () => string> = { home, attendance, calendar: calendarScreen, leave, pay, enroll, profile, approvals: approvalsScreen, expenses: expensesScreen, notifications: notificationsScreen, editprofile: editProfileScreen, documents: documentsScreen, help: helpScreen, ticket: ticketScreen, policies: policiesScreen, policy: policyScreen, requests: requestsScreen, assets: assetsScreen, notices: noticesScreen, goals: goalsScreen, goal: goalScreen, meetings: meetingsScreen, meeting: meetingScreen, points: pointsScreen, surveys: surveysScreen, survey: surveyScreen, hiring: hiringScreen, pipeline: pipelineScreen, applicant: applicantScreen, feedback: feedbackScreen, feedbackform: feedbackFormScreen, feedbackresults: feedbackResultsScreen };
   // Exactly 5 tabs — never Enroll in the bar (wraps on ~360px / real phones). Enroll stays manager-only via Home tile + Profile.
   const nav: Array<{ id: Screen; label: string; icon: string }> = [
     { id: "home", label: "Home", icon: icon("home", 22) },
@@ -2401,7 +2566,7 @@ function render(next: Screen = screen) {
     { id: "profile", label: "Profile", icon: icon("user", 22) },
   ];
   if (!isManager() && screen === "enroll") screen = "home";
-  const navActive: Screen = screen === "enroll" || screen === "editprofile" || screen === "documents" ? "profile" : screen === "calendar" ? "attendance" : ["approvals", "expenses", "notifications", "help", "ticket", "policies", "policy", "requests", "assets", "notices", "goals", "goal", "meetings", "meeting", "points", "surveys", "survey", "hiring", "pipeline", "applicant"].includes(screen) ? "home" : screen;
+  const navActive: Screen = screen === "enroll" || screen === "editprofile" || screen === "documents" ? "profile" : screen === "calendar" ? "attendance" : ["approvals", "expenses", "notifications", "help", "ticket", "policies", "policy", "requests", "assets", "notices", "goals", "goal", "meetings", "meeting", "points", "surveys", "survey", "hiring", "pipeline", "applicant", "feedback", "feedbackform", "feedbackresults"].includes(screen) ? "home" : screen;
   // Pull the live enroll video out of the old DOM before it is discarded, so re-rendering the
   // capture step (new photo taken, retake, etc.) doesn't restart/black-flash the camera preview.
   const existingEnrollVideo = screen === "enroll" ? document.querySelector<HTMLVideoElement>("#enroll-video") : null;
@@ -2451,6 +2616,7 @@ function bind() {
   bindTalent();
   bindSurveys();
   bindHiring();
+  bindFeedback();
   // A manual refresh mid check-in would repaint #attend-video out from under the live capture.
   document.querySelector<HTMLButtonElement>("#refresh")?.addEventListener("click", () => { if (!attendBusy) void refresh(); });
   document.querySelector<HTMLButtonElement>("#cal-prev")?.addEventListener("click", () => void loadCalendar(shiftMonth(calendarMonth, -1)));

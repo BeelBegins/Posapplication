@@ -573,3 +573,11 @@ legend.q-label{padding:0;margin-bottom:4px}
 .t-meta.center.pad{text-align:center;padding:24px 0}
 .row.gap{display:flex;align-items:center;gap:12px}
 a.list-row{text-decoration:none;color:inherit}
+/* p4-feedback */
+.bar{height:8px;border-radius:999px;background:var(--border);overflow:hidden}
+.bar span{display:block;height:100%;border-radius:999px;background:var(--brand-600)}
+.q-result{display:flex;flex-direction:column;gap:8px;padding-top:12px;border-top:1px solid var(--border)}
+.q-result:first-of-type{border-top:0;padding-top:0}
+.quote-list{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:8px}
+.quote-list li{padding:10px 12px;border-radius:12px;background:rgba(0,0,0,.035);font-size:14px;line-height:1.45}
+.stack-xs{display:flex;flex-direction:column;gap:4px}
