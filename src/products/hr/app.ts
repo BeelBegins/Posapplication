@@ -1780,7 +1780,7 @@ function surveysScreen() {
 function surveyQuestion(q: Row, idx: number): string {
   const type = text(q, "question_type");
   const req = Number(q.required) ? " required" : "";
-  const label = `<p class="q-label">${esc(text(q, "label"))}${Number(q.required) ? "" : ' <span class="t-meta">(optional)</span>'}</p>`;
+  const label = `<legend class="q-label" id="q${idx}-label">${esc(text(q, "label"))}${Number(q.required) ? "" : ' <span class="t-meta">(optional)</span>'}</legend>`;
   const opts = text(q, "options").split("\n").map((o) => o.trim()).filter(Boolean);
   if (type === "Rating") {
     return `<fieldset class="q">${label}<div class="rating-row" role="radiogroup">${[1, 2, 3, 4, 5].map((n) => `<label class="rating-pill"><input type="radio" name="q${idx}" value="${n}"${req}><span>${n}</span></label>`).join("")}</div><div class="row-between t-meta"><span>Poor</span><span>Excellent</span></div></fieldset>`;
@@ -1789,11 +1789,12 @@ function surveyQuestion(q: Row, idx: number): string {
     const kind = type === "Single choice" ? "radio" : "checkbox";
     return `<fieldset class="q">${label}<div class="list">${opts.map((o) => `<label class="list-row pick-row"><input type="${kind}" name="q${idx}" value="${esc(o)}"${kind === "radio" ? req : ""}><div class="grow"><strong>${esc(o)}</strong></div></label>`).join("")}</div></fieldset>`;
   }
-  return `<fieldset class="q">${label}<textarea name="q${idx}" maxlength="2000"${req}></textarea></fieldset>`;
+  return `<fieldset class="q">${label}<textarea name="q${idx}" maxlength="2000" aria-labelledby="q${idx}-label"${req}></textarea></fieldset>`;
 }
 
 function surveyScreen() {
   const s = surveyDetail;
+  if (s && s.error && text(s, "name") === surveyWanted) return `<section class="stack">${emptyState(icon("alert-circle", 26), "Could not open the survey", text(s, "error"))}${btn("Try again", { kind: "primary", block: true, attrs: 'data-survey-retry="1"' })}</section>`;
   if (!s || text(s, "name") !== surveyWanted) return `<div class="skeleton" aria-busy="true">${loadingSkeleton(5)}</div>`;
   if (s.answered) return emptyState(icon("check-circle", 26), "Thanks for answering", "Your response has been recorded.");
   const qs = list(s.questions);
@@ -1813,15 +1814,23 @@ async function loadSurvey(name: string) {
     if (surveyWanted !== name) return;
     surveyDetail = data;
   } catch (error) {
-    if (surveyWanted === name) setToast(error instanceof Error ? error.message : "Could not open the survey", "danger");
+    if (surveyWanted === name) surveyDetail = { name, error: error instanceof Error ? error.message : "Check your connection and try again." };
   }
   if (screen === "survey" && surveyWanted === name) render("survey");
 }
 
 function bindSurveys() {
   document.querySelectorAll<HTMLButtonElement>("[data-survey]").forEach((button) => {
-    button.onclick = () => { surveyDetail = null; surveyWanted = button.dataset.survey || ""; render("survey"); void loadSurvey(surveyWanted); };
+    button.onclick = () => {
+      const name = button.dataset.survey || "";
+      if (!(previewMode && text(surveyDetail || {}, "name") === name)) surveyDetail = null;
+      surveyWanted = name;
+      render("survey");
+      void loadSurvey(name);
+    };
   });
+  const retry = document.querySelector<HTMLButtonElement>("[data-survey-retry]");
+  if (retry) retry.onclick = () => { surveyDetail = null; render("survey"); void loadSurvey(surveyWanted); };
   document.querySelector<HTMLFormElement>("#survey-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
     const form = event.currentTarget as HTMLFormElement;
@@ -1831,7 +1840,11 @@ function bindSurveys() {
     const answers: Record<string, unknown> = {};
     for (let i = 1; i <= count; i += 1) {
       const type = text(qs[i - 1], "question_type");
-      if (type === "Multiple choice") answers[String(i)] = data.getAll(`q${i}`).map(String);
+      if (type === "Multiple choice") {
+        const picked = data.getAll(`q${i}`).map(String);
+        if (!picked.length && Number(qs[i - 1]?.required)) { setToast(`Please answer: ${text(qs[i - 1], "label")}`, "warn"); return; }
+        if (picked.length) answers[String(i)] = picked;
+      }
       else if (type === "Rating") { const v = data.get(`q${i}`); if (v) answers[String(i)] = Number(v); }
       else { const v = String(data.get(`q${i}`) || "").trim(); if (v) answers[String(i)] = v; }
     }
