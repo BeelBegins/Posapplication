@@ -2811,7 +2811,42 @@ const attendCancelled = () => new DOMException("Attendance capture was cancelled
 // unlike enrollment, no still image is kept afterward; the frame is sent to the server and discarded.
 // `signal` comes from submitLog's AbortController: cancelAttend() aborts it on back/nav so this
 // function stops the camera as soon as possible instead of running to completion unseen.
-async function captureFace(prompt: string, signal: AbortSignal): Promise<string> {
+type LivenessSpec = { steps: string[]; framesPerStep: number };
+type LivenessFrame = { step: string; image: string };
+
+const LIVENESS_PROMPTS: Record<string, string> = {
+  center: "Look straight at the camera",
+  left: "Slowly turn your head to your left",
+  right: "Slowly turn your head to your right",
+  up: "Look up a little",
+};
+
+/** The server's random head-movement challenge, when the site has liveness switched on. */
+function livenessSpec(reply: unknown): LivenessSpec | null {
+  const raw = reply && typeof reply === "object" ? (reply as Record<string, unknown>).liveness : null;
+  if (!raw || typeof raw !== "object") return null;
+  const steps = (raw as Record<string, unknown>).steps;
+  if (!Array.isArray(steps) || !steps.length) return null;
+  const clean = steps.map(String).filter((step) => step in LIVENESS_PROMPTS).slice(0, 4);
+  if (clean.length !== steps.length) throw new Error("This app version does not understand the server's liveness check. Update Aimatic HR.");
+  const per = Number((raw as Record<string, unknown>).frames_per_step);
+  return { steps: clean, framesPerStep: Number.isFinite(per) ? Math.min(3, Math.max(1, Math.round(per))) : 2 };
+}
+
+function grabFrame(video: HTMLVideoElement, maxSide: number, quality: number): string {
+  const canvas = document.createElement("canvas");
+  const sourceWidth = video.videoWidth || 480;
+  const sourceHeight = video.videoHeight || 640;
+  const scale = Math.min(1, maxSide / Math.max(sourceWidth, sourceHeight));
+  canvas.width = Math.round(sourceWidth * scale);
+  canvas.height = Math.round(sourceHeight * scale);
+  const context2d = canvas.getContext("2d");
+  if (!context2d) throw new Error("Camera capture failed.");
+  context2d.drawImage(video, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL("image/jpeg", quality);
+}
+
+async function captureFace(prompt: string, signal: AbortSignal, liveness: LivenessSpec | null = null): Promise<{ image: string; frames: LivenessFrame[] }> {
   // Bounded: a permission prompt that never settles must not keep IN/OUT locked. A stream that
   // arrives after the timeout is stopped straight away.
   let cameraWaitExpired = false;
@@ -2852,9 +2887,27 @@ async function captureFace(prompt: string, signal: AbortSignal): Promise<string>
     }, 8000, "Live camera preview did not start in time.");
     if (signal.aborted) throw attendCancelled();
     const note = document.querySelector<HTMLElement>("#liveness");
-    if (note) { note.hidden = false; note.textContent = prompt; }
-    // Give the employee time to see themselves live and follow the liveness prompt.
-    await new Promise((resolve) => window.setTimeout(resolve, 2500));
+    const wait = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
+    const frames: LivenessFrame[] = [];
+    if (liveness) {
+      // Active liveness: follow each prompt on the live preview; a few small frames per step
+      // let the server check the head really moved and the picture is not a still photo.
+      for (const [index, step] of liveness.steps.entries()) {
+        if (note) { note.hidden = false; note.textContent = `Step ${index + 1} of ${liveness.steps.length}: ${LIVENESS_PROMPTS[step]}`; }
+        await wait(index === 0 ? 1800 : 1400);
+        for (let shot = 0; shot < liveness.framesPerStep; shot += 1) {
+          if (signal.aborted) throw attendCancelled();
+          frames.push({ step, image: grabFrame(video, 480, 0.75) });
+          await wait(350);
+        }
+      }
+      if (note) note.textContent = "Now look straight at the camera and hold still";
+      await wait(1200);
+    } else {
+      if (note) { note.hidden = false; note.textContent = prompt; }
+      // Give the employee time to see themselves live and follow the liveness prompt.
+      await wait(2500);
+    }
     if (signal.aborted) throw attendCancelled();
     const canvas = document.createElement("canvas");
     // Native aspect ratio, capped so the JPEG stays well under the server's 2 MB image limit.
@@ -2868,7 +2921,7 @@ async function captureFace(prompt: string, signal: AbortSignal): Promise<string>
     context2d.drawImage(video, 0, 0, canvas.width, canvas.height);
     const quality = frameQualityIssue(canvas);
     if (quality) throw new Error(quality);
-    return canvas.toDataURL("image/jpeg", 0.82);
+    return { image: canvas.toDataURL("image/jpeg", 0.82), frames };
   } finally {
     stream.getTracks().forEach((track) => track.stop());
     if (video) video.srcObject = null;
@@ -2945,11 +2998,13 @@ async function submitLog(logType: "IN" | "OUT") {
   try {
     if (offline()) throw new Error("You appear offline. Attendance was not recorded.");
     const challengeApi = api;
-    const challenge = text(await raceWithTimeout(
+    const challengeReply = await raceWithTimeout(
       async () => payload(await challengeApi.requestCheckinChallenge()),
       20_000,
       "No reply from the server. Check your connection and try again.",
-    ), "challenge");
+    );
+    const challenge = text(challengeReply, "challenge");
+    const liveness = livenessSpec(challengeReply);
     if (signal.aborted) return;
     const location = await raceWithTimeout(
       () => captureLocation(),
@@ -2957,9 +3012,10 @@ async function submitLog(logType: "IN" | "OUT") {
       "Location did not respond. Turn on Location for Aimatic HR, then try again.",
     );
     if (signal.aborted) return;
-    const image = await captureFace(livenessPrompt(challenge), signal);
+    const { image, frames } = await captureFace(livenessPrompt(challenge), signal, liveness);
     if (signal.aborted) return;
-    const body = attendanceRequest({ logType, ...location, challenge, image });
+    const body: Record<string, unknown> = { ...attendanceRequest({ logType, ...location, challenge, image }) };
+    if (frames.length) body.liveness_frames = frames;
     submitStarted = true;
     // The retry lock follows the real request, not the UI wait below, so a punch whose outcome is
     // unknown is not doubled by an immediate retry. It is released early only on a definite answer
