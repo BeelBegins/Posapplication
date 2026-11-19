@@ -1973,7 +1973,7 @@ function bindFeedback() {
       feedbackAsks = feedbackAsks.filter((r) => text(r, "name") !== name);
       feedbackPending = feedbackAsks.length;
       setToast("Thanks, your feedback was sent", "success");
-      if (screen === "feedback") patchLiveParts("feedback");
+      if (screen === "feedback") render("feedback");
     }, "feedbackform");
   });
 }
@@ -2683,7 +2683,11 @@ function bind() {
   document.querySelector<HTMLButtonElement>("#sign-out")?.addEventListener("click", async () => {
     stopCamera();
     // Finish clearing the stored sign-in before reloading, or the reload could sign back in.
-    try { await credentials?.clear(); } catch { /* cleared state below still signs out */ }
+    try { await credentials?.clear(); } catch {
+      // The stored sign-in is still there: reloading would sign straight back in.
+      setToast("Could not sign out. Try again, or clear the app's storage.", "danger");
+      return;
+    }
     credentials = null;
     api = null;
     context = {};
