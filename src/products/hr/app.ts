@@ -170,6 +170,7 @@ let feedbackWanted = "";
 let feedbackDetail: Row | null = null;
 let feedbackResultWanted = "";
 let feedbackResult: Row | null = null;
+let feedbackSeq = 0;
 let surveyDetail: Row | null = null;
 let surveyWanted = "";
 
@@ -1222,7 +1223,7 @@ async function refreshExpenseLists() {
  * expense-type options, leaving every form field the employee is editing untouched.
  */
 function patchLiveParts(current: Screen) {
-  const builders: Partial<Record<Screen, () => string>> = { expenses: expensesScreen, documents: documentsScreen, help: helpScreen, requests: requestsScreen, assets: assetsScreen, meetings: meetingsScreen, points: pointsScreen, applicant: applicantScreen };
+  const builders: Partial<Record<Screen, () => string>> = { expenses: expensesScreen, documents: documentsScreen, help: helpScreen, requests: requestsScreen, assets: assetsScreen, meetings: meetingsScreen, points: pointsScreen, applicant: applicantScreen, feedback: feedbackScreen };
   const build = builders[current];
   if (build && screen === current) {
     const fresh = document.createElement("div");
@@ -1910,14 +1911,16 @@ function feedbackResultsScreen() {
 
 async function loadFeedbackRequest(name: string) {
   if (previewMode || !api) { if (feedbackDetail && text(feedbackDetail, "name") !== name) { const row = feedbackAsks.find((a) => text(a, "name") === name) || {}; feedbackDetail = { ...feedbackDetail, ...row, name, pooled: text(row, "relation") === "Peer" || text(row, "relation") === "Direct report" }; } render("feedbackform"); return; }
+  const seq = ++feedbackSeq;
   try {
     const data = await payload(await api.getFeedbackRequest({ name }));
-    if (feedbackWanted !== name) return;
+    if (feedbackWanted !== name || seq !== feedbackSeq) return;
     feedbackDetail = data;
   } catch (error) {
-    if (feedbackWanted === name) feedbackDetail = { name, error: error instanceof Error ? error.message : "Check your connection and try again." };
+    if (feedbackWanted !== name || seq !== feedbackSeq) return;
+    feedbackDetail = { name, error: error instanceof Error ? error.message : "Check your connection and try again." };
   }
-  if (screen === "feedbackform" && feedbackWanted === name) render("feedbackform");
+  if (screen === "feedbackform" && feedbackWanted === name && seq === feedbackSeq && !pageFormDirty()) render("feedbackform");
 }
 
 async function loadFeedbackResult(cycle: string) {
@@ -1970,6 +1973,7 @@ function bindFeedback() {
       feedbackAsks = feedbackAsks.filter((r) => text(r, "name") !== name);
       feedbackPending = feedbackAsks.length;
       setToast("Thanks, your feedback was sent", "success");
+      if (screen === "feedback") patchLiveParts("feedback");
     }, "feedbackform");
   });
 }
@@ -2676,9 +2680,10 @@ function bind() {
     render("enroll");
   });
   document.querySelector<HTMLButtonElement>("#submit-enroll")?.addEventListener("click", () => void submitEnrollment());
-  document.querySelector<HTMLButtonElement>("#sign-out")?.addEventListener("click", () => {
+  document.querySelector<HTMLButtonElement>("#sign-out")?.addEventListener("click", async () => {
     stopCamera();
-    void credentials?.clear();
+    // Finish clearing the stored sign-in before reloading, or the reload could sign back in.
+    try { await credentials?.clear(); } catch { /* cleared state below still signs out */ }
     credentials = null;
     api = null;
     context = {};
@@ -2686,7 +2691,9 @@ function bind() {
     enrollCaptures = [];
     enrollConsent = false;
     enrollStep = "pick";
-    setup();
+    // Reload so no list from this employee (requests, feedback, hiring, points…) survives into the
+    // next sign-in; setup() is the fallback where reloading is not possible.
+    try { window.location.reload(); } catch { setup(); }
   });
 }
 
