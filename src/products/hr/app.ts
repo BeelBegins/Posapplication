@@ -1811,6 +1811,13 @@ function syncPointLimits() {
 
 // ---------------------------------------------------------------- Phase 4 hiring
 
+/** "YYYY-MM-DD HH:MM:SS" in the phone's own time zone, like the server's timestamps. */
+function localStamp(): string {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
 function stars(rating: unknown): string {
   const n = Math.round((Number(rating) || 0) * 5);
   if (!n) return "";
@@ -1910,7 +1917,8 @@ async function loadApplicant(name: string) {
   if (previewMode || !api) {
     if (applicantDetail && text(applicantDetail, "name") !== name) {
       const row = list(pipelineData?.columns).flatMap((c) => list(c.applicants)).find((a) => text(a, "name") === name) || {};
-      applicantDetail = { ...applicantDetail, ...row, name };
+      // Only list-level fields: contacts and feedback belong to the seeded applicant.
+      applicantDetail = { name, role: applicantDetail.role, stages: applicantDetail.stages, pools: applicantDetail.pools, job_title: applicantDetail.job_title, has_resume: false, comments: [], ...row };
     }
     render("applicant");
     return;
@@ -1977,8 +1985,10 @@ function bindHiring() {
     const note = String(data.get("note") || "").trim();
     if (stage === text(applicantDetail || {}, "hiring_stage") && !note) { setToast(`Already in ${stage}`, "info"); return; }
     void runSelfService("Moving", async () => {
-      await payload(await api!.moveApplicant({ name, stage, note: note || undefined }));
+      const moved = await payload(await api!.moveApplicant({ name, stage, note: note || undefined }));
       pipelineStage = stage;
+      // Show the accepted move even if the refresh below fails.
+      if (applicantWanted === name && applicantDetail) applicantDetail = { ...applicantDetail, hiring_stage: text(moved, "hiring_stage") || stage, status: text(moved, "status") || applicantDetail.status, ...(note ? { comments: [{ comment_by: "You", content: note, creation: localStamp() }, ...list(applicantDetail.comments)] } : {}) };
       await refreshAfter(name);
       setToast(`Moved to ${stage}`, "success");
     }, "applicant");
@@ -1990,6 +2000,7 @@ function bindHiring() {
     const name = applicantWanted;
     void runSelfService("Saving", async () => {
       await payload(await api!.addApplicantNote({ name, note }));
+      if (applicantWanted === name && applicantDetail) applicantDetail = { ...applicantDetail, comments: [{ comment_by: "You", content: note, creation: localStamp() }, ...list(applicantDetail.comments)] };
       await refreshAfter(name);
       setToast("Feedback added", "success");
     }, "applicant");
