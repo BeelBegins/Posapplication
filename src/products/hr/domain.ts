@@ -217,10 +217,17 @@ export function dayTone(status: string): DayTone {
 
 /** Plain-language line describing where the employee may check in. */
 export function checkinAreaText(info: { enforced?: unknown; required?: unknown; location?: unknown }): string {
+  // No policy loaded (still loading, older server, or the lookup failed): don't claim one.
+  if (!info || !("enforced" in info)) return "The server checks your check-in location when you punch.";
   const location = info.location && typeof info.location === "object" ? info.location as Record<string, unknown> : null;
   if (!info.enforced) return "Location is recorded with each check-in.";
   if (!location) return info.required ? "No check-in location is assigned to you. Ask HR to assign one before checking in." : "No check-in area is set for your shift, so any location is accepted.";
   const name = String(location.location_name || location.name || "your site");
   const radius = Number(location.radius_m);
   return Number.isFinite(radius) && radius > 0 ? `Check in within ${Math.round(radius)} m of ${name}.` : `Check in at ${name}.`;
+}
+
+/** Local (device timezone) calendar date as YYYY-MM-DD; toISOString() would give the UTC date. */
+export function localIsoDate(value: Date = new Date()): string {
+  return `${String(value.getFullYear()).padStart(4, "0")}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
 }
