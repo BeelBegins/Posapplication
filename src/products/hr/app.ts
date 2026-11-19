@@ -280,6 +280,8 @@ const HR_ICONS: Record<string, string> = {
   send: '<line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>',
   target: '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>',
   briefcase: '<rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/><path d="M2 13h20"/>',
+  mail: '<path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/>',
+  phone: '<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z"/>',
   star: '<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>',
   users: '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
   award: '<circle cx="12" cy="8" r="7"/><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/>',
@@ -1137,7 +1139,7 @@ function setBusyControls(busy: boolean) {
  * successful action re-renders, and only the screen it belongs to; if the employee moved to
  * another screen meanwhile, that screen just gets its controls re-enabled.
  */
-const DRAFT_SAFE_SCREENS: Screen[] = ["points", "meetings", "help", "requests", "assets", "expenses", "documents"];
+const DRAFT_SAFE_SCREENS: Screen[] = ["points", "meetings", "help", "requests", "assets", "expenses", "documents", "applicant"];
 /** The form whose submit started the current action, so other forms' drafts can be kept. */
 let lastSubmittedForm: HTMLFormElement | null = null;
 if (typeof document !== "undefined") document.addEventListener("submit", (event) => { lastSubmittedForm = event.target instanceof HTMLFormElement ? event.target : null; }, true);
@@ -1188,7 +1190,7 @@ async function refreshExpenseLists() {
  * expense-type options, leaving every form field the employee is editing untouched.
  */
 function patchLiveParts(current: Screen) {
-  const builders: Partial<Record<Screen, () => string>> = { expenses: expensesScreen, documents: documentsScreen, help: helpScreen, requests: requestsScreen, assets: assetsScreen, meetings: meetingsScreen, points: pointsScreen };
+  const builders: Partial<Record<Screen, () => string>> = { expenses: expensesScreen, documents: documentsScreen, help: helpScreen, requests: requestsScreen, assets: assetsScreen, meetings: meetingsScreen, points: pointsScreen, applicant: applicantScreen };
   const build = builders[current];
   if (build && screen === current) {
     const fresh = document.createElement("div");
@@ -1208,6 +1210,11 @@ function patchLiveParts(current: Screen) {
     if (assetField) assetField.hidden = !myAssets.length;
   }
   if (current === "points") syncPointLimits();
+  if (current === "applicant") {
+    const stageSelect = document.querySelector<HTMLSelectElement>('#stage-form:not([data-dirty]) select[name="stage"]');
+    const now = text(applicantDetail || {}, "hiring_stage");
+    if (stageSelect && now) { Array.from(stageSelect.options).forEach((o) => { o.defaultSelected = o.value === now; }); stageSelect.value = now; }
+  }
   if (screen === current) { bindLiveRows(); bindTalentRows(); bindHiringRows(); }
   const select = current === "expenses" ? document.querySelector<HTMLSelectElement>('#expense-form select[name="expenseType"]') : null;
   const types = list(expenseOptions.types).map((row) => text(row, "name")).filter(Boolean);
@@ -1852,8 +1859,8 @@ function applicantScreen() {
   const pools = (Array.isArray(a.pools) ? a.pools : []).map(String);
   const comments = list(a.comments);
   const contact = hr ? `<div class="list">
-      ${text(a, "email_id") ? `<a class="list-row nav-row" href="mailto:${esc(text(a, "email_id"))}"><span class="row-icon">${icon("mail", 18)}</span><div class="grow"><strong>${esc(text(a, "email_id"))}</strong><span class="t-meta">Email</span></div></a>` : ""}
-      ${text(a, "phone_number") ? `<a class="list-row nav-row" href="tel:${esc(text(a, "phone_number").replace(/[^+0-9]/g, ""))}"><span class="row-icon">${icon("phone", 18)}</span><div class="grow"><strong>${esc(text(a, "phone_number"))}</strong><span class="t-meta">Phone</span></div></a>` : ""}
+      ${text(a, "email_id") ? `<a class="list-row nav-row" href="mailto:${esc(text(a, "email_id"))}"><span class="row-icon">${hrIcon("mail", 18)}</span><div class="grow"><strong>${esc(text(a, "email_id"))}</strong><span class="t-meta">Email</span></div></a>` : ""}
+      ${text(a, "phone_number") ? `<a class="list-row nav-row" href="tel:${esc(text(a, "phone_number").replace(/[^+0-9]/g, ""))}"><span class="row-icon">${hrIcon("phone", 18)}</span><div class="grow"><strong>${esc(text(a, "phone_number"))}</strong><span class="t-meta">Phone</span></div></a>` : ""}
       ${a.has_resume ? `<button type="button" class="list-row nav-row" data-cv="1"><span class="row-icon">${hrIcon("file", 18)}</span><div class="grow"><strong>CV</strong><span class="t-meta">Open or save</span></div>${hrIcon("download", 18)}</button>` : ""}
     </div>` : `<div class="banner info"><span>Contact details and CVs stay with HR. Leave your feedback below.</span></div>`;
   return `<section class="stack-lg">
@@ -1883,7 +1890,12 @@ function applicantScreen() {
 }
 
 async function loadPipeline(opening: string) {
-  if (previewMode || !api) { render("pipeline"); return; }
+  if (previewMode || !api) {
+    // Preview: reuse the seeded pipeline for whichever role was tapped.
+    if (pipelineData && text(pipelineData, "opening") !== opening) { const o = openings.find((row) => text(row, "name") === opening); pipelineData = { ...pipelineData, opening, title: text(o || {}, "job_title") || opening }; }
+    render("pipeline");
+    return;
+  }
   try {
     const data = await payload(await api.getPipeline({ opening }));
     if (pipelineWanted !== opening) return;
@@ -1895,7 +1907,14 @@ async function loadPipeline(opening: string) {
 }
 
 async function loadApplicant(name: string) {
-  if (previewMode || !api) { render("applicant"); return; }
+  if (previewMode || !api) {
+    if (applicantDetail && text(applicantDetail, "name") !== name) {
+      const row = list(pipelineData?.columns).flatMap((c) => list(c.applicants)).find((a) => text(a, "name") === name) || {};
+      applicantDetail = { ...applicantDetail, ...row, name };
+    }
+    render("applicant");
+    return;
+  }
   try {
     const data = await payload(await api.getApplicant({ name }));
     if (applicantWanted !== name) return;
@@ -1910,7 +1929,7 @@ function bindHiringRows() {
   document.querySelectorAll<HTMLButtonElement>("[data-opening]").forEach((button) => {
     button.onclick = () => {
       const opening = button.dataset.opening || "";
-      if (!(previewMode && text(pipelineData || {}, "opening") === opening)) { pipelineData = null; pipelineStage = ""; }
+      if (!previewMode) { pipelineData = null; pipelineStage = ""; }
       pipelineWanted = opening;
       render("pipeline");
       void loadPipeline(opening);
@@ -1922,7 +1941,7 @@ function bindHiringRows() {
   document.querySelectorAll<HTMLButtonElement>("[data-applicant]").forEach((button) => {
     button.onclick = () => {
       const name = button.dataset.applicant || "";
-      if (!(previewMode && text(applicantDetail || {}, "name") === name)) applicantDetail = null;
+      if (!previewMode) applicantDetail = null;
       applicantWanted = name;
       render("applicant");
       void loadApplicant(name);
@@ -1944,10 +1963,11 @@ function bindHiring() {
       await saveFile(text(data, "filename") || "cv.pdf", text(data, "content"));
     }, "applicant");
   };
+  /** Best-effort refresh after a write the server accepted: a failure here must not look like the write failed. */
   const refreshAfter = async (name: string) => {
-    const data = await payload(await api!.getApplicant({ name }));
-    if (applicantWanted === name) applicantDetail = data;
-    if (pipelineWanted) { try { const p = await payload(await api!.getPipeline({ opening: pipelineWanted })); if (text(p, "opening") === pipelineWanted) pipelineData = p; } catch { /* next open */ } }
+    try { const data = await payload(await api!.getApplicant({ name })); if (applicantWanted === name) applicantDetail = data; } catch { /* next open */ }
+    const opening = pipelineWanted;
+    if (opening) { try { const p = await payload(await api!.getPipeline({ opening })); if (pipelineWanted === opening) pipelineData = p; } catch { /* next open */ } }
   };
   document.querySelector<HTMLFormElement>("#stage-form")?.addEventListener("submit", (event) => {
     event.preventDefault();

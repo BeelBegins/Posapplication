@@ -572,3 +572,4 @@ legend.q-label{padding:0;margin-bottom:4px}
 .list-row .t-body{margin:4px 0 0;font-size:14px;line-height:1.45;white-space:pre-wrap}
 .t-meta.center.pad{text-align:center;padding:24px 0}
 .row.gap{display:flex;align-items:center;gap:12px}
+a.list-row{text-decoration:none;color:inherit}
