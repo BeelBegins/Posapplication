@@ -22,6 +22,14 @@ export function createHrApi(client: ApiClient) {
     body: JSON.stringify(body),
   });
   return {
+    // Phase 4 hiring (aimatichr.hr_mobile.hiring)
+    getOpenings: () => client.callMethod("aimatichr.hr_mobile.hiring.get_openings", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }),
+    getPipeline: (body: { opening: string }) => client.callMethod("aimatichr.hr_mobile.hiring.get_pipeline", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
+    getApplicant: (body: { name: string }) => client.callMethod("aimatichr.hr_mobile.hiring.get_applicant", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
+    getResume: (body: { name: string }) => client.callMethod("aimatichr.hr_mobile.hiring.get_resume", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
+    moveApplicant: (body: { name: string; stage: string; note?: string }) => client.callMethod("aimatichr.hr_mobile.hiring.move_applicant", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
+    addApplicantNote: (body: { name: string; note: string }) => client.callMethod("aimatichr.hr_mobile.hiring.add_applicant_note", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
+    addToPool: (body: { name: string; pool: string; note?: string }) => client.callMethod("aimatichr.hr_mobile.hiring.add_to_pool", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
     // Phase 4 surveys (aimatichr.hr_mobile.surveys)
     getSurveys: () => client.callMethod("aimatichr.hr_mobile.surveys.get_surveys", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }),
     getSurvey: (body: { name: string }) => client.callMethod("aimatichr.hr_mobile.surveys.get_survey", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
