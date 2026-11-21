@@ -104,7 +104,8 @@ function toastHtml(): string {
 
 function btn(label: string, opts: { id?: string; kind?: "primary" | "secondary" | "text" | "danger"; block?: boolean; disabled?: boolean; attrs?: string } = {}): string {
   const kind = opts.kind || "primary";
-  return `<button type="button" class="btn btn-${kind}${opts.block ? " btn-block" : ""}" ${opts.id ? `id="${opts.id}"` : ""} ${opts.disabled ? "disabled" : ""} ${opts.attrs || ""}>${label}</button>`;
+  const type = /(?:^|\s)type\s*=/i.test(opts.attrs || "") ? "" : 'type="button"';
+  return `<button ${type} class="btn btn-${kind}${opts.block ? " btn-block" : ""}" ${opts.id ? `id="${opts.id}"` : ""} ${opts.disabled ? "disabled" : ""} ${opts.attrs || ""}>${label}</button>`;
 }
 
 function field(label: string, control: string): string {
@@ -210,7 +211,7 @@ async function ensureBackHandler(): Promise<void> {
 }
 
 async function configure(baseUrl: string) {
-  const url = baseUrl.replace(/\/+$/, "");
+  const url = baseUrl.trim().replace(/\/+$/, "");
   const pub = await payload(await fetcher(`${url}/api/method/aimatichr.hr_mobile.api.get_public_config`, { method: "POST" }));
   config = { baseUrl: url, clientId: text(pub, "oauth_client_id"), redirectUri: text(pub, "redirect_uri"), scope: text(pub, "scope") };
   if (!config.clientId || !config.redirectUri) throw new Error("HR OAuth is not configured on this site.");
@@ -219,22 +220,31 @@ async function configure(baseUrl: string) {
   api = createHrApi(createApiClient({ baseUrl: url, authentication: { mode: "user-session", credentials }, fetch: fetcher }));
 }
 
-function setup(error = "") {
+function setup(error = "", address = "") {
   stopCamera();
   root.innerHTML = `${toastHtml()}<section class="setup"><div class="setup-card">
     <div class="mark">${brandMark()}</div>
     <div class="stack-sm"><p class="t-label">Employee workspace</p><h1 class="t-display">Aimatic HR</h1><p class="t-meta">Connect to your ERP, then sign in with your own employee account. Attendance, leave and pay stay on the server.</p></div>
     ${error ? `<div class="banner danger">${esc(error)}</div>` : ""}
     <form id="setup" class="stack">
-      ${field("ERP URL", `<input id="url" type="url" required placeholder="https://siezal.aimatic.tech" autocomplete="url">`)}
+      ${field("ERP URL", `<input id="url" type="url" required placeholder="https://erp.example.com" autocomplete="url" value="${esc(address)}">`)}
       ${btn("Continue", { kind: "primary", block: true, attrs: 'type="submit"' })}
     </form>
     <p class="t-meta">v${esc(__APP_VERSION__)} · Public OAuth · No API secret</p>
   </div></section>`;
   document.querySelector<HTMLFormElement>("#setup")!.onsubmit = async (event) => {
     event.preventDefault();
-    try { await configure(document.querySelector<HTMLInputElement>("#url")!.value); signIn(); }
-    catch (reason) { setup(reason instanceof Error ? reason.message : "Connection failed"); }
+    const address = document.querySelector<HTMLInputElement>("#url")!.value.trim();
+    const button = document.querySelector<HTMLButtonElement>("#setup button[type=submit]")!;
+    button.disabled = true;
+    button.textContent = "Connecting…";
+    try { await configure(address); signIn(); }
+    catch (reason) {
+      let host = "";
+      try { host = new URL(address).host; } catch { /* browser validation will handle invalid URLs */ }
+      const detail = reason instanceof Error ? reason.message : "Connection failed";
+      setup(host ? `Connecting to ${host}: ${detail}` : detail, address);
+    }
   };
 }
 
