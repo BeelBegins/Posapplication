@@ -34,3 +34,11 @@ if (profile.id === "pos") {
 } else {
   throw new Error(`${profile.name} has no Android entry point.`);
 }
+
+// Direct-distribution update control for Android builds.
+{
+  esbuild.buildSync({ ...buildOptions, entryPoints: [path.join(root, "src/mobile/android-updates.ts")], outfile: path.join(out, "android-updates.js") });
+  const htmlPath = path.join(out, "index.html");
+  const html = fs.readFileSync(htmlPath, "utf8");
+  fs.writeFileSync(htmlPath, html.replace("</body>", '<script src="android-updates.js"></script></body>'));
+}
