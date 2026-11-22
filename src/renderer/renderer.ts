@@ -847,7 +847,7 @@ async function offlineLocalBlocker(requirePayment = false): Promise<string | nul
     return previewError || "Local tax calculation is not ready. Sync item tax configuration and try again.";
   }
   if (appliedBenefits.giftVoucherCode) return "Gift voucher redemption requires ERP online validation. Remove voucher to sell offline.";
-  if (requirePayment && remainingAmount() > 0.0001) return "Payment is incomplete.";
+  if (requirePayment && !isFoodPandaCreditPrepared() && remainingAmount() > 0.0001) return "Payment is incomplete.";
   if (requirePayment && paymentPreparedVersion !== currentCartVersion) return "Payment not prepared for current cart.";
   if (requirePayment && paymentsOutdated) return "Payment draft is outdated.";
   return null;
@@ -1641,6 +1641,7 @@ async function addPayment():Promise<void>{
   const msg=document.querySelector<HTMLElement>("#payment-message");
   const entered=Number(input?.value);
   const method=paymentMethods[selectedPaymentMethodIndex]??"";
+  if(!method.trim()){if(msg)msg.textContent="Choose a payment method, or use Credit Sale for Foodpanda.";input?.focus();return;}
   const isCash=(paymentMethodTypes[method]??"").toLowerCase()==="cash";
   if(!Number.isFinite(entered)||entered<=0){if(msg)msg.textContent="Enter a valid amount.";input?.focus();return;}
   // Remaining owed, excluding the row this entry will replace (edited row, or an existing same-method row).
@@ -1675,7 +1676,7 @@ async function completePaymentAllocation():Promise<void>{
   const input=document.querySelector<HTMLInputElement>("#payment-amount");
   const msg=document.querySelector<HTMLElement>("#payment-message");
   if(input?.value.trim()){if(msg)msg.textContent="Press Enter or Add to save this amount first, then Complete Payment.";input.focus();return;}
-  if(remainingAmount()>0.0001){if(msg)msg.textContent="Remaining amount must be zero.";return;}
+  if(!isFoodPandaCreditPrepared()&&remainingAmount()>0.0001){if(msg)msg.textContent="Remaining amount must be zero.";return;}
   const overpay=nonCashOverpayMessage();
   if(overpay){if(msg)msg.textContent=overpay;return;}
   const cashError=validateCashTenderRows();
@@ -1756,6 +1757,8 @@ function blockedSaleReason():string|null{
     :!cartLines.length?"Cart is empty"
     :(validatedCartVersion!==currentCartVersion)?(previewError?`Cart not validated — ${previewError}`:"Validating cart…")
     :(online&&appliedBenefits.giftVoucherCode&&giftVoucherError)?giftVoucherError
+    :(isFoodPandaCreditProfile()&&!creditReady)?"Use Credit Sale for this Foodpanda customer"
+    :paymentRows.some((row)=>!row.method.trim())?"Choose a payment method"
     :(!creditReady&&remainingAmount()>0.0001)?"Payment is incomplete"
     :paymentPreparedVersion!==currentCartVersion?"Payment not prepared for current cart"
     :paymentsOutdated?"Payment draft is outdated"
@@ -2530,7 +2533,7 @@ async function viewHistoryReceipt(row:SalesHistoryRow):Promise<void>{
   const frame=document.querySelector<HTMLIFrameElement>("#receipt-frame");if(frame){frame.removeAttribute("srcdoc");frame.hidden=true;}
   const structured=document.querySelector<HTMLElement>("#receipt-structured");if(structured)structured.hidden=false;
   document.querySelector<HTMLDialogElement>("#receipt-dialog")?.showModal();
-  if(posInvoice)await retrieveReceipt(posInvoice); else { const msg=document.querySelector<HTMLElement>("#receipt-message"); if(msg)msg.textContent="No POS Invoice recorded for this sale."; }
+  if(posInvoice&&row.status==="Submitted"&&!response.provisional)await retrieveReceipt(posInvoice); else { const msg=document.querySelector<HTMLElement>("#receipt-message"); if(msg)msg.textContent="Sale is saved locally. Server receipt will be available after successful sync."; }
 }
 
 // Duplicate print: never creates an invoice, never calls submit/FBR; just re-renders with a DUPLICATE COPY banner.
