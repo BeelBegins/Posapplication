@@ -48,6 +48,8 @@ contextBridge.exposeInMainWorld("posAPI", {
   loadPosProfiles: () => ipcRenderer.invoke("pos-profiles:list"),
   loadPosProfile: () => ipcRenderer.invoke("pos-profile:load"),
   getPosProfileCacheStatus: () => ipcRenderer.invoke("pos-profile-cache:get-status"),
+  syncGiftVoucherCriteria: () => ipcRenderer.invoke("gift-voucher-criteria:sync"),
+  getGiftVoucherSyncState: () => ipcRenderer.invoke("gift-voucher-criteria:state"),
   syncPosConfiguration: () => ipcRenderer.invoke("pos-configuration:sync"),
   getCachedPosConfiguration: () => ipcRenderer.invoke("pos-configuration:get-cached"),
   syncPosSession: (input?: Record<string, unknown>) => ipcRenderer.invoke("pos-session:sync", input),

@@ -1,3 +1,4 @@
+import { createGiftVoucherCore } from "./gift-voucher";
 import type { PosCoreDeps } from "./types";
 import type { createHttpCore } from "./http";
 import type { createPosSessionCore } from "./pos-session";
@@ -85,6 +86,17 @@ export function createSaleRefundCore(
   http: ReturnType<typeof createHttpCore>,
   posSession: ReturnType<typeof createPosSessionCore>
 ) {
+  const vouchers = createGiftVoucherCore(deps);
+
+  async function preparedSalePayload(input: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const payload = buildSalePayload(input);
+    const previous = deps.db.getSaleHistory?.(String(payload.terminal_invoice_id));
+    if (previous?.payload && ["Queued", "Submitting", "Submitted"].includes(previous.status)) return previous.payload;
+    const claim = await vouchers.prepareGiftVoucherIssuance({ ...payload, voucher_issuance_total: input.voucher_issuance_total });
+    if (claim) payload.gift_voucher_issuance = claim;
+    return payload;
+  }
+
   function buildSalePayload(input: Record<string, unknown>): Record<string, unknown> {
     const settings = deps.db.loadSettings();
     const id = String(input.terminal_invoice_id || posSession.getTerminalInvoiceId());
@@ -120,12 +132,26 @@ export function createSaleRefundCore(
 
   // A local stand-in for the server response so the receipt + history have coherent data until the sale syncs.
   function buildProvisionalResponse(id: string, payload: Record<string, unknown>): Record<string, unknown> {
-    return { provisional: true, offline: true, queued: true, terminal_invoice_id: id, pos_invoice: id, posting_datetime: new Date().toISOString(), fbr_status: "Awaiting internet availability", fbr_invoice_number: "Pending", fbr_response: "Will submit automatically when ERP is online", estimated_total: posSession.numValue(payload, "estimated_total") };
+    const claim = asRecord(payload.gift_voucher_issuance);
+    const snapshot = asRecord(claim?.snapshot);
+    const rules = snapshot && typeof snapshot.payload === "string" ? asRecord(JSON.parse(snapshot.payload)) : null;
+    const rule = (Array.isArray(rules?.criteria) ? rules.criteria : []).map(asRecord).find(row => row?.name === claim?.criteria);
+    const issued = claim && Number(claim.amount) > 0 ? {
+      voucher_code: claim.voucher_code, amount: claim.amount, issue_date: claim.issue_date,
+      expiry_date: claim.expiry_date, criteria: claim.criteria, minimum_redemption_value: Number(rule?.minimum_redemption_value || 0)
+    } : null;
+    return {
+      provisional: true, offline: true, queued: true, terminal_invoice_id: id, pos_invoice: id,
+      posting_datetime: String(payload.created_at), fbr_status: "Awaiting internet availability", fbr_invoice_number: "Pending",
+      fbr_response: "Will submit automatically when ERP is online", estimated_total: posSession.numValue(payload, "estimated_total"),
+      gift_voucher_issued: issued, gift_voucher_warning: claim ? "" : "Gift Voucher Criteria have not synced. Voucher eligibility will be checked when this sale reaches ERP."
+    };
   }
 
   // Persist a completed-offline sale to the queue (status "Queued"); it replays to the server on reconnect.
-  function queueSale(input: Record<string, unknown>): { success: boolean; response: Record<string, unknown> | null; error: string | null; queued: boolean } {
-    const payload = buildSalePayload(input);
+  async function queueSale(input: Record<string, unknown>): Promise<{ success: boolean; response: Record<string, unknown> | null; error: string | null; queued: boolean }> {
+    let payload: Record<string, unknown>;
+    try { payload = await preparedSalePayload(input); } catch (e) { return { success: false, response: null, error: e instanceof Error ? e.message : "Unable to prepare gift voucher.", queued: false }; }
     const id = String(payload.terminal_invoice_id);
     const response = buildProvisionalResponse(id, payload);
     deps.db.saveSaleHistory(id, "Queued", payload, response);
@@ -134,7 +160,8 @@ export function createSaleRefundCore(
 
   async function submitOnlineSale(input: Record<string, unknown>): Promise<{ success: boolean; response: Record<string, unknown> | null; error: string | null; queued?: boolean }> {
     const settings = deps.db.loadSettings();
-    const payload = buildSalePayload(input);
+    let payload: Record<string, unknown>;
+    try { payload = await preparedSalePayload(input); } catch (e) { return { success: false, response: null, error: e instanceof Error ? e.message : "Unable to prepare gift voucher." }; }
     const id = String(payload.terminal_invoice_id);
     deps.db.saveSaleHistory(id, "Submitting", payload);
     if (!hasUsableCredentials(deps, settings) || !settings.erpnextUrl) {
@@ -225,6 +252,11 @@ export function createSaleRefundCore(
         if (!response.ok) {
           failed += 1;
           error = formatResponseError(response.status, response.statusText, rawBody);
+          if (/gift voucher issuance requires supervisor review/i.test(error)) {
+            // Keep the unresolved sale visible; only a supervisor can reconcile its
+            // printed promise. Later unrelated sales must still reach ERP.
+            continue;
+          }
           if (isCashierPermissionSyncError(error)) {
             deps.db.setSaleHistoryStatus(sale.terminalInvoiceId, "Needs Supervisor Review");
             error = `${error}. Queued sale marked Needs Supervisor Review.`;

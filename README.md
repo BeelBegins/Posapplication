@@ -65,3 +65,11 @@ product-specific) methods — not broad Desk DocPerm as the primary contract.
 - [FBR / refund rules](docs/fbr-refund-rules.md)
 - [Android authentication](docs/android-authentication.md)
 - [API contracts](docs/api-contracts.md)
+
+## Offline gift vouchers
+
+The matching ERP update supplies signed Gift Voucher Criteria. Tills refresh the complete set every minute while connected, on focus/reconnect and on POS Configuration refresh. The configuration screen shows the last successful voucher sync. Initial sync is required before offline receipts can include vouchers; an unsynced counter warns without blocking sales.
+
+Eligible offline receipts include the voucher code, amount, expiry and minimum next purchase. The durable queued sale retains the exact code and signed terms across restarts and rule changes. ERP verifies the claim when it receives the sale; redemption remains online and becomes available after the issuing sale syncs. Rule changes made during an outage reach the till when it reconnects. A voucher amount discrepancy remains queued for supervisor review while later sales can sync.
+
+This feature requires the matching Aimatic backend and `Gift Voucher.issuance_snapshot` schema update. Keep feature work off `main` until the coordinated release is approved.

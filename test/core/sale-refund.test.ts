@@ -181,3 +181,26 @@ test("syncSaleQueue does not touch payments for any other rejection", async () =
   assert.equal(result.failed, 1);
   assert.equal(calls, 1);
 });
+
+ test("a voucher discrepancy stays queued and later completed sales still sync", async () => {
+  const fake = freshFake();
+  const posted: string[] = [];
+  const fetchImpl = (async (url: string, init?: RequestInit) => {
+    if (!String(url).includes("submit_online_sale")) return new Response(JSON.stringify({ message: "terminal@example.com" }), { status: 200 });
+    const payload = JSON.parse(String(init?.body));
+    posted.push(payload.terminal_invoice_id);
+    return payload.terminal_invoice_id === "FIRST"
+      ? new Response(JSON.stringify({ exception: "Gift voucher issuance requires supervisor review: sale values differ" }), { status: 417 })
+      : new Response(JSON.stringify({ message: { pos_invoice: "INV-SECOND" } }), { status: 200 });
+  }) as unknown as typeof fetch;
+  const deps = fakeDeps(fake, fetchImpl);
+  deps.db.getQueuedSales = () => ["FIRST", "SECOND"].map(id => ({ terminalInvoiceId: id, payload: { terminal_invoice_id: id, opening_entry: "OPEN", payments: [] }, response: null, createdAt: "" }));
+  deps.db.setSaleHistoryStatus = () => { throw new Error("Do not hide unresolved queued sale"); };
+  const core = createSaleRefundCore(deps, createHttpCore(deps), createPosSessionCore(deps));
+  const result = await core.syncSaleQueue();
+  assert.equal(result.failed, 1);
+  assert.equal(result.synced, 1);
+  assert.deepEqual(posted, ["FIRST", "SECOND"]);
+  assert.equal(fake.saleHistory.get("SECOND")?.status, "Submitted");
+  assert.match(result.error!, /supervisor review/);
+});

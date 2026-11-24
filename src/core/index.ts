@@ -5,6 +5,7 @@ import { createPosSessionCore } from "./pos-session";
 import { createPosConfigCore } from "./pos-config";
 import { createSaleRefundCore } from "./sale-refund";
 import { createReleasesCore } from "./releases";
+import { createGiftVoucherCore } from "./gift-voucher";
 import { createVoidLogCore } from "./void-log";
 
 export * from "./types";
@@ -22,6 +23,7 @@ export function createPosCore(deps: PosCoreDeps) {
   const posSession = createPosSessionCore(deps);
   return {
     ...http,
+    ...createGiftVoucherCore(deps),
     ...createCatalogSyncCore(deps, http),
     ...posSession,
     ...createPosConfigCore(deps, http),

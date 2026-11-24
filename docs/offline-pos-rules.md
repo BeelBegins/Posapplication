@@ -187,3 +187,11 @@ server and consumed as a single-use token. Offline that cannot happen, so:
 - FBR final submission
 - Customer creation
 - Force sync/settings operations needing server
+
+## Offline gift voucher issuance
+
+With the matching ERP schema/backend update, signed Gift Voucher Criteria refresh as a complete snapshot every minute while online, on window focus/reconnect and during configuration refresh. Refresh is independent of the idle catalog scheduler and does not interrupt an open cart. The POS Configuration screen shows rule count and last successful refresh. Failed refresh keeps the last good set; an empty successful result removes obsolete rules. Each ERP/profile/hardware cache stays separate.
+
+A new sale freezes the signed rules and a deterministic code into its queued payload before the first submit attempt, including online attempts whose response might be lost. Offline issuance uses unrounded grand total net of same-sale redemptions, distinct positive SKUs and the signed site rounding/timezone. Receipt code, amount, original-sale expiry and minimum next purchase persist across later rule edits and queue retries. The server verifies the promise against authoritative totals in its invoice transaction. If the values differ, the sale stays visibly queued for supervisor review while subsequent sales continue syncing. No voucher claim is silently rewritten.
+
+Initial criteria sync is required for offline vouchers: without it sales still queue, and their receipts warn that eligibility will be checked after sync. A disconnected till uses the last successful rules until it reconnects. Gift voucher redemption still requires online validation after the issuing sale has reached ERP.

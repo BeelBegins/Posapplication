@@ -4,7 +4,11 @@ interface DatabaseStatus {
   schemaVersion: string | null;
 }
 
+interface VoucherSyncState { ready: boolean; lastSynced: string | null; count: number; error: string | null; }
+
 interface PosAPI {
+  syncGiftVoucherCriteria: () => Promise<VoucherSyncState>;
+  getGiftVoucherSyncState: () => Promise<VoucherSyncState>;
   getRuntimeInfo: () => Promise<{ platform: "electron" | "capacitor" | "web"; product: "pos" | "restaurant" | "sales" | "shopping"; capabilities: Record<string, boolean> }>;
   getDatabaseStatus: () => Promise<DatabaseStatus>;
   focusPosWindow: () => Promise<boolean>;
@@ -440,7 +444,7 @@ let localFbrTotals: Record<string, unknown> | null = null;
 let lastSaleResponse: Record<string, unknown> | null = null; // authoritative submission response, stored before any cart reset
 let lastReceiptHtml: string | null = null;                   // server-rendered receipt HTML for printing
 interface ReceiptSnapshotLine { name: string; code: string; barcode: string; uom: string; qty: number; rate: number; amount: number; }
-interface ReceiptSnapshot { provisional: boolean; invoice: string; posting: string; cashier: string; customer: string; lines: ReceiptSnapshotLine[]; totals: FbrTotalsView; payments: PaymentRow[]; change: number; fbrStatus: string; fbrNumber: string; fbrApplicable: boolean; }
+interface ReceiptSnapshot { provisional: boolean; invoice: string; posting: string; cashier: string; customer: string; lines: ReceiptSnapshotLine[]; totals: FbrTotalsView; payments: PaymentRow[]; change: number; fbrStatus: string; fbrNumber: string; fbrApplicable: boolean; voucher: Record<string, unknown> | null; voucherWarning: string; }
 let lastReceiptSnapshot: ReceiptSnapshot | null = null;      // sold-sale copy for the local (offline / server-unavailable) receipt
 let receiptInvoice = "";                                     // POS Invoice name for (re)printing
 let changeDue = 0;                                           // local estimate; server records gross cash tendered and returns authoritative change
@@ -1784,7 +1788,10 @@ async function submitCurrentSale():Promise<void>{
   if(!terminalInvoiceId)terminalInvoiceId=await window.posAPI.getTerminalInvoiceId();
   submissionInProgress=true;cartMessage(online?"Submitting Sale…":"Saving offline sale…");updateCompleteSaleState();
   // Submission payload unchanged; terminal_invoice_id is preserved across retries (only regenerated after Close & Start New Sale).
-  const salePayload={terminal_invoice_id:terminalInvoiceId,terminal_id:terminal,pos_profile:profile,opening_entry:opening,customer:customer.name,items:cartLines.map(x=>({item_code:x.itemCode,qty:x.quantity,uom:x.uom,barcode:x.barcode??undefined})),payments:paymentRows.map(x=>({mode_of_payment:x.method,amount:x.amount})),coupon_code:appliedBenefits.couponCode,gift_voucher_code:appliedBenefits.giftVoucherCode,redeem_loyalty_points:appliedBenefits.loyaltyPoints>0,loyalty_points:appliedBenefits.loyaltyPoints,estimated_total:fbrTotalsView().payable,cashier_user:cashierSession.user,cashier_full_name:cashierSession.fullName||cashierSession.user,offline_authenticated:!online&&cashierSession.offlineLogin===true,offline_auth_method:!online&&cashierSession.offlineLogin===true?"cashier_pin":""};
+  const checkoutTotals=fbrTotalsView();
+  // Voucher brackets use grand_total, before whole-unit payment rounding.
+  const voucherBase=money2((previewNumber(serverTotals,"grand_total")??(checkoutTotals.merchandise+checkoutTotals.serviceFee))-checkoutTotals.loyaltyAmount-checkoutTotals.giftVoucherAmount);
+  const salePayload={voucher_issuance_total:voucherBase,terminal_invoice_id:terminalInvoiceId,terminal_id:terminal,pos_profile:profile,opening_entry:opening,customer:customer.name,items:cartLines.map(x=>({item_code:x.itemCode,qty:x.quantity,uom:x.uom,barcode:x.barcode??undefined})),payments:paymentRows.map(x=>({mode_of_payment:x.method,amount:x.amount})),coupon_code:appliedBenefits.couponCode,gift_voucher_code:appliedBenefits.giftVoucherCode,redeem_loyalty_points:appliedBenefits.loyaltyPoints>0,loyalty_points:appliedBenefits.loyaltyPoints,estimated_total:fbrTotalsView().payable,cashier_user:cashierSession.user,cashier_full_name:cashierSession.fullName||cashierSession.user,offline_authenticated:!online&&cashierSession.offlineLogin===true,offline_auth_method:!online&&cashierSession.offlineLogin===true?"cashier_pin":""};
   // Offline → queue locally with a provisional receipt; online → submit (a mid-submit drop auto-queues server-side).
   const result=online?await window.posAPI.submitSale(salePayload):await window.posAPI.queueSale(salePayload);
   submissionInProgress=false;
@@ -1880,7 +1887,19 @@ async function openReceiptPreview(response:Record<string,unknown>,provisional=fa
     fbrStatus:provisional?"Pending":fbrView.statusText,
     fbrNumber:provisional?"":fbrView.invoiceNumber,
     fbrApplicable:provisional||fbrView.applicable,
+    voucher:asTotalsRecord(response.gift_voucher_issued),
+    voucherWarning:String(response.gift_voucher_warning??""),
   };
+  const voucherBox=document.querySelector<HTMLElement>("#receipt-issued-voucher");
+  if(voucherBox){
+    const voucher=lastReceiptSnapshot.voucher;
+    voucherBox.replaceChildren();
+    if(voucher&&Number(voucher.amount)>0){
+      const title=document.createElement("strong");title.textContent="Gift Voucher";voucherBox.append(title);
+      for(const text of [`Code: ${String(voucher.voucher_code)}`,`Amount: ${receiptMoney(Number(voucher.amount))}`,`Valid until: ${String(voucher.expiry_date)}`,`Minimum next purchase: ${receiptMoney(Number(voucher.minimum_redemption_value||0))}`,provisional?"Redeem on a later sale after this till syncs with ERP.":"Redeem on a later sale. Excess value is forfeited."]){const line=document.createElement("p");line.textContent=text;voucherBox.append(line);}
+    }else if(lastReceiptSnapshot.voucherWarning){voucherBox.textContent=lastReceiptSnapshot.voucherWarning;}
+    voucherBox.hidden=!voucherBox.childNodes.length;
+  }
   setCartText("#receipt-before-tax",totals.saleBeforeTax.toFixed(2));
   setCartText("#receipt-sales-tax",totals.salesTax.toFixed(2));
   setCartText("#receipt-service-fee",totals.serviceFee.toFixed(2));
@@ -2038,7 +2057,10 @@ function buildLocalReceiptHtml(posInvoice:string):string{
   const fbr=s.fbrApplicable
     ?`<div class="lr-box"><div class="lr-box-title">FBR</div>${row("Status",s.provisional?"Pending (offline)":s.fbrStatus)}${row("FBR Invoice No",s.fbrNumber||"Pending")}${s.provisional?`<div class="lr-note">Will be submitted to FBR automatically when the till is back online.</div>`:""}</div>`
     :"";
-  return `<!doctype html><html><head><meta charset="utf-8">${localReceiptCss()}</head><body><div class="lr">${head}${banner}<div class="lr-meta">${meta}</div><div class="lr-cols"><span>Item</span><span>Qty</span><span>Rate</span><span>Amount</span></div>${items}<div class="lr-count"><span>Items: ${s.lines.length}</span></div><div class="lr-totals">${totals}${grand}${deductions}</div>${payments}${fbr}<div class="lr-footer">Thank you for shopping with us!</div></div></body></html>`;
+  const voucher=s.voucher&&Number(s.voucher.amount)>0
+    ?`<div class="lr-box"><div class="lr-box-title">Gift Voucher</div>${row("Code",String(s.voucher.voucher_code))}${row("Amount",receiptMoney(Number(s.voucher.amount)))}${row("Valid until",String(s.voucher.expiry_date))}${row("Minimum next purchase",receiptMoney(Number(s.voucher.minimum_redemption_value||0)))}<div class="lr-note">${s.provisional?"Redeem on a later sale after this till syncs with ERP.":"Redeem on a later sale."} Excess value is forfeited.</div></div>`
+    :s.voucherWarning?`<div class="lr-note">${receiptEsc(s.voucherWarning)}</div>`:"";
+  return `<!doctype html><html><head><meta charset="utf-8">${localReceiptCss()}</head><body><div class="lr">${head}${banner}<div class="lr-meta">${meta}</div><div class="lr-cols"><span>Item</span><span>Qty</span><span>Rate</span><span>Amount</span></div>${items}<div class="lr-count"><span>Items: ${s.lines.length}</span></div><div class="lr-totals">${totals}${grand}${deductions}</div>${payments}${fbr}${voucher}<div class="lr-footer">Thank you for shopping with us!</div></div></body></html>`;
 }
 
 function sanitizeReceiptHtml(html:string):string{
@@ -3441,7 +3463,7 @@ async function runGuardedSync(key: SyncKey, run: () => Promise<void>): Promise<v
   syncLocks[key] = true; void renderSyncStatus();
   try { await run(); } catch { /* keep existing cache; row will show the stale/error state */ } finally { syncLocks[key] = false; void renderSyncStatus(); }
 }
-async function syncConfigNow(): Promise<void> { await runGuardedSync("config", async () => { const r = await window.posAPI.syncPosConfiguration(); if (r.summary) showPosConfigurationSummary(r.summary); }); }
+async function syncConfigNow(): Promise<void> { void syncVoucherRules(); await runGuardedSync("config", async () => { const r = await window.posAPI.syncPosConfiguration(); if (r.summary) showPosConfigurationSummary(r.summary); }); }
 // mode "auto" (default, used by the background scheduler) = delta when a watermark exists, full every 24h.
 // mode "full" (manual "Force Full" buttons) = full DELETE+INSERT reconciliation. Decision lives in main.ts (it owns app_meta).
 async function syncItemsNow(mode: "auto" | "full" = "auto"): Promise<void> { await runGuardedSync("items", async () => { const r = await window.posAPI.syncItemCatalog(mode); showCatalogTotals(r.totals); }); }
@@ -3455,9 +3477,21 @@ async function syncBarcodesNow(mode: "auto" | "full" = "full"): Promise<void> {
 async function syncCustomersNow(mode: "auto" | "full" = "auto"): Promise<void> { await runGuardedSync("customers", async () => { await window.posAPI.syncCustomers(mode); }); }
 async function syncFbrNow(mode: "auto" | "full" = "auto"): Promise<void> { await runGuardedSync("fbr", async () => { await window.posAPI.syncFbrConfig(mode); }); }
 
+async function syncVoucherRules(): Promise<void> {
+  try {
+    const state=isOnline()?await window.posAPI.syncGiftVoucherCriteria():await window.posAPI.getGiftVoucherSyncState();
+    const element=document.querySelector<HTMLElement>("#gift-voucher-sync-status");
+    if(element)element.textContent=state.ready
+      ?`Gift Voucher Criteria: ${state.count} active rules. Last synced ${new Date(state.lastSynced!).toLocaleString()}.${state.error||!isOnline()?" Using last synced rules; updates resume when connected.":" Refreshes every minute while online."}`
+      :"Gift Voucher Criteria: Not synced. Connect to ERP to enable vouchers on offline receipts.";
+  } catch { /* next tick retries; checkout does not depend on the network */ }
+}
+
 // Single background scheduler: triggers only datasets that are actually stale, never during a transaction.
 // Staleness uses the unchanged SYNC_FRESH thresholds; "auto" mode then picks delta vs full (24h) inside main.ts.
 async function backgroundSyncTick(): Promise<void> {
+  // Voucher metadata can refresh during a cart: claims freeze only when the sale is saved.
+  void syncVoucherRules();
   if (!isOnline() || txnInProgress()) return;
   try {
     void syncQueueNow();
@@ -4603,7 +4637,7 @@ function initializeRenderer(): void {
     showScreen("settings");
   })());
   // Revalidate the POS session whenever the window regains focus.
-  window.addEventListener("focus", () => { if (isOnline()) void revalidateLive("focus"); });
+  window.addEventListener("focus", () => { void syncVoucherRules(); if (isOnline()) void revalidateLive("focus"); });
   // Server-health poll (online/offline + reconnect-driven session revalidation).
   window.setInterval(async () => { try { const online = await window.posAPI.testServer(); const status = document.querySelector<HTMLElement>("#pos-server-status"); const connected = Boolean(online.connected); if (status) status.textContent = connected ? "Online" : "Offline"; setOnlineIndicator(connected);
       if (connected && !prevServerConnected) { scheduleCartPreview(); void revalidateLive("reconnect"); void backgroundSyncTick(); void syncQueueNow(); } // after reconnect: re-check session + drain offline queue + sync stale data
