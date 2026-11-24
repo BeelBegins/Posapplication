@@ -18,6 +18,7 @@ import {
   enrollmentPromptForIndex,
   leaveRequest,
   livenessPrompt,
+  raceWithTimeout,
 } from "./domain";
 
 declare const __APP_VERSION__: string;
@@ -52,7 +53,7 @@ let checkins: Row[] = [];
 let options: Row = {};
 let directory: Row[] = [];
 let facePolicy: Row = {};
-let previewUrl = "";
+let enrollPreviewUrl = "";
 let enrollEmployee = "";
 let enrollQuery = "";
 let enrollCaptures: string[] = [];
@@ -63,6 +64,12 @@ let enrollStep: EnrollStep = "pick";
 let cameraOpen = false;
 let cameraStarting = false;
 let activeStream: MediaStream | null = null;
+let attendBusy = false;
+let attendAbort: AbortController | null = null;
+let attendStream: MediaStream | null = null;
+// Identity of the submit request currently holding the retry lock (null = no lock). A token,
+// not a boolean, so an older request settling late can never release a newer request's lock.
+let attendSubmitToken: object | null = null;
 let backListenerReady = false;
 let toastTimer = 0;
 
@@ -83,23 +90,53 @@ async function payload(response: Response): Promise<Row> {
   return value;
 }
 
+// Bumped by stopCamera() so a getUserMedia() request that resolves after the employee closed
+// the camera or left enrollment is discarded instead of opening a hidden stream.
+let enrollCameraGeneration = 0;
+
 function stopCamera(): void {
+  enrollCameraGeneration += 1;
   activeStream?.getTracks().forEach((track) => track.stop());
   activeStream = null;
   cameraOpen = false;
   cameraStarting = false;
 }
 
+// Cancels an in-flight check-in/out (submitLog). Must run, and release the camera, before any
+// navigation tears out #attend-video — called first by both the hardware back handler and the
+// [data-screen] click handler. A no-op when no attendance capture is in flight.
+function cancelAttend(): void {
+  if (!attendBusy) return;
+  attendAbort?.abort();
+  attendAbort = null;
+  attendBusy = false;
+  if (attendStream) {
+    attendStream.getTracks().forEach((track) => track.stop());
+    attendStream = null;
+  }
+  const video = document.querySelector<HTMLVideoElement>("#attend-video");
+  if (video) video.srcObject = null;
+  const stage = document.querySelector<HTMLElement>("#attend-stage");
+  if (stage) stage.hidden = true;
+}
+
+function toastBodyHtml(): string {
+  return message ? `<div class="toast ${esc(tone || "info")}" role="status">${esc(message)}</div>` : "";
+}
+
 function setToast(next: string, nextTone: Tone = "info"): void {
   message = next;
   tone = nextTone;
   window.clearTimeout(toastTimer);
-  if (next) toastTimer = window.setTimeout(() => { message = ""; tone = ""; const host = document.querySelector(".toast-host"); if (host) host.innerHTML = ""; }, 4200);
+  // Update the live toast host directly: some callers (e.g. a background preview-recovery
+  // fallback) show a toast without a following render(), so the message must appear immediately.
+  const host = document.querySelector(".toast-host");
+  if (host) host.innerHTML = toastBodyHtml();
+  if (next) toastTimer = window.setTimeout(() => { message = ""; tone = ""; const el = document.querySelector(".toast-host"); if (el) el.innerHTML = ""; }, 4200);
 }
 
 function toastHtml(): string {
-  if (!message) return `<div class="toast-host" aria-live="polite"></div>`;
-  return `<div class="toast-host" aria-live="polite"><div class="toast ${esc(tone || "info")}" role="status">${esc(message)}</div></div>`;
+  return `<div class="toast-host" aria-live="polite">${toastBodyHtml()}</div>`;
 }
 
 function btn(label: string, opts: { id?: string; kind?: "primary" | "secondary" | "text" | "danger"; block?: boolean; disabled?: boolean; attrs?: string } = {}): string {
@@ -192,6 +229,7 @@ async function ensureBackHandler(): Promise<void> {
   backListenerReady = true;
   try {
     await App.addListener("backButton", () => {
+      cancelAttend();
       if (cameraOpen || cameraStarting) {
         stopCamera();
         setToast("Camera closed", "warn");
@@ -296,7 +334,7 @@ function seedPreview(): void {
   enrollCaptures = previewScreen === "enroll"
     ? [previewCaptureDataUrl(0), previewCaptureDataUrl(1), previewCaptureDataUrl(2)]
     : [];
-  previewUrl = enrollCaptures[enrollCaptures.length - 1] || "";
+  enrollPreviewUrl = enrollCaptures[enrollCaptures.length - 1] || "";
   enrollStep = (new URLSearchParams(location.search).get("step") as EnrollStep) || "pick";
   options = { leave_types: ["Casual Leave", "Annual Leave"] };
   requests = { attendance: [], expenses: [], shifts: [] };
@@ -388,11 +426,11 @@ function attendance() {
       <p class="t-label">Live attendance</p>
       <h2 class="t-title">Check in or out</h2>
       <p class="t-meta">The server owns employee, time and face match. This phone sends GPS, a challenge and one live frame.</p>
-      ${previewUrl ? `<div class="stage"><img class="preview" alt="Capture preview" src="${previewUrl.replace(/"/g, "")}"><div class="oval" aria-hidden="true"></div></div>` : ""}
+      <div class="stage" id="attend-stage" hidden><video id="attend-video" class="mirror" playsinline muted autoplay></video><div class="oval" aria-hidden="true"></div></div>
       <p class="banner" id="liveness" hidden></p>
       <div class="grid-2">
-        ${btn(`${icon("log-in", 16)} Check in`, { kind: "primary", block: true, attrs: 'data-log="IN"' })}
-        ${btn(`${icon("log-out", 16)} Check out`, { kind: "secondary", block: true, attrs: 'data-log="OUT"' })}
+        ${btn(`${icon("log-in", 16)} Check in`, { kind: "primary", block: true, disabled: attendBusy, attrs: 'data-log="IN"' })}
+        ${btn(`${icon("log-out", 16)} Check out`, { kind: "secondary", block: true, disabled: attendBusy, attrs: 'data-log="OUT"' })}
       </div>
     </article>
     <div class="stack-sm"><h3 class="t-subtitle">History</h3>${history}</div>
@@ -497,8 +535,8 @@ function enroll() {
     const prompt = enrollmentPromptForIndex(enrollCaptures.length);
     const stage = cameraOpen || cameraStarting
       ? `<div class="stage"><video id="enroll-video" playsinline muted autoplay></video><div class="oval" aria-hidden="true"></div><div class="stage-meta"><span>${esc(prompt)}</span><span>${enrollCaptures.length}/5</span></div></div>`
-      : previewUrl
-        ? `<div class="stage"><img class="preview" alt="Last capture" src="${previewUrl.replace(/"/g, "")}"><div class="oval" aria-hidden="true"></div></div>`
+      : enrollPreviewUrl
+        ? `<div class="stage"><img class="preview" alt="Last capture" src="${enrollPreviewUrl.replace(/"/g, "")}"><div class="oval" aria-hidden="true"></div></div>`
         : `<div class="stage"><div class="stage-meta"><span>Camera closed</span><span>${enrollCaptures.length}/5</span></div></div>`;
     return `<section class="stack">
       ${enrollStepper()}
@@ -567,6 +605,15 @@ function profile() {
 }
 
 function render(next: Screen = screen) {
+  // Navigation during a live check-in/out capture must go through cancelAttend() first (hardware
+  // back and [data-screen] clicks both do this) so the camera is released before the DOM
+  // attend-video element it's attached to is torn out below. Any other render while the live
+  // stream is attached (e.g. a refresh that was already in flight) is skipped; submitLog's
+  // finally re-renders once the capture has released the camera.
+  if (attendStream) return;
+  // While a check-in is in flight only the attendance screen may render; leaving it goes
+  // through cancelAttend() first (back button, bottom nav), which clears attendBusy.
+  if (attendBusy && next !== "attendance") return;
   if (next !== "enroll" && (cameraOpen || cameraStarting)) stopCamera();
   screen = next;
   if (previewMode) document.documentElement.dataset.preview = "1";
@@ -587,9 +634,20 @@ function render(next: Screen = screen) {
   ];
   if (!isManager() && screen === "enroll") screen = "home";
   const navActive: Screen = screen === "enroll" ? "profile" : screen;
+  // Pull the live enroll video out of the old DOM before it is discarded, so re-rendering the
+  // capture step (new photo taken, retake, etc.) doesn't restart/black-flash the camera preview.
+  const existingEnrollVideo = screen === "enroll" ? document.querySelector<HTMLVideoElement>("#enroll-video") : null;
+  const preservedEnrollVideo = existingEnrollVideo && existingEnrollVideo.srcObject ? existingEnrollVideo : null;
+  preservedEnrollVideo?.remove();
   root.innerHTML = `${toastHtml()}<section class="shell">${appBar(text(context, "employee_name") || "Employee")}<main class="page">${pages[screen]()}</main>${bottomNavigation("HR", navActive, nav)}</section>`;
   bind();
-  if (screen === "enroll" && cameraOpen && activeStream) attachPreview(activeStream);
+  if (screen === "enroll" && cameraOpen && activeStream) {
+    const placeholder = document.querySelector<HTMLVideoElement>("#enroll-video");
+    if (preservedEnrollVideo && placeholder) {
+      placeholder.replaceWith(preservedEnrollVideo);
+      void preservedEnrollVideo.play().catch(() => attachPreview(activeStream as MediaStream));
+    } else attachPreview(activeStream);
+  }
   void ensureBackHandler();
   requestAnimationFrame(() => {
     requestAnimationFrame(() => { document.documentElement.dataset.uiReady = "1"; });
@@ -607,12 +665,14 @@ function bind() {
   document.querySelectorAll<HTMLButtonElement>("[data-screen]").forEach((button) => {
     button.onclick = () => {
       setToast("");
+      cancelAttend();
       if (button.dataset.screen !== "enroll") stopCamera();
       if (button.dataset.screen === "enroll") enrollStep = "pick";
       render(button.dataset.screen as Screen);
     };
   });
-  document.querySelector<HTMLButtonElement>("#refresh")?.addEventListener("click", () => void refresh());
+  // A manual refresh mid check-in would repaint #attend-video out from under the live capture.
+  document.querySelector<HTMLButtonElement>("#refresh")?.addEventListener("click", () => { if (!attendBusy) void refresh(); });
   document.querySelectorAll<HTMLButtonElement>("[data-log]").forEach((button) => {
     button.onclick = () => void submitLog(button.dataset.log === "OUT" ? "OUT" : "IN");
   });
@@ -647,7 +707,7 @@ function bind() {
   document.querySelector<HTMLButtonElement>("#capture-enroll")?.addEventListener("click", () => void captureEnrollmentPhoto());
   document.querySelector<HTMLButtonElement>("#retake-last")?.addEventListener("click", () => {
     enrollCaptures = enrollCaptures.slice(0, -1);
-    previewUrl = enrollCaptures[enrollCaptures.length - 1] || "";
+    enrollPreviewUrl = enrollCaptures[enrollCaptures.length - 1] || "";
     setToast(enrollCaptures.length ? `Removed last photo. ${enrollCaptures.length}/5 kept.` : "All photos cleared.", "warn");
     render("enroll");
   });
@@ -656,14 +716,14 @@ function bind() {
       const index = Number(button.dataset.retake);
       if (!Number.isInteger(index)) return;
       enrollCaptures = enrollCaptures.filter((_, i) => i !== index);
-      previewUrl = enrollCaptures[enrollCaptures.length - 1] || "";
+      enrollPreviewUrl = enrollCaptures[enrollCaptures.length - 1] || "";
       setToast(`Removed photo ${index + 1}.`, "warn");
       render("enroll");
     };
   });
   document.querySelector<HTMLButtonElement>("#clear-enroll")?.addEventListener("click", () => {
     enrollCaptures = [];
-    previewUrl = "";
+    enrollPreviewUrl = "";
     setToast("All enrollment photos cleared.", "warn");
     render("enroll");
   });
@@ -699,7 +759,7 @@ async function searchDirectory(event: Event) {
     setToast(error instanceof Error ? error.message : "Directory search failed", "danger");
   } finally {
     enrollSearching = false;
-    render("enroll");
+    if (screen === "enroll") render("enroll");
   }
 }
 
@@ -733,18 +793,25 @@ async function openEnrollmentCamera(): Promise<void> {
   cameraStarting = true;
   setToast("Camera is needed for live enrollment photos.", "warn");
   render("enroll");
+  stopCamera();
+  cameraStarting = true;
+  const generation = enrollCameraGeneration;
   try {
-    stopCamera();
     const stream = await navigator.mediaDevices.getUserMedia({
       video: { facingMode: { ideal: "user" }, width: { ideal: 720 }, height: { ideal: 960 } },
       audio: false,
     });
+    if (generation !== enrollCameraGeneration || screen !== "enroll") {
+      stream.getTracks().forEach((track) => track.stop());
+      return;
+    }
     activeStream = stream;
     cameraOpen = true;
     cameraStarting = false;
     setToast(enrollmentPromptForIndex(enrollCaptures.length), "success");
     render("enroll");
   } catch (error) {
+    if (generation !== enrollCameraGeneration) return;
     stopCamera();
     setToast(cameraPermissionDeniedMessage(error) || (error instanceof Error ? error.message : "Camera could not start"), "danger");
     render("enroll");
@@ -775,32 +842,79 @@ async function captureStillFromStream(prompt: string): Promise<string> {
   context2d.drawImage(video, 0, 0, canvas.width, canvas.height);
   const quality = frameQualityIssue(canvas);
   if (quality) throw new Error(quality);
-  previewUrl = canvas.toDataURL("image/jpeg", 0.86);
-  return previewUrl;
+  enrollPreviewUrl = canvas.toDataURL("image/jpeg", 0.86);
+  return enrollPreviewUrl;
 }
 
-async function captureFace(prompt: string): Promise<string> {
-  const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false });
+const attendCancelled = () => new DOMException("Attendance capture was cancelled.", "AbortError");
+
+// Shows a real live preview (visible #attend-video) for the attendance check-in/out capture —
+// unlike enrollment, no still image is kept afterward; the frame is sent to the server and discarded.
+// `signal` comes from submitLog's AbortController: cancelAttend() aborts it on back/nav so this
+// function stops the camera as soon as possible instead of running to completion unseen.
+async function captureFace(prompt: string, signal: AbortSignal): Promise<string> {
+  // Bounded: a permission prompt that never settles must not keep IN/OUT locked. A stream that
+  // arrives after the timeout is stopped straight away.
+  let cameraWaitExpired = false;
+  const stream = await raceWithTimeout(
+    () => navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: "user" }, width: { ideal: 720 }, height: { ideal: 960 } },
+      audio: false,
+    }).then((granted) => {
+      if (cameraWaitExpired) granted.getTracks().forEach((track) => track.stop());
+      return granted;
+    }),
+    30_000,
+    "The camera did not start. Allow camera access for Aimatic HR, then try again.",
+  ).catch((error: unknown) => { cameraWaitExpired = true; throw error; });
+  // The permission prompt above can outlast a cancel (back/nav) that already released the UI;
+  // getUserMedia must not be left running on a screen the employee has already left.
+  if (signal.aborted) { stream.getTracks().forEach((track) => track.stop()); throw attendCancelled(); }
+  attendStream = stream;
+  // Look the elements up only now: render() is frozen from this point (attendStream is set),
+  // so they cannot be replaced by a render that finished during the permission prompt.
+  const video = document.querySelector<HTMLVideoElement>("#attend-video");
+  const stage = document.querySelector<HTMLElement>("#attend-stage");
   try {
-    const video = document.createElement("video");
+    if (!video || !stage) throw new Error("Live preview is not ready yet.");
+    stage.hidden = false;
     video.srcObject = stream;
-    video.setAttribute("playsinline", "true");
-    await video.play();
+    await raceWithTimeout(async () => {
+      await video.play();
+      if (video.readyState < 2) {
+        await new Promise<void>((resolve, reject) => {
+          const onReady = () => { cleanup(); resolve(); };
+          const onError = () => { cleanup(); reject(new Error("Live preview failed.")); };
+          const cleanup = () => { video.removeEventListener("loadeddata", onReady); video.removeEventListener("error", onError); };
+          video.addEventListener("loadeddata", onReady, { once: true });
+          video.addEventListener("error", onError, { once: true });
+        });
+      }
+    }, 8000, "Live camera preview did not start in time.");
+    if (signal.aborted) throw attendCancelled();
     const note = document.querySelector<HTMLElement>("#liveness");
     if (note) { note.hidden = false; note.textContent = prompt; }
-    await new Promise((resolve) => window.setTimeout(resolve, 900));
+    // Give the employee time to see themselves live and follow the liveness prompt.
+    await new Promise((resolve) => window.setTimeout(resolve, 2500));
+    if (signal.aborted) throw attendCancelled();
     const canvas = document.createElement("canvas");
-    canvas.width = 480;
-    canvas.height = 640;
+    // Native aspect ratio, capped so the JPEG stays well under the server's 2 MB image limit.
+    const sourceWidth = video.videoWidth || 480;
+    const sourceHeight = video.videoHeight || 640;
+    const scale = Math.min(1, 1280 / Math.max(sourceWidth, sourceHeight));
+    canvas.width = Math.round(sourceWidth * scale);
+    canvas.height = Math.round(sourceHeight * scale);
     const context2d = canvas.getContext("2d");
     if (!context2d) throw new Error("Camera capture failed.");
     context2d.drawImage(video, 0, 0, canvas.width, canvas.height);
     const quality = frameQualityIssue(canvas);
     if (quality) throw new Error(quality);
-    previewUrl = canvas.toDataURL("image/jpeg", 0.82);
-    return previewUrl;
+    return canvas.toDataURL("image/jpeg", 0.82);
   } finally {
     stream.getTracks().forEach((track) => track.stop());
+    if (video) video.srcObject = null;
+    if (stage) stage.hidden = true;
+    if (attendStream === stream) attendStream = null;
   }
 }
 
@@ -838,7 +952,7 @@ async function submitEnrollment() {
     const saved = await payload(await api.enrollFace(body));
     enrollCaptures = [];
     enrollConsent = false;
-    previewUrl = "";
+    enrollPreviewUrl = "";
     enrollStep = "pick";
     setToast(`Enrollment complete for ${enrollEmployee}. Status: ${text(saved, "status") || "Enrolled"}.`, "success");
     context = await payload(await api.getContext());
@@ -855,20 +969,103 @@ async function submitLog(logType: "IN" | "OUT") {
     if (previewMode) setToast(`Preview ${logType}`, "success");
     return;
   }
+  // Guards the full request, not just the DOM: a refresh/navigation mid-flight can repaint
+  // enabled IN/OUT buttons (attendance() only disables them while attendBusy is true), so this
+  // flag — not button.disabled — is what stops a second concurrent check-in from starting.
+  if (attendBusy) return;
+  // A cancelled run may still have its submit request in flight; the server could record it,
+  // so a new check-in waits until that request settles (its outcome is still shown as a toast).
+  if (attendSubmitToken) { setToast("The previous check-in is still being sent (this can take up to 2 minutes). Check History, then try again.", "warn"); return; }
+  const controller = new AbortController();
+  attendBusy = true;
+  attendAbort = controller;
+  const signal = controller.signal;
   setToast("Requesting a server challenge", "info");
   render("attendance");
+  let submitStarted = false;
   try {
     if (offline()) throw new Error("You appear offline. Attendance was not recorded.");
-    const challenge = text(await payload(await api.requestCheckinChallenge()), "challenge");
-    const location = await captureLocation();
-    const image = await captureFace(livenessPrompt(challenge));
+    const challengeApi = api;
+    const challenge = text(await raceWithTimeout(
+      async () => payload(await challengeApi.requestCheckinChallenge()),
+      20_000,
+      "No reply from the server. Check your connection and try again.",
+    ), "challenge");
+    if (signal.aborted) return;
+    const location = await raceWithTimeout(
+      () => captureLocation(),
+      45_000,
+      "Location did not respond. Turn on Location for Aimatic HR, then try again.",
+    );
+    if (signal.aborted) return;
+    const image = await captureFace(livenessPrompt(challenge), signal);
+    if (signal.aborted) return;
     const body = attendanceRequest({ logType, ...location, challenge, image });
-    const saved = await payload(await api.submitAttendance(body));
+    submitStarted = true;
+    // The retry lock follows the real request, not the UI wait below, so a punch whose outcome is
+    // unknown is not doubled by an immediate retry. It is released early only on a definite answer
+    // (a server response); otherwise after 130 s, when the server (gunicorn -t 120, nginx
+    // proxy_read_timeout 120) can no longer complete the request, so a retry is safe.
+    const submitToken = {};
+    attendSubmitToken = submitToken;
+    let submitHold = 0;
+    const releaseSubmitLock = () => {
+      if (attendSubmitToken !== submitToken) return;
+      attendSubmitToken = null;
+      window.clearTimeout(submitHold);
+    };
+    submitHold = window.setTimeout(releaseSubmitLock, 130_000);
+    const submitApi = api;
+    let serverAnswered = false;
+    const request = (async () => {
+      let response: Response;
+      try {
+        response = await submitApi.submitAttendance(body);
+      } catch {
+        throw new Error("The connection dropped while sending. Your punch may have been recorded: check History before trying again.");
+      }
+      // Only a 2xx/4xx reply is a definite outcome. A 5xx (e.g. a 502/504 from the proxy) may
+      // come back after the app already recorded the punch, so the retry lock is kept.
+      if (response.status >= 500) {
+        throw new Error("The server did not confirm this punch. It may have been recorded: check History before trying again.");
+      }
+      serverAnswered = true;
+      return payload(response);
+    })();
+    let uiGaveUp = false;
+    request.then((row) => {
+      releaseSubmitLock();
+      if (uiGaveUp) { setToast(`Recorded ${text(row, "name")} (the server replied late)`, "success"); void refresh(); }
+    }, () => {
+      if (serverAnswered) releaseSubmitLock();
+    });
+    // The UI wait is bounded so the employee is not left on a spinner; the outcome is then unknown.
+    const saved = await raceWithTimeout(
+      () => request,
+      45_000,
+      "No reply from the server yet. Your punch may still be recorded: check History before trying again.",
+    ).catch((error: unknown) => { uiGaveUp = true; throw error; });
+    // Once the request was sent, its outcome is shown even if the employee navigated away.
     setToast(`Recorded ${text(saved, "name")}`, "success");
-    await refresh();
-  } catch (error) {
-    setToast(cameraPermissionDeniedMessage(error) || (error instanceof Error ? error.message : "Attendance was not recorded"), "danger");
+    if (signal.aborted) return;
+    // Release the check-in lock before refreshing so a slow refresh cannot keep IN/OUT disabled.
+    if (attendAbort === controller) { attendBusy = false; attendAbort = null; }
     render("attendance");
+    void refresh();
+  } catch (error) {
+    if (signal.aborted && !submitStarted) return;
+    setToast(cameraPermissionDeniedMessage(error) || (error instanceof Error ? error.message : "Attendance was not recorded"), "danger");
+  } finally {
+    // Only act on state we still own — cancelAttend() may already have cleared it (and a new
+    // submitLog call may already have installed its own controller) by the time this runs. When
+    // we do still own it, re-render so the IN/OUT buttons pick up attendBusy=false: the earlier
+    // render("attendance") calls above all happened while still busy, so they left the buttons
+    // disabled in the DOM.
+    if (attendAbort === controller) {
+      attendBusy = false;
+      attendAbort = null;
+      render("attendance");
+    }
   }
 }
 
