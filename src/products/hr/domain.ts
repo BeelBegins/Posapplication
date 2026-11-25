@@ -66,7 +66,7 @@ export function livenessPrompt(challenge: string): string {
   return prompts[(challenge.charCodeAt(0) || 0) % prompts.length];
 }
 
-export const FACE_CONSENT_VERSION = "aimatichr-face-consent-v1";
+export const FACE_CONSENT_VERSION = "aimatichr-face-consent-v2";
 
 export const ENROLL_CAPTURE_PROMPTS = [
   "Look straight at the camera — center your face in the oval",

@@ -17,12 +17,11 @@ import {
   enrollFaceRequest,
   enrollmentPromptForIndex,
   leaveRequest,
-  livenessPrompt,
 } from "./domain";
 
 declare const __APP_VERSION__: string;
 type Row = Record<string, unknown>;
-type Screen = "home" | "attendance" | "leave" | "pay" | "enroll" | "profile";
+type Screen = "home" | "attendance" | "leave" | "pay" | "enroll" | "profile" | "team";
 type PreviewScreen = Screen | "setup" | "signin";
 type EnrollStep = "pick" | "consent" | "capture" | "review";
 type HrApi = ReturnType<typeof createHrApi>;
@@ -49,6 +48,11 @@ let payslips: Row[] = [];
 let requests: Row = {};
 let team: Row[] = [];
 let checkins: Row[] = [];
+let attendanceTargets: Row[] = [];
+let teamCheckins: Row[] = [];
+let attendanceTarget = "";
+let pendingAttendance: { logType: "IN" | "OUT"; challenge: string; latitude: number; longitude: number; accuracy: number; steps: string[]; framesPerStep: number; frames: Array<{ step: string; image: string }> } | null = null;
+let evidenceImage = "";
 let options: Row = {};
 let directory: Row[] = [];
 let facePolicy: Row = {};
@@ -73,6 +77,8 @@ const text = (row: Row | undefined, ...keys: string[]) => {
 const list = (value: unknown): Row[] => Array.isArray(value) ? value.filter((entry): entry is Row => Boolean(entry) && typeof entry === "object") : [];
 const money = (value: unknown) => formatMoney(value, "PKR");
 const isManager = () => canManageFaceEnrollment(context.roles);
+const canMarkOthers = () => isManager() || (Array.isArray(context.roles) && context.roles.some((role) => ["HR Supervisor", "HR User"].includes(String(role))));
+const hasEmployee = () => Boolean(text(context, "employee"));
 const offline = () => typeof navigator !== "undefined" && navigator.onLine === false;
 const initials = (name: string) => name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase() || "").join("") || "?";
 
@@ -194,8 +200,9 @@ async function ensureBackHandler(): Promise<void> {
     await App.addListener("backButton", () => {
       if (cameraOpen || cameraStarting) {
         stopCamera();
+        pendingAttendance = null;
         setToast("Camera closed", "warn");
-        render("enroll");
+        render(screen === "attendance" ? "attendance" : "enroll");
         return;
       }
       if (screen === "enroll" && enrollStep !== "pick") {
@@ -224,10 +231,10 @@ function setup(error = "", address = "") {
   stopCamera();
   root.innerHTML = `${toastHtml()}<section class="setup"><div class="setup-card">
     <div class="mark">${brandMark()}</div>
-    <div class="stack-sm"><p class="t-label">Employee workspace</p><h1 class="t-display">Aimatic HR</h1><p class="t-meta">Connect to your ERP, then sign in with your own employee account. Attendance, leave and pay stay on the server.</p></div>
+    <div class="stack-sm"><p class="t-label">Employee & manager workspace</p><h1 class="t-display">Aimatic HR</h1><p class="t-meta">Connect to your ERP, then sign in with your own account. Attendance, leave and pay stay on the server.</p></div>
     ${error ? `<div class="banner danger">${esc(error)}</div>` : ""}
     <form id="setup" class="stack">
-      ${field("ERP URL", `<input id="url" type="url" required placeholder="https://erp.example.com" autocomplete="url" value="${esc(address)}">`)}
+      ${field("ERP URL", `<input id="url" type="url" required placeholder="https://erp.example.com" autocomplete="url" value="${esc(address || "https://test.aurah.dev")}">`)}
       ${btn("Continue", { kind: "primary", block: true, attrs: 'type="submit"' })}
     </form>
     <p class="t-meta">v${esc(__APP_VERSION__)} · Public OAuth · No API secret</p>
@@ -252,7 +259,7 @@ function signIn() {
   stopCamera();
   root.innerHTML = `${toastHtml()}<section class="setup"><div class="setup-card">
     <div class="mark">${brandMark()}</div>
-    <div class="stack-sm"><p class="t-label">Aimatic HR</p><h1 class="t-display">Sign in</h1><p class="t-meta">Use your ERP account. The app cannot choose another employee.</p></div>
+    <div class="stack-sm"><p class="t-label">Aimatic HR</p><h1 class="t-display">Sign in</h1><p class="t-meta">Use your ERP account. Authorized managers can select employees for attendance.</p></div>
     ${message ? `<div class="banner danger">${esc(message)}</div>` : ""}
     ${btn(`${icon("log-in", 18)} Sign in with ERP`, { id: "login", kind: "primary", block: true })}
     ${btn("Change ERP server", { id: "change-server", kind: "secondary", block: true })}
@@ -317,30 +324,24 @@ async function refresh() {
   if (!api || previewMode) return;
   try {
     if (offline()) throw new Error("You appear offline. Reconnect, then refresh.");
-    const tasks: Array<Promise<Row | Row[]>> = [
-      api.getLeaveSummary().then(payload),
-      api.getPayslips().then(payload),
-      api.getRequests().then(payload),
-      api.getTeam().then(payload),
-      api.getRecentCheckins().then(payload),
-      api.getFormOptions().then(payload),
-    ];
+    const tasks: Array<Promise<Row | Row[]>> = [];
+    if (hasEmployee()) tasks.push(api.getLeaveSummary().then(payload), api.getPayslips().then(payload), api.getRequests().then(payload), api.getTeam().then(payload), api.getRecentCheckins().then(payload), api.getFormOptions().then(payload));
+    if (canMarkOthers()) tasks.push(api.getAttendanceTargets().then(payload), api.getTeamAttendance().then(payload));
     if (isManager()) {
       tasks.push(api.getDirectory(enrollQuery).then(payload));
       tasks.push(api.getFacePolicy().then(payload));
     }
     const results = await Promise.all(tasks);
-    const [leave, pay, requestRows, teamRows, logs, formOptions] = results as Row[];
-    leaveRows = list(leave.applications);
-    balances = (leave.balances && typeof leave.balances === "object" ? leave.balances : {}) as Row;
-    payslips = list(pay);
-    requests = requestRows;
-    team = list(teamRows);
-    checkins = list(logs);
-    options = formOptions;
+    let index = 0;
+    if (hasEmployee()) {
+      const [leave, pay, requestRows, teamRows, logs, formOptions] = results.slice(0, 6) as Row[];
+      leaveRows = list(leave.applications); balances = (leave.balances && typeof leave.balances === "object" ? leave.balances : {}) as Row;
+      payslips = list(pay); requests = requestRows; team = list(teamRows); checkins = list(logs); options = formOptions; index = 6;
+    } else { leaveRows = []; balances = {}; payslips = []; requests = {}; team = []; checkins = []; options = {}; }
+    if (canMarkOthers()) { attendanceTargets = list(results[index]); teamCheckins = list(results[index + 1]); if (!attendanceTarget) attendanceTarget = text(attendanceTargets[0], "name"); index += 2; }
     if (isManager()) {
-      directory = list(results[6]);
-      facePolicy = (results[7] && typeof results[7] === "object" ? results[7] as Row : facePolicy);
+      directory = list(results[index]);
+      facePolicy = (results[index + 1] && typeof results[index + 1] === "object" ? results[index + 1] as Row : facePolicy);
     }
     if (!loading) render(screen);
   } catch (error) {
@@ -350,6 +351,7 @@ async function refresh() {
 }
 
 function home() {
+  if (!hasEmployee()) return `<section class="stack"><article class="card hero-card stack"><p class="t-label">Manager workspace</p><h1 class="t-display">${esc(text(context, "employee_name") || "HR Manager")}</h1><p class="t-meta">Use this shared mobile device to enroll employees and record their attendance.</p></article><div class="qa"><button class="qa-btn" data-screen="team"><strong>Team attendance</strong><span class="t-meta">Last 7 days</span></button><button class="qa-btn" data-screen="attendance"><strong>Mark attendance</strong><span class="t-meta">Live face + GPS</span></button>${isManager() ? `<button class="qa-btn" data-screen="enroll"><strong>Enroll face</strong><span class="t-meta">Employees</span></button>` : ""}</div>${btn(`${icon("log-out", 16)} Sign out`, { id: "sign-out", kind: "danger", block: true })}</section>`;
   const hour = new Date().getHours();
   const greet = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
   const latest = checkins[0];
@@ -371,6 +373,7 @@ function home() {
     <div class="qa">
       <button class="qa-btn" data-screen="attendance"><span class="icon">${icon("log-in", 18)}</span><strong>Check in / out</strong><span class="t-meta">Face + GPS</span></button>
       <button class="qa-btn" data-screen="leave"><span class="icon">${icon("calendar", 18)}</span><strong>Request leave</strong><span class="t-meta">Send to ERP</span></button>
+      ${canMarkOthers() ? `<button class="qa-btn" data-screen="team"><span class="icon">${icon("users", 18)}</span><strong>Team attendance</strong><span class="t-meta">Location + 7-day evidence</span></button>` : ""}
       ${isManager() ? `<button class="qa-btn" data-screen="enroll"><span class="icon">${icon("camera", 18)}</span><strong>Enroll face</strong><span class="t-meta">Managers</span></button>` : ""}
       <button class="qa-btn" data-screen="profile"><span class="icon">${icon("user", 18)}</span><strong>Profile</strong><span class="t-meta">Team & requests</span></button>
     </div>
@@ -383,20 +386,52 @@ function attendance() {
   const history = checkins.length
     ? `<div class="list">${checkins.map((row) => `<article class="list-row"><span class="icon-btn" style="width:40px;height:40px;display:grid;place-items:center;background:var(--surface-2);border-radius:12px">${icon(text(row, "log_type") === "OUT" ? "log-out" : "log-in", 18)}</span><div class="grow"><strong>${esc(text(row, "log_type") || "Log")}</strong><span class="t-meta">${esc(text(row, "time"))}</span></div>${statusBadge(text(row, "shift") || "ERP", "info")}</article>`).join("")}</div>`
     : emptyState(icon("clock", 28), "No recent check-ins", "Successful check-ins from ERP will appear here.");
+  const targets = canMarkOthers() ? field("Employee", `<select id="attendance-target">${attendanceTargets.map((row) => `<option value="${esc(text(row, "name"))}" ${text(row, "name") === attendanceTarget ? "selected" : ""}>${esc(text(row, "employee_name") || text(row, "name"))}</option>`).join("")}</select>`) : "";
   return `<section class="stack">
     <article class="card stack">
       <p class="t-label">Live attendance</p>
       <h2 class="t-title">Check in or out</h2>
-      <p class="t-meta">The server owns employee, time and face match. This phone sends GPS, a challenge and one live frame.</p>
-      ${previewUrl ? `<div class="stage"><img class="preview" alt="Capture preview" src="${previewUrl.replace(/"/g, "")}"><div class="oval" aria-hidden="true"></div></div>` : ""}
-      <p class="banner" id="liveness" hidden></p>
-      <div class="grid-2">
+      <p class="t-meta">The server matches the selected employee’s enrolled face. The signed-in user is recorded as the actor.</p>
+      ${targets}
+      ${cameraOpen ? `<div class="stage"><video id="attendance-video" playsinline muted autoplay></video><div class="oval" aria-hidden="true"></div></div>` : `<div class="stage"><div class="stage-meta"><span>Live camera is off</span></div></div>`}
+      <p class="banner" id="liveness" ${pendingAttendance ? "" : "hidden"}>${esc(attendancePrompt())}</p>
+      ${pendingAttendance ? btn(attendanceCaptureLabel(), { id: "capture-attendance", kind: "primary", block: true }) : btn(cameraOpen ? "Camera on" : "Open live camera", { id: "open-attendance-camera", kind: "secondary", block: true })}
+      ${cameraOpen ? btn("Close camera", { id: "close-attendance-camera", kind: "text", block: true }) : ""}
+      ${pendingAttendance ? btn("Cancel", { id: "cancel-attendance", kind: "secondary", block: true }) : `<div class="grid-2">
         ${btn(`${icon("log-in", 16)} Check in`, { kind: "primary", block: true, attrs: 'data-log="IN"' })}
         ${btn(`${icon("log-out", 16)} Check out`, { kind: "secondary", block: true, attrs: 'data-log="OUT"' })}
-      </div>
+      </div>`}
     </article>
     <div class="stack-sm"><h3 class="t-subtitle">History</h3>${history}</div>
   </section>`;
+}
+
+function attendancePrompt(): string {
+  if (!pendingAttendance) return "";
+  const stepIndex = Math.floor(pendingAttendance.frames.length / pendingAttendance.framesPerStep);
+  const step = pendingAttendance.steps[stepIndex];
+  if (!step) return "Return to the centre and look at the camera for the final match.";
+  return ({ center: "Look straight at the camera", left: "Turn your head slightly to your left", right: "Turn your head slightly to your right", up: "Look slightly up" } as Record<string, string>)[step] || "Follow the on-screen instruction";
+}
+
+function attendanceCaptureLabel(): string {
+  if (!pendingAttendance) return "Capture";
+  if (pendingAttendance.steps.length && pendingAttendance.frames.length < pendingAttendance.steps.length * pendingAttendance.framesPerStep) {
+    const stepIndex = Math.floor(pendingAttendance.frames.length / pendingAttendance.framesPerStep);
+    const frameIndex = pendingAttendance.frames.length % pendingAttendance.framesPerStep;
+    return `Capture ${pendingAttendance.steps[stepIndex]} ${frameIndex + 1}/${pendingAttendance.framesPerStep}`;
+  }
+  return "Capture final frame and record";
+}
+
+function teamAttendance() {
+  const rows = teamCheckins.map((row) => {
+    const lat = text(row, "latitude"), lng = text(row, "longitude");
+    const maps = lat && lng ? `<a class="t-meta" href="https://maps.google.com/?q=${encodeURIComponent(lat)},${encodeURIComponent(lng)}" target="_blank" rel="noopener">${esc(lat)}, ${esc(lng)}</a>` : `<span class="t-meta">Location unavailable</span>`;
+    const photoButton = text(row, "marked_by") ? btn("View photo", { kind: "secondary", attrs: `data-evidence="${esc(text(row, "name"))}"` }) : "";
+    return `<article class="list-row"><div class="grow"><strong>${esc(text(row, "employee_name") || text(row, "employee"))} · ${esc(text(row, "log_type"))}</strong><span class="t-meta">${esc(text(row, "time"))} · marked by ${esc(text(row, "marked_by") || "employee/device")}</span>${maps}</div>${photoButton}</article>`;
+  }).join("");
+  return `<section class="stack"><article class="card stack"><p class="t-label">Team attendance</p><h2 class="t-title">Last 7 days</h2><p class="t-meta">Private images are visible to authorized managers for 7 days and then deleted.</p>${btn(`${icon("refresh", 16)} Refresh`, { id: "refresh-team", kind: "secondary", block: true })}</article>${rows ? `<div class="list">${rows}</div>` : emptyState(icon("users", 28), "No recent team check-ins", "Check-ins from your authorized employees will appear here.")}${evidenceImage ? `<article class="card"><img class="preview" alt="Attendance evidence" src="${evidenceImage}">${btn("Close image", { id: "close-evidence", kind: "secondary", block: true })}</article>` : ""}</section>`;
 }
 
 function leave() {
@@ -475,9 +510,9 @@ function enroll() {
         <h2 class="t-title">Record employee consent</h2>
         <p class="t-meta">Policy <code>${esc(policyVersion)}</code> · attendance check-in/out only.</p>
         <ul class="t-meta" style="margin:0;padding-left:18px;display:grid;gap:6px">
-          <li>Encrypted face template is stored. Raw photos are not kept.</li>
+          <li>Encrypted face template is stored. Attendance photos are private and kept for up to 7 days; enrollment photos are discarded.</li>
           <li>No commercial face API is used.</li>
-          <li>An HR manager can revoke and wipe later.</li>
+          <li>An HR manager can revoke enrollment. Attendance images are automatically deleted after 7 days.</li>
         </ul>
         <button type="button" class="consent" id="enroll-consent-toggle" aria-pressed="${enrollConsent ? "true" : "false"}">
           <span class="box" aria-hidden="true">${enrollConsent ? icon("check", 14) : ""}</span>
@@ -567,7 +602,7 @@ function profile() {
 }
 
 function render(next: Screen = screen) {
-  if (next !== "enroll" && (cameraOpen || cameraStarting)) stopCamera();
+  if (next !== "enroll" && next !== "attendance" && (cameraOpen || cameraStarting)) stopCamera();
   screen = next;
   if (previewMode) document.documentElement.dataset.preview = "1";
   if (previewTheme === "light" || previewTheme === "dark") document.documentElement.dataset.theme = previewTheme;
@@ -576,20 +611,27 @@ function render(next: Screen = screen) {
     root.innerHTML = `${toastHtml()}<section class="setup"><div class="setup-card"><p class="t-label">Loading</p><div class="skeleton" aria-busy="true">${loadingSkeleton(4)}</div><p class="t-meta">${esc(loading)}</p></div></section>`;
     return;
   }
-  const pages: Record<Screen, () => string> = { home, attendance, leave, pay, enroll, profile };
-  // Exactly 5 tabs — never Enroll in the bar (wraps on ~360px / real phones). Enroll stays manager-only via Home tile + Profile.
-  const nav: Array<{ id: Screen; label: string; icon: string }> = [
+  const pages: Record<Screen, () => string> = { home, attendance, leave, pay, enroll, profile, team: teamAttendance };
+  // Keep employee navigation at five tabs; unlinked managers get only the areas they can use.
+  const employeeNav: Array<{ id: Screen; label: string; icon: string }> = [
     { id: "home", label: "Home", icon: icon("home", 22) },
     { id: "attendance", label: "Attend", icon: icon("map-pin", 22) },
     { id: "leave", label: "Leave", icon: icon("calendar", 22) },
     { id: "pay", label: "Pay", icon: icon("credit-card", 22) },
     { id: "profile", label: "Profile", icon: icon("user", 22) },
   ];
+  const managerNav: Array<{ id: Screen; label: string; icon: string }> = [
+    { id: "home", label: "Home", icon: icon("home", 22) },
+    { id: "attendance", label: "Attend", icon: icon("map-pin", 22) },
+    { id: "team", label: "Team", icon: icon("users", 22) },
+  ];
+  const nav = hasEmployee() ? employeeNav : managerNav;
   if (!isManager() && screen === "enroll") screen = "home";
+  if (!hasEmployee() && ["leave", "pay", "profile"].includes(screen)) screen = "home";
   const navActive: Screen = screen === "enroll" ? "profile" : screen;
   root.innerHTML = `${toastHtml()}<section class="shell">${appBar(text(context, "employee_name") || "Employee")}<main class="page">${pages[screen]()}</main>${bottomNavigation("HR", navActive, nav)}</section>`;
   bind();
-  if (screen === "enroll" && cameraOpen && activeStream) attachPreview(activeStream);
+  if ((screen === "enroll" || screen === "attendance") && cameraOpen && activeStream) attachPreview(activeStream);
   void ensureBackHandler();
   requestAnimationFrame(() => {
     requestAnimationFrame(() => { document.documentElement.dataset.uiReady = "1"; });
@@ -597,7 +639,7 @@ function render(next: Screen = screen) {
 }
 
 function attachPreview(stream: MediaStream): void {
-  const video = document.querySelector<HTMLVideoElement>("#enroll-video");
+  const video = document.querySelector<HTMLVideoElement>(screen === "attendance" ? "#attendance-video" : "#enroll-video");
   if (!video) return;
   video.srcObject = stream;
   void video.play().catch(() => setToast("Could not start the live preview.", "danger"));
@@ -607,15 +649,24 @@ function bind() {
   document.querySelectorAll<HTMLButtonElement>("[data-screen]").forEach((button) => {
     button.onclick = () => {
       setToast("");
-      if (button.dataset.screen !== "enroll") stopCamera();
-      if (button.dataset.screen === "enroll") enrollStep = "pick";
-      render(button.dataset.screen as Screen);
+      const target = button.dataset.screen as Screen;
+      if (target !== screen) { stopCamera(); pendingAttendance = null; }
+      if (target === "enroll") enrollStep = "pick";
+      render(target);
     };
   });
   document.querySelector<HTMLButtonElement>("#refresh")?.addEventListener("click", () => void refresh());
+  document.querySelector<HTMLButtonElement>("#refresh-team")?.addEventListener("click", () => void refresh());
   document.querySelectorAll<HTMLButtonElement>("[data-log]").forEach((button) => {
     button.onclick = () => void submitLog(button.dataset.log === "OUT" ? "OUT" : "IN");
   });
+  document.querySelector<HTMLSelectElement>("#attendance-target")?.addEventListener("change", (event) => { attendanceTarget = (event.currentTarget as HTMLSelectElement).value; });
+  document.querySelector<HTMLButtonElement>("#open-attendance-camera")?.addEventListener("click", () => void openAttendanceCamera());
+  document.querySelector<HTMLButtonElement>("#close-attendance-camera")?.addEventListener("click", () => { stopCamera(); pendingAttendance = null; render("attendance"); });
+  document.querySelector<HTMLButtonElement>("#cancel-attendance")?.addEventListener("click", () => { pendingAttendance = null; stopCamera(); setToast("Attendance cancelled", "warn"); render("attendance"); });
+  document.querySelector<HTMLButtonElement>("#capture-attendance")?.addEventListener("click", () => void captureAttendance());
+  document.querySelectorAll<HTMLButtonElement>("[data-evidence]").forEach((button) => button.onclick = () => void loadEvidence(button.dataset.evidence || ""));
+  document.querySelector<HTMLButtonElement>("#close-evidence")?.addEventListener("click", () => { evidenceImage = ""; render("team"); });
   document.querySelector<HTMLFormElement>("#leave")?.addEventListener("submit", (event) => void submitLeave(event));
   document.querySelector<HTMLFormElement>("#correction")?.addEventListener("submit", (event) => void submitCorrection(event));
   document.querySelector<HTMLFormElement>("#enroll-search")?.addEventListener("submit", (event) => void searchDirectory(event));
@@ -674,6 +725,8 @@ function bind() {
     credentials = null;
     api = null;
     context = {};
+    pendingAttendance = null;
+    evidenceImage = "";
     enrollEmployee = "";
     enrollCaptures = [];
     enrollConsent = false;
@@ -708,7 +761,7 @@ async function captureLocation() {
   if (permission.location !== "granted") permission = await Geolocation.requestPermissions({ permissions: ["location"] });
   if (permission.location !== "granted") throw new Error("Precise location permission is required. Enable Location for Aimatic HR in Android Settings, then retry.");
   const position = await Geolocation.getCurrentPosition({ enableHighAccuracy: true, timeout: 20_000, maximumAge: 0 });
-  return { latitude: position.coords.latitude, longitude: position.coords.longitude };
+  return { latitude: position.coords.latitude, longitude: position.coords.longitude, accuracy: position.coords.accuracy };
 }
 
 function frameQualityIssue(canvas: HTMLCanvasElement): string | null {
@@ -751,9 +804,9 @@ async function openEnrollmentCamera(): Promise<void> {
   }
 }
 
-async function captureStillFromStream(prompt: string): Promise<string> {
+async function captureStillFromStream(prompt: string, videoId = "enroll-video"): Promise<string> {
   if (!activeStream) throw new Error("Open the camera first.");
-  const video = document.querySelector<HTMLVideoElement>("#enroll-video");
+  const video = document.querySelector<HTMLVideoElement>(`#${videoId}`);
   if (!video) throw new Error("Live preview is not ready yet.");
   const note = document.querySelector("#liveness");
   if (note) note.textContent = prompt;
@@ -779,29 +832,18 @@ async function captureStillFromStream(prompt: string): Promise<string> {
   return previewUrl;
 }
 
-async function captureFace(prompt: string): Promise<string> {
-  const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false });
-  try {
-    const video = document.createElement("video");
-    video.srcObject = stream;
-    video.setAttribute("playsinline", "true");
-    await video.play();
-    const note = document.querySelector<HTMLElement>("#liveness");
-    if (note) { note.hidden = false; note.textContent = prompt; }
-    await new Promise((resolve) => window.setTimeout(resolve, 900));
-    const canvas = document.createElement("canvas");
-    canvas.width = 480;
-    canvas.height = 640;
-    const context2d = canvas.getContext("2d");
-    if (!context2d) throw new Error("Camera capture failed.");
-    context2d.drawImage(video, 0, 0, canvas.width, canvas.height);
-    const quality = frameQualityIssue(canvas);
-    if (quality) throw new Error(quality);
-    previewUrl = canvas.toDataURL("image/jpeg", 0.82);
-    return previewUrl;
-  } finally {
-    stream.getTracks().forEach((track) => track.stop());
-  }
+async function captureLivenessFrame(step: string): Promise<string> {
+  const video = document.querySelector<HTMLVideoElement>("#attendance-video");
+  if (!activeStream || !video) throw new Error("Open the live camera first.");
+  if (video.readyState < 2) await new Promise<void>((resolve) => video.addEventListener("loadeddata", () => resolve(), { once: true }));
+  await new Promise((resolve) => window.setTimeout(resolve, 350));
+  const canvas = document.createElement("canvas"); canvas.width = 480; canvas.height = 640;
+  const ctx = canvas.getContext("2d"); if (!ctx) throw new Error("Camera capture failed.");
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  const quality = frameQualityIssue(canvas); if (quality) throw new Error(quality);
+  const frame = canvas.toDataURL("image/jpeg", 0.68);
+  if (frame.length > 270_000) throw new Error("Camera frame is too large. Move closer and try again.");
+  return frame;
 }
 
 async function captureEnrollmentPhoto() {
@@ -855,21 +897,64 @@ async function submitLog(logType: "IN" | "OUT") {
     if (previewMode) setToast(`Preview ${logType}`, "success");
     return;
   }
-  setToast("Requesting a server challenge", "info");
-  render("attendance");
   try {
     if (offline()) throw new Error("You appear offline. Attendance was not recorded.");
-    const challenge = text(await payload(await api.requestCheckinChallenge()), "challenge");
+    if (!cameraOpen) throw new Error("Open the live camera first.");
+    const employee = canMarkOthers() ? attendanceTarget : text(context, "employee");
+    if (!employee) throw new Error("Choose an employee.");
+    setToast("Requesting a server challenge", "info");
+    const challengeReply = await payload(await api.requestCheckinChallenge(employee));
+    const challenge = text(challengeReply, "challenge");
     const location = await captureLocation();
-    const image = await captureFace(livenessPrompt(challenge));
-    const body = attendanceRequest({ logType, ...location, challenge, image });
-    const saved = await payload(await api.submitAttendance(body));
-    setToast(`Recorded ${text(saved, "name")}`, "success");
-    await refresh();
+    const live = challengeReply.liveness && typeof challengeReply.liveness === "object" ? challengeReply.liveness as Row : {};
+    pendingAttendance = { logType, challenge, ...location, steps: Array.isArray(live.steps) ? live.steps.map(String) : [], framesPerStep: Math.max(1, Number(live.frames_per_step) || 1), frames: [] };
+    const note = document.querySelector<HTMLElement>("#liveness");
+    if (note) { note.hidden = false; note.textContent = attendancePrompt(); }
+    setToast("Follow the prompt, then capture the live face.", "info");
+    render("attendance");
   } catch (error) {
     setToast(cameraPermissionDeniedMessage(error) || (error instanceof Error ? error.message : "Attendance was not recorded"), "danger");
     render("attendance");
   }
+}
+
+async function openAttendanceCamera() {
+  try {
+    stopCamera(); cameraStarting = true; render("attendance");
+    activeStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "user" }, width: { ideal: 720 }, height: { ideal: 960 } }, audio: false });
+    cameraOpen = true; cameraStarting = false; render("attendance");
+  } catch (error) {
+    stopCamera(); setToast(cameraPermissionDeniedMessage(error) || (error instanceof Error ? error.message : "Camera could not start"), "danger"); render("attendance");
+  }
+}
+
+async function captureAttendance() {
+  if (!api || !pendingAttendance || !cameraOpen) return;
+  try {
+    if (offline()) throw new Error("You appear offline. Attendance was not recorded.");
+    if (pendingAttendance.steps.length && pendingAttendance.frames.length < pendingAttendance.steps.length * pendingAttendance.framesPerStep) {
+      const step = pendingAttendance.steps[Math.floor(pendingAttendance.frames.length / pendingAttendance.framesPerStep)];
+      const image = await captureLivenessFrame(step);
+      pendingAttendance.frames.push({ step, image });
+      setToast(attendancePrompt(), "info"); render("attendance"); return;
+    }
+    const image = await captureStillFromStream("Look straight at the camera", "attendance-video");
+    const body: Record<string, unknown> = {
+      ...attendanceRequest({ logType: pendingAttendance.logType, latitude: pendingAttendance.latitude, longitude: pendingAttendance.longitude, challenge: pendingAttendance.challenge, image }),
+      employee: canMarkOthers() ? attendanceTarget : text(context, "employee"),
+      accuracy: pendingAttendance.accuracy,
+      liveness_frames: pendingAttendance.frames,
+    };
+    const saved = await payload(await api.submitAttendance(body));
+    pendingAttendance = null; stopCamera(); previewUrl = "";
+    setToast(`Recorded ${text(saved, "name")}`, "success"); await refresh();
+  } catch (error) { setToast(cameraPermissionDeniedMessage(error) || (error instanceof Error ? error.message : "Attendance was not recorded"), "danger"); render("attendance"); }
+}
+
+async function loadEvidence(checkin: string) {
+  if (!api || !checkin) return;
+  try { evidenceImage = text(await payload(await api.getAttendanceEvidence(checkin)), "image"); render("team"); }
+  catch (error) { setToast(error instanceof Error ? error.message : "Image unavailable", "danger"); render("team"); }
 }
 
 async function submitLeave(event: Event) {
