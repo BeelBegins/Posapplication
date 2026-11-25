@@ -48,6 +48,11 @@ export async function buildVoucherIssuance(snapshot: VoucherSnapshot, sale: Reco
 
 export function createGiftVoucherCore(deps: PosCoreDeps) {
   let inFlight: Promise<VoucherSyncState> | null = null;
+  let invalidation = 0;
+  let realtimeNamespace: string | null = null;
+  let namespaceKey = "";
+  let flightKey = "";
+  let pendingRevision: string | null = null;
   const key = () => {
     const s = deps.db.loadSettings();
     return `gift_voucher_criteria:${s.erpnextUrl.replace(/\/+$/, "")}:${s.posProfile}:${deps.db.getOrCreateHardwareId()}`;
@@ -57,7 +62,7 @@ export function createGiftVoucherCore(deps: PosCoreDeps) {
       const raw = JSON.parse(deps.db.getMeta(key()) || "null") as Record<string, unknown> | null;
       const parsed = parseVoucherSnapshot(raw?.snapshot);
       if (!parsed || parsed.data.pos_profile !== deps.db.loadSettings().posProfile) return null;
-      return { ...parsed, lastSynced: String(raw!.synced_at) };
+      return { ...parsed, lastSynced: String(raw!.synced_at), revision: typeof raw!.revision === "string" ? raw!.revision : null };
     } catch { return null; }
   }
   function getGiftVoucherSyncState(): VoucherSyncState {
@@ -70,25 +75,66 @@ export function createGiftVoucherCore(deps: PosCoreDeps) {
     try {
       if (!hasUsableCredentials(deps, settings) || !settings.posProfile) throw new Error("Configure ERP and POS Profile to sync Gift Voucher Criteria.");
       const query = new URLSearchParams({ pos_profile: settings.posProfile, hardware_id: deps.db.getOrCreateHardwareId() });
+      const revision = cached()?.revision;
+      if (revision) query.set("revision", revision);
       const response = await authFetch(deps, `${settings.erpnextUrl.replace(/\/+$/, "")}/api/method/aimatic.offline_pos.api.get_gift_voucher_criteria?${query}`, { signal: AbortSignal.timeout(15000) });
       if (!response.ok) throw new Error(await getResponseError(response));
       const body = asRecord(await response.json());
-      const parsed = parseVoucherSnapshot(body?.message);
+      const message = asRecord(body?.message);
+      if (cacheKey !== key()) return getGiftVoucherSyncState();
+      if (typeof message?.realtime_namespace === "string") { realtimeNamespace = message.realtime_namespace; namespaceKey = cacheKey; }
+      if (message?.not_modified === true) {
+        if (!revision || message.revision !== revision) throw new Error("Invalid Gift Voucher Criteria revision response.");
+        return getGiftVoucherSyncState();
+      }
+      const parsed = parseVoucherSnapshot(message);
       if (!parsed || parsed.data.pos_profile !== settings.posProfile) throw new Error("Invalid Gift Voucher Criteria response.");
       // A profile switch during a request cannot overwrite the new profile's cache.
-      if (cacheKey === key()) deps.db.setMeta(cacheKey, JSON.stringify({ snapshot: parsed.snapshot, synced_at: new Date().toISOString() }));
+      if (cacheKey === key()) deps.db.setMeta(cacheKey, JSON.stringify({ snapshot: parsed.snapshot, revision: typeof message?.revision === "string" ? message.revision : null, synced_at: new Date().toISOString() }));
       return getGiftVoucherSyncState();
     } catch (e) {
       return { ...getGiftVoucherSyncState(), error: e instanceof Error ? e.message : "Gift Voucher Criteria sync failed." };
     }
   }
   function syncGiftVoucherCriteria(): Promise<VoucherSyncState> {
-    if (!inFlight) inFlight = fetchSnapshot().finally(() => { inFlight = null; });
+    if (inFlight && flightKey !== key()) invalidation++;
+    if (!inFlight) inFlight = (async () => {
+      let state: VoucherSyncState;
+      let observed: number;
+      do {
+        observed = invalidation;
+        flightKey = key();
+        state = await fetchSnapshot();
+        // A change committed during this request must get a subsequent conditional
+        // fetch. Failures wait for the next real signal/health contact, never loop.
+      } while (!state.error && observed !== invalidation);
+      return state;
+    })().finally(() => { inFlight = null; });
     return inFlight;
   }
   async function prepareGiftVoucherIssuance(sale: Record<string, unknown>): Promise<Record<string, unknown> | null> {
     const value = cached();
     return value ? buildVoucherIssuance(value.snapshot, sale) : null;
   }
-  return { syncGiftVoucherCriteria, getGiftVoucherSyncState, prepareGiftVoucherIssuance };
+  function handleGiftVoucherInvalidation(event: unknown): Promise<VoucherSyncState> {
+    const scope = asRecord(event);
+    const settings = deps.db.loadSettings();
+    const data = cached()?.data;
+    if (!scope || (typeof scope.pos_profile === "string" && scope.pos_profile !== settings.posProfile)
+      || (typeof scope.company === "string" && data && scope.company !== data.company)
+      || (typeof scope.branch === "string" && data && scope.branch !== data.branch)) return Promise.resolve(getGiftVoucherSyncState());
+    invalidation++;
+    return syncGiftVoucherCriteria();
+  }
+  function handleGiftVoucherRevision(profile: string, revision: string, namespace?: string): Promise<VoucherSyncState> {
+    if (profile !== deps.db.loadSettings().posProfile || !revision) return Promise.resolve(getGiftVoucherSyncState());
+    if (namespace) { realtimeNamespace = namespace; namespaceKey = key(); }
+    if (cached()?.revision === revision) return Promise.resolve(getGiftVoucherSyncState());
+    if (inFlight && flightKey === key() && pendingRevision === revision) return inFlight;
+    pendingRevision = revision;
+    invalidation++;
+    return syncGiftVoucherCriteria();
+  }
+  return { syncGiftVoucherCriteria, getGiftVoucherSyncState, prepareGiftVoucherIssuance,
+    handleGiftVoucherInvalidation, handleGiftVoucherRevision, getVoucherRealtimeNamespace: () => namespaceKey === key() ? realtimeNamespace : null };
 }

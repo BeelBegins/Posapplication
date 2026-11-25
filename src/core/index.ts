@@ -19,11 +19,12 @@ export * from "./http";
  * handlers can be rewired incrementally without a single large-scale rewrite.
  */
 export function createPosCore(deps: PosCoreDeps) {
-  const http = createHttpCore(deps);
+  const vouchers = createGiftVoucherCore(deps);
+  const http = createHttpCore(deps, vouchers.handleGiftVoucherRevision);
   const posSession = createPosSessionCore(deps);
   return {
     ...http,
-    ...createGiftVoucherCore(deps),
+    ...vouchers,
     ...createCatalogSyncCore(deps, http),
     ...posSession,
     ...createPosConfigCore(deps, http),

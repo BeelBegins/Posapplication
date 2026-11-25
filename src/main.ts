@@ -48,12 +48,19 @@ import type { ShiftHistoryRow } from "./db/database";
 import type { CashierLoginResult } from "./core/types";
 import * as database from "./db/database";
 import { createPosCore, asRecord, textValue, sameIdentity, unwrapFrappePayload, formatResponseError, getResponseError } from "./core";
+import { createVoucherRealtime } from "./platform/voucher-realtime";
 import { createPlatformService } from "./platform/platform-service";
 
 let mainWindowRef: BrowserWindow | null = null;
 let customerDisplayWindow: BrowserWindow | null = null;
 let focusRestoreGeneration = 0;
 const core = createPosCore({ db: database, fetch });
+const voucherRealtime = createVoucherRealtime({
+  settings: loadSettings,
+  namespace: core.getVoucherRealtimeNamespace,
+  reconcile: core.syncGiftVoucherCriteria,
+  invalidate: core.handleGiftVoucherInvalidation
+});
 const runtimeInfo = createPlatformService("electron", "pos");
 
 interface MainWindowState {
@@ -900,6 +907,7 @@ function createMainWindow(): void {
 
 app.whenReady().then(() => {
   initDatabase();
+  void core.syncGiftVoucherCriteria().then(() => voucherRealtime.configure()).catch(() => {});
   console.log(`Hardware ID: ${getOrCreateHardwareId()}`);
   ipcMain.handle("db:getStatus", () => getDatabaseStatus());
   ipcMain.handle("app:runtime", () => runtimeInfo);
@@ -912,6 +920,7 @@ app.whenReady().then(() => {
     const siteChanged = previous.erpnextUrl !== normalizeErpnextUrl(settings.erpnextUrl)
       || (Boolean(settings.apiKey) && previous.apiKey !== settings.apiKey);
     if (siteChanged) clearSiteScopedCache();
+    voucherRealtime.configure();
     sendCustomerDisplayTheme(loadSettings().colorTheme);
     return result;
   });
@@ -946,7 +955,11 @@ app.whenReady().then(() => {
     win.close();
     return true;
   });
-  ipcMain.handle("server:test", () => core.testServerReachability());
+  ipcMain.handle("server:test", async () => {
+    const status = await core.testServerReachability();
+    voucherRealtime.configure();
+    return status;
+  });
   ipcMain.handle("auth:test", () => core.testApiAuthentication());
   ipcMain.handle("cashier:login", (_event, input) => posCashierLogin(asRecord(input) ?? {}));
   ipcMain.handle("cashier:offline-login", (_event, input) => cashierOfflineLogin(asRecord(input) ?? {}));
@@ -1071,6 +1084,8 @@ app.whenReady().then(() => {
     }
   });
 });
+
+app.on("before-quit", () => voucherRealtime.stop());
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {

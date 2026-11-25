@@ -1,6 +1,6 @@
 import type { PosCoreDeps } from "./types";
 import { createApiClient } from "../api/client";
-import { hasUsableCredentials } from "./auth-fetch";
+import { authFetch, hasUsableCredentials } from "./auth-fetch";
 import { normalizeErpDisplayText } from "./display-branding";
 
 // ----- Pure helpers, no deps needed — used both by the bound functions below and by
@@ -68,7 +68,7 @@ export async function getResponseError(response: Response): Promise<string> {
 
 // ----- Functions bound to PosCoreDeps (need deps.fetch and/or deps.db) -----
 
-export function createHttpCore(deps: PosCoreDeps) {
+export function createHttpCore(deps: PosCoreDeps, onVoucherRevision?: (profile: string, revision: string, namespace?: string) => unknown) {
   // deps.credentials is set only on Android (mobile.ts); Electron (main.ts) never sets
   // it, so this always takes the terminal-token branch there — same client, same
   // headers, as before this function existed.
@@ -81,16 +81,21 @@ export function createHttpCore(deps: PosCoreDeps) {
   }
 
   async function testServerReachability(): Promise<{ connected: boolean }> {
-    const { erpnextUrl } = deps.db.loadSettings();
+    const settings = deps.db.loadSettings();
+    const { erpnextUrl } = settings;
 
     if (!erpnextUrl.trim()) {
       return { connected: false };
     }
 
     let endpoint: string;
+    const usePosHealth = hasUsableCredentials(deps, settings) && !!settings.posProfile;
     try {
       const baseUrl = new URL(erpnextUrl.trim()).toString().replace(/\/+$/, "");
-      endpoint = `${baseUrl}/api/method/frappe.auth.get_logged_user`;
+      const query = usePosHealth ? new URLSearchParams({ pos_profile: settings.posProfile, hardware_id: deps.db.getOrCreateHardwareId() }) : null;
+      endpoint = usePosHealth
+        ? `${baseUrl}/api/method/aimatic.offline_pos.api.pos_health?${query}`
+        : `${baseUrl}/api/method/frappe.auth.get_logged_user`;
     } catch {
       return { connected: false };
     }
@@ -99,7 +104,18 @@ export function createHttpCore(deps: PosCoreDeps) {
     const timeout = setTimeout(() => controller.abort(), 5_000);
 
     try {
-      await deps.fetch(endpoint, { method: "GET", signal: controller.signal });
+      const response = usePosHealth
+        ? await authFetch(deps, endpoint, { method: "GET", signal: controller.signal })
+        : await deps.fetch(endpoint, { method: "GET", signal: controller.signal });
+      if (response.ok && usePosHealth) {
+        const message = asRecord(asRecord(await response.json().catch(() => null))?.message);
+        // The existing connectivity request carries only a cheap revision token.
+        // Refresh the signed rules only if that token changed.
+        if (typeof message?.pos_profile === "string" && typeof message.voucher_revision === "string") {
+          void Promise.resolve(onVoucherRevision?.(message.pos_profile, message.voucher_revision,
+            typeof message.realtime_namespace === "string" ? message.realtime_namespace : undefined)).catch(() => { /* A voucher refresh failure does not change reachability. */ });
+        }
+      }
       return { connected: true };
     } catch {
       return { connected: false };

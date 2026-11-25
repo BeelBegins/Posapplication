@@ -3463,7 +3463,7 @@ async function runGuardedSync(key: SyncKey, run: () => Promise<void>): Promise<v
   syncLocks[key] = true; void renderSyncStatus();
   try { await run(); } catch { /* keep existing cache; row will show the stale/error state */ } finally { syncLocks[key] = false; void renderSyncStatus(); }
 }
-async function syncConfigNow(): Promise<void> { void syncVoucherRules(); await runGuardedSync("config", async () => { const r = await window.posAPI.syncPosConfiguration(); if (r.summary) showPosConfigurationSummary(r.summary); }); }
+async function syncConfigNow(refreshVouchers = true): Promise<void> { if (refreshVouchers) void syncVoucherRules(); await runGuardedSync("config", async () => { const r = await window.posAPI.syncPosConfiguration(); if (r.summary) showPosConfigurationSummary(r.summary); }); }
 // mode "auto" (default, used by the background scheduler) = delta when a watermark exists, full every 24h.
 // mode "full" (manual "Force Full" buttons) = full DELETE+INSERT reconciliation. Decision lives in main.ts (it owns app_meta).
 async function syncItemsNow(mode: "auto" | "full" = "auto"): Promise<void> { await runGuardedSync("items", async () => { const r = await window.posAPI.syncItemCatalog(mode); showCatalogTotals(r.totals); }); }
@@ -3482,16 +3482,14 @@ async function syncVoucherRules(): Promise<void> {
     const state=isOnline()?await window.posAPI.syncGiftVoucherCriteria():await window.posAPI.getGiftVoucherSyncState();
     const element=document.querySelector<HTMLElement>("#gift-voucher-sync-status");
     if(element)element.textContent=state.ready
-      ?`Gift Voucher Criteria: ${state.count} active rules. Last synced ${new Date(state.lastSynced!).toLocaleString()}.${state.error||!isOnline()?" Using last synced rules; updates resume when connected.":" Refreshes every minute while online."}`
+      ?`Gift Voucher Criteria: ${state.count} active rules. Last synced ${new Date(state.lastSynced!).toLocaleString()}.${state.error||!isOnline()?" Using last synced rules; updates resume when connected.":" Updates automatically when rules change."}`
       :"Gift Voucher Criteria: Not synced. Connect to ERP to enable vouchers on offline receipts.";
-  } catch { /* next tick retries; checkout does not depend on the network */ }
+  } catch { /* Next reconnect, focus or manual refresh retries. */ }
 }
 
 // Single background scheduler: triggers only datasets that are actually stale, never during a transaction.
 // Staleness uses the unchanged SYNC_FRESH thresholds; "auto" mode then picks delta vs full (24h) inside main.ts.
 async function backgroundSyncTick(): Promise<void> {
-  // Voucher metadata can refresh during a cart: claims freeze only when the sale is saved.
-  void syncVoucherRules();
   if (!isOnline() || txnInProgress()) return;
   try {
     void syncQueueNow();
@@ -3500,7 +3498,7 @@ async function backgroundSyncTick(): Promise<void> {
     void syncBarcodesNow("auto");
     const cust = await window.posAPI.getCustomerSyncState(); if (ageMs(cust.lastSynced) > SYNC_FRESH.customers) void syncCustomersNow("auto");
     const fbr = await window.posAPI.getFbrSyncState(); if (ageMs(fbr.lastSynced) > SYNC_FRESH.fbr) void syncFbrNow("auto");
-    const cfg = await window.posAPI.getCachedPosConfiguration(); if (!cfg || ageMs(cfg.lastSynced) > SYNC_FRESH.config) void syncConfigNow();
+    const cfg = await window.posAPI.getCachedPosConfiguration(); if (!cfg || ageMs(cfg.lastSynced) > SYNC_FRESH.config) void syncConfigNow(false);
   } catch { /* ignore — next tick retries */ }
   void renderSyncStatus();
 }
@@ -3651,6 +3649,7 @@ async function runStartup(reason: string = "startup"): Promise<void> {
     // 2) Server (silent)
     setStep("server", "running"); if (progress) progress.textContent = "Testing server…";
     const server = await window.posAPI.testServer(); setOnlineIndicator(server.connected);
+    if (server.connected) void syncVoucherRules();
     if (!server.connected) {
       setStep("server", "warning"); if (serverStatus) serverStatus.textContent = "Offline"; prevServerConnected = false; showServerStatus(false);
       const cachedCfg = await window.posAPI.getCachedPosConfiguration();
@@ -4527,7 +4526,7 @@ function initializeRenderer(): void {
   window.posAPI.onFocusScanner(() => focusCart(true));
   void renderSyncStatus();
   void runPosBootstrap("startup");
-  window.addEventListener("online", () => { scheduleCartPreview(); void backgroundSyncTick(); void syncQueueNow(); });
+  window.addEventListener("online", () => { scheduleCartPreview(); void syncVoucherRules(); void backgroundSyncTick(); void syncQueueNow(); });
   document.querySelector<HTMLButtonElement>("#retry-startup")?.addEventListener("click", () => void runPosBootstrap("retry"));
   document.querySelector<HTMLFormElement>("#cashier-login-form")?.addEventListener("submit", (event) => { event.preventDefault(); void submitCashierLogin(); });
   initPinKeypad();
@@ -4640,7 +4639,7 @@ function initializeRenderer(): void {
   window.addEventListener("focus", () => { void syncVoucherRules(); if (isOnline()) void revalidateLive("focus"); });
   // Server-health poll (online/offline + reconnect-driven session revalidation).
   window.setInterval(async () => { try { const online = await window.posAPI.testServer(); const status = document.querySelector<HTMLElement>("#pos-server-status"); const connected = Boolean(online.connected); if (status) status.textContent = connected ? "Online" : "Offline"; setOnlineIndicator(connected);
-      if (connected && !prevServerConnected) { scheduleCartPreview(); void revalidateLive("reconnect"); void backgroundSyncTick(); void syncQueueNow(); } // after reconnect: re-check session + drain offline queue + sync stale data
+      if (connected && !prevServerConnected) { scheduleCartPreview(); void syncVoucherRules(); void revalidateLive("reconnect"); void backgroundSyncTick(); void syncQueueNow(); } // after reconnect: re-check session + drain offline queue + sync stale data
       prevServerConnected = connected; void updateOfflineUi(); syncCashierLoginConnection();
     } catch { const status = document.querySelector<HTMLElement>("#pos-server-status"); if (status) status.textContent = "Reconnecting"; prevServerConnected = false; void updateOfflineUi(); syncCashierLoginConnection(); } }, 30_000);
   // Revalidate the POS session every 60 seconds while online.

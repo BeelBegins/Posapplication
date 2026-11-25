@@ -68,7 +68,7 @@ product-specific) methods — not broad Desk DocPerm as the primary contract.
 
 ## Offline gift vouchers
 
-The matching ERP update supplies signed Gift Voucher Criteria. Tills refresh the complete set every minute while connected, on focus/reconnect and on POS Configuration refresh. The configuration screen shows the last successful voucher sync. Initial sync is required before offline receipts can include vouchers; an unsynced counter warns without blocking sales.
+The matching ERP update supplies signed Gift Voucher Criteria. Tills receive scoped rule-change notifications and conditionally fetch updated rules. The existing server-health request also carries a revision token to recover missed notifications without another poll. Startup, focus/reconnect and manual POS Configuration refresh check the revision; unchanged rules cause no snapshot writes. The configuration screen shows the last successful voucher sync. Initial sync is required before offline receipts can include vouchers; an unsynced counter warns without blocking sales.
 
 Eligible offline receipts include the voucher code, amount, expiry and minimum next purchase. The durable queued sale retains the exact code and signed terms across restarts and rule changes. ERP verifies the claim when it receives the sale; redemption remains online and becomes available after the issuing sale syncs. Rule changes made during an outage reach the till when it reconnects. A voucher amount discrepancy remains queued for supervisor review while later sales can sync.
 
