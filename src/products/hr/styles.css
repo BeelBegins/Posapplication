@@ -17,7 +17,7 @@
   --radius-sm:10px;--radius-md:14px;--radius-lg:20px;--radius-xl:28px;
   --space-1:4px;--space-2:8px;--space-3:12px;--space-4:16px;--space-5:24px;--space-6:32px;
   --font:Inter,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-  --fs-xs:0.75rem;--fs-sm:0.875rem;--fs-md:1rem;--fs-lg:1.125rem;--fs-xl:1.5rem;--fs-2xl:1.875rem;
+  --fs-xs:0.6875rem;--fs-sm:0.8125rem;--fs-md:0.9375rem;--fs-lg:1rem;--fs-xl:1.25rem;--fs-2xl:1.5625rem;
   --lh:1.45;--touch:48px;--nav-h:64px;--top-h:64px;--safe-bottom:env(safe-area-inset-bottom, 0px);
   color-scheme:light;
 }
@@ -221,6 +221,28 @@ html[data-theme="dark"] .qa-btn .icon{color:#04241e}
 .consent .box{flex:0 0 24px;width:24px;height:24px;margin-top:2px;border:2px solid var(--neutral-600);border-radius:7px;display:grid;place-items:center}
 .consent[aria-pressed="true"] .box{background:var(--primary);border-color:var(--primary);color:var(--on-primary)}
 .consent small{display:block;margin-top:6px;color:var(--text-muted);font-weight:600}
+
+/* Attendance is a quick counter workflow: compact type, a clear camera action and visible employee lookup. */
+.hr-shell .page{gap:14px}
+.hr-shell .card{padding:14px}
+.hr-shell .t-display{font-size:1.5rem;line-height:1.18}
+.hr-shell .t-title{font-size:1.2rem;line-height:1.25}
+.hr-shell .t-subtitle{font-size:1rem}
+.hr-shell .t-meta{font-size:.8rem;line-height:1.4}
+.hr-shell .t-label{font-size:.68rem;letter-spacing:.01em;text-transform:none}
+.hr-attendance{gap:11px}
+.attendance-employee{display:grid;gap:7px;padding:11px;border:1px solid var(--border);border-left:3px solid var(--primary);border-radius:var(--radius-md);background:var(--surface-2)}
+.attendance-employee label{font-size:.76rem;font-weight:700;color:var(--text-muted)}
+.attendance-employee input,.attendance-employee select{width:100%;min-height:48px;padding:0 12px;border:1px solid var(--border);border-radius:10px;background:var(--surface);font-size:.9rem}
+.attendance-employee input::placeholder{color:var(--neutral-400)}
+.attendance-employee input:focus-visible,.attendance-employee select:focus-visible{border-color:var(--primary)}
+.attendance-stage{min-height:220px;border-radius:16px}
+.attendance-stage video{min-height:220px;max-height:270px}
+.attendance-stage .oval{inset:12% 25%;border-width:2px}
+.attendance-stage .stage-meta{font-size:.72rem}
+.attendance-actions{gap:9px}
+.attendance-actions .btn{min-height:50px;font-size:.9rem;font-weight:750}
+@media(max-width:380px){.attendance-stage,.attendance-stage video{min-height:190px}.attendance-actions .btn{padding-inline:8px}}
 
 .setup{min-height:100vh;display:grid;place-items:center;padding:max(20px,env(safe-area-inset-top)) 20px max(20px,env(safe-area-inset-bottom));background:
   radial-gradient(1200px 500px at 10% -10%,rgba(15,159,138,.22),transparent 55%),

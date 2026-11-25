@@ -51,7 +51,9 @@ let checkins: Row[] = [];
 let attendanceTargets: Row[] = [];
 let teamCheckins: Row[] = [];
 let attendanceTarget = "";
-let pendingAttendance: { logType: "IN" | "OUT"; challenge: string; latitude: number; longitude: number; accuracy: number; steps: string[]; framesPerStep: number; frames: Array<{ step: string; image: string }> } | null = null;
+let attendanceQuery = "";
+let attendanceBusy = false;
+let cameraAttempted = false;
 let evidenceImage = "";
 let options: Row = {};
 let directory: Row[] = [];
@@ -67,6 +69,8 @@ let enrollStep: EnrollStep = "pick";
 let cameraOpen = false;
 let cameraStarting = false;
 let activeStream: MediaStream | null = null;
+let attendanceCameraPromise: Promise<void> | null = null;
+let cameraGeneration = 0;
 let backListenerReady = false;
 let toastTimer = 0;
 
@@ -90,6 +94,7 @@ async function payload(response: Response): Promise<Row> {
 }
 
 function stopCamera(): void {
+  cameraGeneration += 1;
   activeStream?.getTracks().forEach((track) => track.stop());
   activeStream = null;
   cameraOpen = false;
@@ -200,7 +205,7 @@ async function ensureBackHandler(): Promise<void> {
     await App.addListener("backButton", () => {
       if (cameraOpen || cameraStarting) {
         stopCamera();
-        pendingAttendance = null;
+        cameraAttempted = true;
         setToast("Camera closed", "warn");
         render(screen === "attendance" ? "attendance" : "enroll");
         return;
@@ -297,6 +302,7 @@ function seedPreview(): void {
     { name: "HR-EMP-00063", employee_name: "Ahmed Nabeel", designation: "Systems Lead", department: "Technology" },
     { name: "HR-EMP-00012", employee_name: "Sara Khan", designation: "HR Executive", department: "People" },
   ];
+  attendanceTargets = directory;
   enrollEmployee = "HR-EMP-00063";
   enrollQuery = "Nabeel";
   enrollConsent = previewScreen === "enroll";
@@ -338,7 +344,7 @@ async function refresh() {
       leaveRows = list(leave.applications); balances = (leave.balances && typeof leave.balances === "object" ? leave.balances : {}) as Row;
       payslips = list(pay); requests = requestRows; team = list(teamRows); checkins = list(logs); options = formOptions; index = 6;
     } else { leaveRows = []; balances = {}; payslips = []; requests = {}; team = []; checkins = []; options = {}; }
-    if (canMarkOthers()) { attendanceTargets = list(results[index]); teamCheckins = list(results[index + 1]); if (!attendanceTarget) attendanceTarget = text(attendanceTargets[0], "name"); index += 2; }
+    if (canMarkOthers()) { attendanceTargets = list(results[index]); teamCheckins = list(results[index + 1]); if (!attendanceTargets.some((row) => text(row, "name") === attendanceTarget)) attendanceTarget = ""; index += 2; }
     if (isManager()) {
       directory = list(results[index]);
       facePolicy = (results[index + 1] && typeof results[index + 1] === "object" ? results[index + 1] as Row : facePolicy);
@@ -386,42 +392,23 @@ function attendance() {
   const history = checkins.length
     ? `<div class="list">${checkins.map((row) => `<article class="list-row"><span class="icon-btn" style="width:40px;height:40px;display:grid;place-items:center;background:var(--surface-2);border-radius:12px">${icon(text(row, "log_type") === "OUT" ? "log-out" : "log-in", 18)}</span><div class="grow"><strong>${esc(text(row, "log_type") || "Log")}</strong><span class="t-meta">${esc(text(row, "time"))}</span></div>${statusBadge(text(row, "shift") || "ERP", "info")}</article>`).join("")}</div>`
     : emptyState(icon("clock", 28), "No recent check-ins", "Successful check-ins from ERP will appear here.");
-  const targets = canMarkOthers() ? field("Employee", `<select id="attendance-target">${attendanceTargets.map((row) => `<option value="${esc(text(row, "name"))}" ${text(row, "name") === attendanceTarget ? "selected" : ""}>${esc(text(row, "employee_name") || text(row, "name"))}</option>`).join("")}</select>`) : "";
+  const filteredTargets = attendanceTargets.filter((row) => `${text(row, "employee_name")} ${text(row, "name")} ${text(row, "department")}`.toLowerCase().includes(attendanceQuery.trim().toLowerCase()));
+  const targets = canMarkOthers() ? `<div class="attendance-employee"><label for="attendance-search">Find an employee</label><input id="attendance-search" type="search" autocomplete="off" placeholder="Search by name, ID or department" value="${esc(attendanceQuery)}"><label for="attendance-target">${attendanceTarget ? `Selected: ${esc(text(attendanceTargets.find((row) => text(row, "name") === attendanceTarget), "employee_name") || attendanceTarget)}` : "Choose an employee"}</label><select id="attendance-target" ${filteredTargets.length ? "" : "disabled"}><option value="">${filteredTargets.length ? "Select an employee" : "No matching employees"}</option>${filteredTargets.map((row) => `<option value="${esc(text(row, "name"))}" ${text(row, "name") === attendanceTarget ? "selected" : ""}>${esc(text(row, "employee_name") || text(row, "name"))} · ${esc(text(row, "name"))}</option>`).join("")}</select></div>` : "";
   return `<section class="stack">
-    <article class="card stack">
+    <article class="card stack hr-attendance">
       <p class="t-label">Live attendance</p>
       <h2 class="t-title">Check in or out</h2>
-      <p class="t-meta">The server matches the selected employee’s enrolled face. The signed-in user is recorded as the actor.</p>
+      <p class="t-meta">Look at the live camera, then tap once. The server verifies the face and location.</p>
       ${targets}
-      ${cameraOpen ? `<div class="stage"><video id="attendance-video" playsinline muted autoplay></video><div class="oval" aria-hidden="true"></div></div>` : `<div class="stage"><div class="stage-meta"><span>Live camera is off</span></div></div>`}
-      <p class="banner" id="liveness" ${pendingAttendance ? "" : "hidden"}>${esc(attendancePrompt())}</p>
-      ${pendingAttendance ? btn(attendanceCaptureLabel(), { id: "capture-attendance", kind: "primary", block: true }) : btn(cameraOpen ? "Camera on" : "Open live camera", { id: "open-attendance-camera", kind: "secondary", block: true })}
-      ${cameraOpen ? btn("Close camera", { id: "close-attendance-camera", kind: "text", block: true }) : ""}
-      ${pendingAttendance ? btn("Cancel", { id: "cancel-attendance", kind: "secondary", block: true }) : `<div class="grid-2">
-        ${btn(`${icon("log-in", 16)} Check in`, { kind: "primary", block: true, attrs: 'data-log="IN"' })}
-        ${btn(`${icon("log-out", 16)} Check out`, { kind: "secondary", block: true, attrs: 'data-log="OUT"' })}
-      </div>`}
+      ${cameraOpen ? `<div class="stage attendance-stage"><video id="attendance-video" playsinline muted autoplay></video><div class="oval" aria-hidden="true"></div><div class="stage-meta"><span>Live camera</span><span>Face inside frame</span></div></div>` : `<div class="stage attendance-stage"><div class="stage-meta"><span>${cameraStarting ? "Starting live camera…" : "Camera is off"}</span></div></div>`}
+      ${!cameraOpen ? btn(cameraStarting ? "Starting camera…" : "Start live camera", { id: "open-attendance-camera", kind: "secondary", block: true, disabled: cameraStarting }) : ""}
+      <div class="grid-2 attendance-actions">
+        ${btn(`${icon("log-in", 16)} Check in`, { kind: "primary", block: true, disabled: attendanceBusy, attrs: 'data-log="IN"' })}
+        ${btn(`${icon("log-out", 16)} Check out`, { kind: "secondary", block: true, disabled: attendanceBusy, attrs: 'data-log="OUT"' })}
+      </div>
     </article>
     <div class="stack-sm"><h3 class="t-subtitle">History</h3>${history}</div>
   </section>`;
-}
-
-function attendancePrompt(): string {
-  if (!pendingAttendance) return "";
-  const stepIndex = Math.floor(pendingAttendance.frames.length / pendingAttendance.framesPerStep);
-  const step = pendingAttendance.steps[stepIndex];
-  if (!step) return "Return to the centre and look at the camera for the final match.";
-  return ({ center: "Look straight at the camera", left: "Turn your head slightly to your left", right: "Turn your head slightly to your right", up: "Look slightly up" } as Record<string, string>)[step] || "Follow the on-screen instruction";
-}
-
-function attendanceCaptureLabel(): string {
-  if (!pendingAttendance) return "Capture";
-  if (pendingAttendance.steps.length && pendingAttendance.frames.length < pendingAttendance.steps.length * pendingAttendance.framesPerStep) {
-    const stepIndex = Math.floor(pendingAttendance.frames.length / pendingAttendance.framesPerStep);
-    const frameIndex = pendingAttendance.frames.length % pendingAttendance.framesPerStep;
-    return `Capture ${pendingAttendance.steps[stepIndex]} ${frameIndex + 1}/${pendingAttendance.framesPerStep}`;
-  }
-  return "Capture final frame and record";
 }
 
 function teamAttendance() {
@@ -629,9 +616,13 @@ function render(next: Screen = screen) {
   if (!isManager() && screen === "enroll") screen = "home";
   if (!hasEmployee() && ["leave", "pay", "profile"].includes(screen)) screen = "home";
   const navActive: Screen = screen === "enroll" ? "profile" : screen;
-  root.innerHTML = `${toastHtml()}<section class="shell">${appBar(text(context, "employee_name") || "Employee")}<main class="page">${pages[screen]()}</main>${bottomNavigation("HR", navActive, nav)}</section>`;
+  root.innerHTML = `${toastHtml()}<section class="shell hr-shell">${appBar(text(context, "employee_name") || "Employee")}<main class="page">${pages[screen]()}</main>${bottomNavigation("HR", navActive, nav)}</section>`;
   bind();
   if ((screen === "enroll" || screen === "attendance") && cameraOpen && activeStream) attachPreview(activeStream);
+  if (screen === "attendance" && !cameraOpen && !cameraStarting && !cameraAttempted && !previewMode) {
+    cameraAttempted = true;
+    void openAttendanceCamera().catch(() => undefined);
+  }
   void ensureBackHandler();
   requestAnimationFrame(() => {
     requestAnimationFrame(() => { document.documentElement.dataset.uiReady = "1"; });
@@ -650,7 +641,7 @@ function bind() {
     button.onclick = () => {
       setToast("");
       const target = button.dataset.screen as Screen;
-      if (target !== screen) { stopCamera(); pendingAttendance = null; }
+      if (target !== screen) { stopCamera(); cameraAttempted = false; attendanceBusy = false; }
       if (target === "enroll") enrollStep = "pick";
       render(target);
     };
@@ -660,11 +651,25 @@ function bind() {
   document.querySelectorAll<HTMLButtonElement>("[data-log]").forEach((button) => {
     button.onclick = () => void submitLog(button.dataset.log === "OUT" ? "OUT" : "IN");
   });
-  document.querySelector<HTMLSelectElement>("#attendance-target")?.addEventListener("change", (event) => { attendanceTarget = (event.currentTarget as HTMLSelectElement).value; });
-  document.querySelector<HTMLButtonElement>("#open-attendance-camera")?.addEventListener("click", () => void openAttendanceCamera());
-  document.querySelector<HTMLButtonElement>("#close-attendance-camera")?.addEventListener("click", () => { stopCamera(); pendingAttendance = null; render("attendance"); });
-  document.querySelector<HTMLButtonElement>("#cancel-attendance")?.addEventListener("click", () => { pendingAttendance = null; stopCamera(); setToast("Attendance cancelled", "warn"); render("attendance"); });
-  document.querySelector<HTMLButtonElement>("#capture-attendance")?.addEventListener("click", () => void captureAttendance());
+  document.querySelector<HTMLInputElement>("#attendance-search")?.addEventListener("input", (event) => {
+    attendanceQuery = (event.currentTarget as HTMLInputElement).value;
+    attendanceTarget = "";
+    const select = document.querySelector<HTMLSelectElement>("#attendance-target");
+    if (!select) return;
+    const filtered = attendanceTargets.filter((row) => `${text(row, "employee_name")} ${text(row, "name")} ${text(row, "department")}`.toLowerCase().includes(attendanceQuery.trim().toLowerCase()));
+    select.innerHTML = `<option value="">${filtered.length ? "Select an employee" : "No matching employees"}</option>${filtered.map((row) => `<option value="${esc(text(row, "name"))}">${esc(text(row, "employee_name") || text(row, "name"))} · ${esc(text(row, "name"))}</option>`).join("")}`;
+    select.disabled = !filtered.length;
+    const label = select.previousElementSibling;
+    if (label instanceof HTMLLabelElement) label.textContent = "Choose an employee";
+  });
+  document.querySelector<HTMLSelectElement>("#attendance-target")?.addEventListener("change", (event) => {
+    const select = event.currentTarget as HTMLSelectElement;
+    attendanceTarget = select.value;
+    const label = select.previousElementSibling;
+    const employee = attendanceTargets.find((row) => text(row, "name") === attendanceTarget);
+    if (label instanceof HTMLLabelElement) label.textContent = employee ? `Selected: ${text(employee, "employee_name") || attendanceTarget}` : "Choose an employee";
+  });
+  document.querySelector<HTMLButtonElement>("#open-attendance-camera")?.addEventListener("click", () => void openAttendanceCamera().catch(() => undefined));
   document.querySelectorAll<HTMLButtonElement>("[data-evidence]").forEach((button) => button.onclick = () => void loadEvidence(button.dataset.evidence || ""));
   document.querySelector<HTMLButtonElement>("#close-evidence")?.addEventListener("click", () => { evidenceImage = ""; render("team"); });
   document.querySelector<HTMLFormElement>("#leave")?.addEventListener("submit", (event) => void submitLeave(event));
@@ -725,7 +730,8 @@ function bind() {
     credentials = null;
     api = null;
     context = {};
-    pendingAttendance = null;
+    attendanceBusy = false;
+    cameraAttempted = false;
     evidenceImage = "";
     enrollEmployee = "";
     enrollCaptures = [];
@@ -814,7 +820,8 @@ async function captureStillFromStream(prompt: string, videoId = "enroll-video"):
     await new Promise<void>((resolve, reject) => {
       const onReady = () => { cleanup(); resolve(); };
       const onError = () => { cleanup(); reject(new Error("Live preview failed.")); };
-      const cleanup = () => { video.removeEventListener("loadeddata", onReady); video.removeEventListener("error", onError); };
+      const timeout = window.setTimeout(() => { cleanup(); reject(new Error("Live preview did not start. Restart the camera.")); }, 8000);
+      const cleanup = () => { window.clearTimeout(timeout); video.removeEventListener("loadeddata", onReady); video.removeEventListener("error", onError); };
       video.addEventListener("loadeddata", onReady, { once: true });
       video.addEventListener("error", onError, { once: true });
     });
@@ -830,20 +837,6 @@ async function captureStillFromStream(prompt: string, videoId = "enroll-video"):
   if (quality) throw new Error(quality);
   previewUrl = canvas.toDataURL("image/jpeg", 0.86);
   return previewUrl;
-}
-
-async function captureLivenessFrame(step: string): Promise<string> {
-  const video = document.querySelector<HTMLVideoElement>("#attendance-video");
-  if (!activeStream || !video) throw new Error("Open the live camera first.");
-  if (video.readyState < 2) await new Promise<void>((resolve) => video.addEventListener("loadeddata", () => resolve(), { once: true }));
-  await new Promise((resolve) => window.setTimeout(resolve, 350));
-  const canvas = document.createElement("canvas"); canvas.width = 480; canvas.height = 640;
-  const ctx = canvas.getContext("2d"); if (!ctx) throw new Error("Camera capture failed.");
-  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-  const quality = frameQualityIssue(canvas); if (quality) throw new Error(quality);
-  const frame = canvas.toDataURL("image/jpeg", 0.68);
-  if (frame.length > 270_000) throw new Error("Camera frame is too large. Move closer and try again.");
-  return frame;
 }
 
 async function captureEnrollmentPhoto() {
@@ -893,62 +886,64 @@ async function submitEnrollment() {
 }
 
 async function submitLog(logType: "IN" | "OUT") {
-  if (!api || previewMode) {
+  if (!api || attendanceBusy || previewMode) {
     if (previewMode) setToast(`Preview ${logType}`, "success");
     return;
   }
+  attendanceBusy = true;
+  render("attendance");
   try {
     if (offline()) throw new Error("You appear offline. Attendance was not recorded.");
-    if (!cameraOpen) throw new Error("Open the live camera first.");
     const employee = canMarkOthers() ? attendanceTarget : text(context, "employee");
     if (!employee) throw new Error("Choose an employee.");
-    setToast("Requesting a server challenge", "info");
+    if (!cameraOpen) await openAttendanceCamera();
+    if (!cameraOpen) throw new Error("The camera could not start. Allow camera access and try again.");
+    setToast("Getting your location…", "info");
     const challengeReply = await payload(await api.requestCheckinChallenge(employee));
     const challenge = text(challengeReply, "challenge");
     const location = await captureLocation();
-    const live = challengeReply.liveness && typeof challengeReply.liveness === "object" ? challengeReply.liveness as Row : {};
-    pendingAttendance = { logType, challenge, ...location, steps: Array.isArray(live.steps) ? live.steps.map(String) : [], framesPerStep: Math.max(1, Number(live.frames_per_step) || 1), frames: [] };
-    const note = document.querySelector<HTMLElement>("#liveness");
-    if (note) { note.hidden = false; note.textContent = attendancePrompt(); }
-    setToast("Follow the prompt, then capture the live face.", "info");
-    render("attendance");
-  } catch (error) {
-    setToast(cameraPermissionDeniedMessage(error) || (error instanceof Error ? error.message : "Attendance was not recorded"), "danger");
-    render("attendance");
-  }
-}
-
-async function openAttendanceCamera() {
-  try {
-    stopCamera(); cameraStarting = true; render("attendance");
-    activeStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "user" }, width: { ideal: 720 }, height: { ideal: 960 } }, audio: false });
-    cameraOpen = true; cameraStarting = false; render("attendance");
-  } catch (error) {
-    stopCamera(); setToast(cameraPermissionDeniedMessage(error) || (error instanceof Error ? error.message : "Camera could not start"), "danger"); render("attendance");
-  }
-}
-
-async function captureAttendance() {
-  if (!api || !pendingAttendance || !cameraOpen) return;
-  try {
-    if (offline()) throw new Error("You appear offline. Attendance was not recorded.");
-    if (pendingAttendance.steps.length && pendingAttendance.frames.length < pendingAttendance.steps.length * pendingAttendance.framesPerStep) {
-      const step = pendingAttendance.steps[Math.floor(pendingAttendance.frames.length / pendingAttendance.framesPerStep)];
-      const image = await captureLivenessFrame(step);
-      pendingAttendance.frames.push({ step, image });
-      setToast(attendancePrompt(), "info"); render("attendance"); return;
-    }
-    const image = await captureStillFromStream("Look straight at the camera", "attendance-video");
+    setToast("Capturing face and recording attendance…", "info");
+    const image = await captureStillFromStream("Look at the camera", "attendance-video");
     const body: Record<string, unknown> = {
-      ...attendanceRequest({ logType: pendingAttendance.logType, latitude: pendingAttendance.latitude, longitude: pendingAttendance.longitude, challenge: pendingAttendance.challenge, image }),
-      employee: canMarkOthers() ? attendanceTarget : text(context, "employee"),
-      accuracy: pendingAttendance.accuracy,
-      liveness_frames: pendingAttendance.frames,
+      ...attendanceRequest({ logType, latitude: location.latitude, longitude: location.longitude, challenge, image }),
+      employee,
+      accuracy: location.accuracy,
     };
     const saved = await payload(await api.submitAttendance(body));
-    pendingAttendance = null; stopCamera(); previewUrl = "";
+    stopCamera(); previewUrl = ""; cameraAttempted = true;
     setToast(`Recorded ${text(saved, "name")}`, "success"); await refresh();
-  } catch (error) { setToast(cameraPermissionDeniedMessage(error) || (error instanceof Error ? error.message : "Attendance was not recorded"), "danger"); render("attendance"); }
+  } catch (error) {
+    setToast(cameraPermissionDeniedMessage(error) || (error instanceof Error ? error.message : "Attendance was not recorded"), "danger");
+  } finally {
+    attendanceBusy = false;
+    render("attendance");
+  }
+}
+
+function openAttendanceCamera(): Promise<void> {
+  if (cameraOpen && activeStream) return Promise.resolve();
+  if (attendanceCameraPromise) return attendanceCameraPromise;
+  const generation = cameraGeneration;
+  attendanceCameraPromise = (async () => {
+    try {
+      cameraStarting = true;
+      if (screen === "attendance") render("attendance");
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "user" }, width: { ideal: 720 }, height: { ideal: 960 } }, audio: false });
+      if (screen !== "attendance" || generation !== cameraGeneration) { stream.getTracks().forEach((track) => track.stop()); return; }
+      activeStream = stream;
+      cameraOpen = true; cameraStarting = false;
+      render("attendance");
+    } catch (error) {
+      stopCamera(); cameraAttempted = true;
+      setToast(cameraPermissionDeniedMessage(error) || (error instanceof Error ? error.message : "Camera could not start"), "danger");
+      if (screen === "attendance") render("attendance");
+      throw error;
+    } finally {
+      cameraStarting = false;
+      attendanceCameraPromise = null;
+    }
+  })();
+  return attendanceCameraPromise;
 }
 
 async function loadEvidence(checkin: string) {
