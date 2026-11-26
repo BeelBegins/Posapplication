@@ -121,13 +121,13 @@ export function createCatalogSyncCore(deps: PosCoreDeps, http: ReturnType<typeof
       const mobileNo = !digits ? "" : digits.startsWith("92") ? `+${digits}` : digits.startsWith("0") ? `+92${digits.slice(1)}` : digits.length === 10 && digits.startsWith("3") ? `+92${digits}` : rawMobile;
       const existing = mobileNo ? deps.db.findCustomerByNormalizedMobile(mobileNo) : null;
       if (existing) return { customer: null, error: `Mobile number already exists for Customer: ${textValue(existing, "name")}` };
-      const profile = asRecord(deps.db.getPosBootstrap(settings.posProfile)?.pos_profile);
-      const priceList = textValue(profile, "selling_price_list");
+      // No default_price_list: a Customer must not own a branch price list - the
+      // server prices every sale from the selling counter's POS Profile list
+      // (aimatic offline_pos.customer_validation.validate_no_branch_price_list).
       const payload: Record<string, string> = {
         customer_name: String(input.customer_name ?? ""), customer_group: String(input.customer_group ?? ""),
         territory: String(input.territory ?? ""), mobile_no: mobileNo, email_id: String(input.email_id ?? ""), tax_id: String(input.tax_id ?? "")
       };
-      if (priceList) payload.default_price_list = priceList;
       if (!payload.customer_name) return { customer: null, error: "Customer Name is required." };
       // Routed through aimatic.offline_pos.api.create_walkin_customer rather
       // than raw POST /api/resource/Customer - core DocPerm grants POS
