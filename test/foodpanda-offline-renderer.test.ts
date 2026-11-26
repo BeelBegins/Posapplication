@@ -26,6 +26,8 @@ function harness() {
     paymentMethods: [] as string[], selectedPaymentMethodIndex: 0,
     paymentMethodTypes: {} as Record<string, string>, paymentEditIndex: null,
     paymentPreparedVersion: 1, currentCartVersion: 1, paymentsOutdated: false,
+    previewStatus: "offline", previewError: "", validatedCartVersion: 1,
+    localFbrTotals: {} as object | null, activePreviewPromise: null, scheduleCartPreview() {},
     changeDue: 0, persisted: 0, finalized: 0, retrieved: [] as string[],
     setCartText() {}, pickString: () => "", previewNumber: () => 0,
     interpretFbr: () => ({ applicable: false, accepted: false, statusText: "Pending", invoiceNumber: "" }),
@@ -77,6 +79,14 @@ test("offline credit still requires prepared current cart, current payment draft
   h.state.paymentsOutdated = false;
   h.state.window.posAPI.getCatalogTotals = async () => ({ items: 0, prices: 0 });
   assert.equal(await h.run("offlineLocalBlocker(true)"), "No local item/price data.");
+});
+
+test("Foodpanda credit never bypasses the offline local tax check", async () => {
+  const h = harness();
+  h.state.previewStatus = "error"; h.state.validatedCartVersion = -1; h.state.localFbrTotals = null;
+  h.state.previewError = "Item tax configuration missing.";
+  assert.equal(await h.run("offlineLocalBlocker(true)"), "Item tax configuration missing.");
+  assert.match(String(h.run("blockedSaleReason()")), /Cart not validated/);
 });
 
 test("adding amount with empty ordinary payment list cannot recreate the extra 1031 row", async () => {

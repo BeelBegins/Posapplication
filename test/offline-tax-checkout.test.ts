@@ -36,7 +36,7 @@ function harness(preview: () => Promise<unknown>) {
     document: { querySelector: () => ({ textContent: "SHIFT", value: "S2 Counter 2" }) },
     isOnline: () => false,
     setCartText: () => {}, showPreviewStatus: () => {}, renderServerTaxRows: () => {}, renderCart: () => {},
-    fbrTotalsView: () => ({}), isFoodPandaCreditPrepared: () => false,
+    fbrTotalsView: () => ({}), isFoodPandaCreditPrepared: () => false, isFoodPandaCreditProfile: () => false,
     remainingAmount: () => 0, nonCashOverpayMessage: () => null,
     cartLines: [{ itemCode: "EYELINER", quantity: 1, sellingPrice: 165, uom: "Pcs" }],
     currentCartVersion: 1, validatedCartVersion: -1, paymentPreparedVersion: 1,
