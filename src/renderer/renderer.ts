@@ -837,6 +837,15 @@ async function offlineLocalBlocker(requirePayment = false): Promise<string | nul
   if (!selectedCustomer) return "Missing Customer.";
   if (!cartLines.length) return "Cart is empty.";
   if (cartLines.some((line) => line.sellingPrice === null || line.sellingPrice === undefined)) return "Missing local item price.";
+  // Recalculate when ERP drops after online validation; offline checkout needs
+  // a complete local estimate for this exact cart, including every item's tax.
+  if (previewStatus !== "offline" || validatedCartVersion !== currentCartVersion) {
+    if (previewStatus !== "local" || !activePreviewPromise) scheduleCartPreview();
+    if (activePreviewPromise) await activePreviewPromise;
+  }
+  if (previewStatus !== "offline" || validatedCartVersion !== currentCartVersion || !localFbrTotals) {
+    return previewError || "Local tax calculation is not ready. Sync item tax configuration and try again.";
+  }
   if (appliedBenefits.giftVoucherCode) return "Gift voucher redemption requires ERP online validation. Remove voucher to sell offline.";
   if (requirePayment && remainingAmount() > 0.0001) return "Payment is incomplete.";
   if (requirePayment && paymentPreparedVersion !== currentCartVersion) return "Payment not prepared for current cart.";
@@ -1338,6 +1347,7 @@ function normalizePreviewResponse(response: Record<string, unknown> | null): Rec
 
 // Map the local FBR engine result (camelCase totals) onto the snake_case keys used for display + comparison.
 function normalizeLocalFbrTotals(local: Record<string, unknown> | null): Record<string, unknown> | null {
+  if (local?.success === false || (Array.isArray(local?.errors) && local.errors.length)) return null;
   const totals = asTotalsRecord(local?.totals);
   if (!totals) return null;
   const merchandise = previewNumber(totals, "merchandiseTotal") ?? 0;
@@ -1419,6 +1429,9 @@ async function runCartPreview(version: number): Promise<void> {
   // 1) Local FBR totals — computed via secure IPC and shown immediately, before any debounce.
   setCartText("#cart-calculating", "");
   previewStatus = "local"; previewError = "";
+  validatedCartVersion = -1;
+  localFbrTotals = null; serverTotals = null; serverTaxRows = null;
+  let localError = "Local tax calculation is unavailable. Sync item tax configuration and try again.";
   try {
     const local = await window.posAPI.previewFbr({
       items: cartLines.map((line) => ({ item_code: line.itemCode, uom: line.uom, qty: line.quantity, rate: line.sellingPrice ?? 0, conversion_factor: line.conversionFactor ?? 1 }))
@@ -1426,9 +1439,19 @@ async function runCartPreview(version: number): Promise<void> {
     if (version !== currentCartVersion) return; // a newer change superseded us
     const normalized = normalizeLocalFbrTotals(local);
     if (normalized) { localFbrTotals = normalized; serverTotals = { ...normalized }; }
-  } catch { /* local FBR unavailable — fall through to server validation, keeping prior totals */ }
+    else if (Array.isArray(local.errors) && local.errors.length) localError = local.errors.map(String).join("; ");
+  } catch (error) {
+    localError = error instanceof Error ? error.message : localError;
+  }
+  if (version !== currentCartVersion) return;
   // Offline: the local FBR engine is authoritative for checkout. Accept the cart as validated and skip the server round-trip.
   if (!isOnline()) {
+    if (!localFbrTotals) {
+      previewStatus = "error"; previewError = localError;
+      showPreviewStatus(previewError);
+      renderServerTaxRows(); renderCart();
+      return;
+    }
     validatedCartVersion = version;
     previewStatus = "offline"; previewError = "";
     showPreviewStatus("Offline — Local FBR Estimate");
@@ -1731,7 +1754,7 @@ function blockedSaleReason():string|null{
     :(online&&(!opening||opening==="No active POS Opening Entry"))?"No active POS Opening Entry"
     :(online&&isPreviousDateSession())?"Shift was opened on a previous date. Close shift before new sales"
     :!cartLines.length?"Cart is empty"
-    :(online&&validatedCartVersion!==currentCartVersion)?(previewError?`Cart not validated — ${previewError}`:"Validating cart…")
+    :(validatedCartVersion!==currentCartVersion)?(previewError?`Cart not validated — ${previewError}`:"Validating cart…")
     :(online&&appliedBenefits.giftVoucherCode&&giftVoucherError)?giftVoucherError
     :(!creditReady&&remainingAmount()>0.0001)?"Payment is incomplete"
     :paymentPreparedVersion!==currentCartVersion?"Payment not prepared for current cart"

@@ -39,6 +39,10 @@ ERPNext/server is offline or unreachable, and all local essentials exist:
   Customer selection is committed immediately; the ERP detail fetch runs afterwards and falls back to the detail cache, then the synced customer list, so an offline pick never waits on the network timeout.
 - Cart is not empty.
 - Item prices are available locally.
+- The current cart has a complete local tax calculation. Missing/disabled tax
+  categories, missing Third Schedule MRP, and calculation failures block payment
+  and submission with the item error. Partial totals must never be used to charge
+  or print a sale; online checkout can still use ERP-validated calculations.
 - Payment is complete and prepared.
 
 Offline F9 / Complete Sale must not call `validateSession()`.

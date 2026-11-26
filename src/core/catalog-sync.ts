@@ -361,7 +361,7 @@ export function createCatalogSyncCore(deps: PosCoreDeps, http: ReturnType<typeof
     const rows: FbrCalculatedRow[] = items.map((item) => {
       const code = String(item.item_code ?? "");
       const c = configs[code];
-      if (!c) return { success: false, item_code: code, error: `FBR Tax Category is missing for ${code}` };
+      if (!c || c.enabled === null || c.tax_rate === null) return { success: false, item_code: code, error: `FBR Tax Category is missing for ${code}` };
       if (c.enabled === 0) return { success: false, item_code: code, error: `FBR Tax Category is disabled for ${code}` };
       try {
         const result = calculateFbrItem({
@@ -374,14 +374,17 @@ export function createCatalogSyncCore(deps: PosCoreDeps, http: ReturnType<typeof
         return { success: true, item_code: code, quantity: result.quantity, inclusiveAmount: result.inclusiveAmount, taxRate: result.taxRate, salesTax: result.salesTax, valueExcludingTax: result.valueExcludingTax, retailPrice: result.retailPrice, isThirdSchedule: result.isThirdSchedule };
       } catch (e) { return { success: false, item_code: code, error: e instanceof Error ? e.message : "FBR calculation failed" }; }
     });
+    // A partial cart is never a payable estimate: one invalid item used to
+    // disappear from totals while the service fee still made checkout payable.
+    const errorRows = rows.filter((row): row is Extract<FbrCalculatedRow, { success: false }> => row.success === false);
+    if (errorRows.length) return { success: false, rows, totals: null, errors: errorRows.map((row) => row.error) };
     const validRows = rows.filter(isSuccessfulFbrRow);
     const valid = validRows.map((r) => ({
       itemCode: r.item_code, qty: r.quantity, rate: Number((items.find((i) => String(i.item_code) === r.item_code)?.rate) || 0),
       amount: r.inclusiveAmount, taxRate: r.taxRate, isThirdSchedule: r.isThirdSchedule, mrp: r.retailPrice / (r.quantity || 1)
     }));
     const totals = calculateFbrInvoice(valid, state.serviceFee);
-    const errorRows = rows.filter((row): row is Extract<FbrCalculatedRow, { success: false }> => row.success === false);
-    return { success: true, rows, totals, errors: errorRows.map((row) => row.error) };
+    return { success: true, rows, totals, errors: [] };
   }
 
   return { syncCustomers, loadCustomer, getCustomerCreationOptions, createCustomer, syncItemCatalog, syncBarcodesOnly, resolveCatalogItem, syncFbrConfig, calculateFbrCart };
