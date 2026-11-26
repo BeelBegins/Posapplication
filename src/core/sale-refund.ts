@@ -212,7 +212,7 @@ export function createSaleRefundCore(
     const counts0 = deps.db.getQueueCounts();
     if (!hasUsableCredentials(deps, settings) || !settings.erpnextUrl) return { synced: 0, failed: 0, remaining: counts0.queued, error: "ERP URL and API credentials are required." };
     const auth = await http.testApiAuthentication();
-    if (!auth.success) return { synced: 0, failed: 0, remaining: counts0.queued, error: "Terminal API credentials could not be revalidated." };
+    if (!auth.success) return { synced: 0, failed: 0, remaining: counts0.queued, error: auth.rejected ? "Terminal API credentials were rejected by ERP." : "ERP is not available right now. Queued sales will be retried." };
     let base: string;
     try { base = new URL(settings.erpnextUrl).toString().replace(/\/+$/, ""); } catch { return { synced: 0, failed: 0, remaining: counts0.queued, error: "Invalid ERP URL." }; }
     let synced = 0; let failed = 0; let error: string | null = null;

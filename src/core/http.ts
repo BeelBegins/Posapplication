@@ -116,7 +116,9 @@ export function createHttpCore(deps: PosCoreDeps, onVoucherRevision?: (profile: 
             typeof message.realtime_namespace === "string" ? message.realtime_namespace : undefined)).catch(() => { /* A voucher refresh failure does not change reachability. */ });
         }
       }
-      return { connected: true };
+      // A proxy reply that means the ERP itself is down (restart, update) is not
+      // "online": the till must use its offline path.
+      return { connected: !(response.status >= 502 && response.status <= 504) };
     } catch {
       return { connected: false };
     } finally {
@@ -124,16 +126,18 @@ export function createHttpCore(deps: PosCoreDeps, onVoucherRevision?: (profile: 
     }
   }
 
-  async function testApiAuthentication(): Promise<{ success: boolean; loggedUser: string | null }> {
+  // `rejected` is true only when the key itself needs attention (missing settings
+  // or HTTP 401). A timeout or server error says nothing about the key.
+  async function testApiAuthentication(): Promise<{ success: boolean; loggedUser: string | null; rejected: boolean }> {
     const settings = deps.db.loadSettings();
     if (!hasUsableCredentials(deps, settings) || !settings.erpnextUrl.trim()) {
-      return { success: false, loggedUser: null };
+      return { success: false, loggedUser: null, rejected: true };
     }
 
     try {
       new URL(settings.erpnextUrl.trim());
     } catch {
-      return { success: false, loggedUser: null };
+      return { success: false, loggedUser: null, rejected: true };
     }
 
     const controller = new AbortController();
@@ -146,17 +150,17 @@ export function createHttpCore(deps: PosCoreDeps, onVoucherRevision?: (profile: 
       });
 
       if (!response.ok) {
-        return { success: false, loggedUser: null };
+        return { success: false, loggedUser: null, rejected: response.status === 401 };
       }
 
       const body = await response.json() as { message?: unknown };
       if (typeof body.message !== "string" || !body.message) {
-        return { success: false, loggedUser: null };
+        return { success: false, loggedUser: null, rejected: false };
       }
 
-      return { success: true, loggedUser: body.message };
+      return { success: true, loggedUser: body.message, rejected: false };
     } catch {
-      return { success: false, loggedUser: null };
+      return { success: false, loggedUser: null, rejected: false };
     } finally {
       clearTimeout(timeout);
     }

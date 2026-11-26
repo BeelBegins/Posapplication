@@ -23,7 +23,7 @@ interface PosAPI {
   provisionCredentials: (input: { erpnextUrl: string; username: string; password: string }) => Promise<{ success: boolean; apiKey: string; apiSecret: string; error: string | null }>;
   listPrinters: () => Promise<{ name: string; displayName: string }[]>;
   testServer: () => Promise<{ connected: boolean }>;
-  testLogin: () => Promise<{ success: boolean; loggedUser: string | null }>;
+  testLogin: () => Promise<{ success: boolean; loggedUser: string | null; rejected: boolean }>;
   cashierLogin: (input: Record<string, unknown>) => Promise<CashierLoginResult>;
   cashierOfflineLogin: (input: Record<string, unknown>) => Promise<CashierLoginResult>;
   getRememberedCashiers: () => Promise<string[]>;
@@ -3655,6 +3655,24 @@ function runPosBootstrap(reason: string): Promise<void> {
   return bootstrapPromise;
 }
 
+// Startup when ERP cannot be used right now: cached data if a cashier is already
+// signed in, otherwise offline cashier login. Saved credentials stay untouched.
+async function startWithoutServer(progress: HTMLElement | null, serverStatus: HTMLElement | null): Promise<void> {
+    setStep("server", "warning"); if (serverStatus) serverStatus.textContent = "Offline"; prevServerConnected = false; showServerStatus(false);
+    const cachedCfg = await window.posAPI.getCachedPosConfiguration();
+    if (cachedCfg) {
+      showPosConfigurationSummary(cachedCfg); await loadCachedPosSession(); updatePosHeader();
+      ["config", "catalogue", "customers", "fbr", "session"].forEach((s) => setStep(s as SetupStep, "warning"));
+      if (cashierSession) {
+        await seedSessionFromCache();
+        await seedDefaultCustomerFromConfig(cachedCfg, true);
+        setOverallBadge("Ready Using Cached Data", "warn"); if (progress) progress.textContent = "Offline — using cached data";
+        setupCompleted = true; void renderSyncStatus(); void updateOfflineUi(); showScreen("pos"); return;
+      }
+    }
+    setOverallBadge("Cashier Login Required", "warn"); if (progress) progress.textContent = "Offline cashier login required"; await showCashierLogin(cachedCfg ? "Enter cashier username and offline PIN." : await offlineCacheMissingMessage()); return;
+}
+
 async function runStartup(reason: string = "startup"): Promise<void> {
   void reason;
   const progress = document.querySelector<HTMLElement>("#startup-progress"); const retry = document.querySelector<HTMLButtonElement>("#retry-startup");
@@ -3676,27 +3694,16 @@ async function runStartup(reason: string = "startup"): Promise<void> {
     setStep("server", "running"); if (progress) progress.textContent = "Testing server…";
     const server = await window.posAPI.testServer(); setOnlineIndicator(server.connected);
     if (server.connected) void syncVoucherRules();
-    if (!server.connected) {
-      setStep("server", "warning"); if (serverStatus) serverStatus.textContent = "Offline"; prevServerConnected = false; showServerStatus(false);
-      const cachedCfg = await window.posAPI.getCachedPosConfiguration();
-      if (cachedCfg) {
-        showPosConfigurationSummary(cachedCfg); await loadCachedPosSession(); updatePosHeader();
-        ["config", "catalogue", "customers", "fbr", "session"].forEach((s) => setStep(s as SetupStep, "warning"));
-        if (cashierSession) {
-          await seedSessionFromCache();
-          await seedDefaultCustomerFromConfig(cachedCfg, true);
-          setOverallBadge("Ready Using Cached Data", "warn"); if (progress) progress.textContent = "Offline — using cached data";
-          setupCompleted = true; void renderSyncStatus(); void updateOfflineUi(); showScreen("pos"); return;
-        }
-      }
-      setOverallBadge("Cashier Login Required", "warn"); if (progress) progress.textContent = "Offline cashier login required"; await showCashierLogin(cachedCfg ? "Enter cashier username and offline PIN." : await offlineCacheMissingMessage()); return;
-    }
+    if (!server.connected) { await startWithoutServer(progress, serverStatus); return; }
     setStep("server", "complete"); if (serverStatus) serverStatus.textContent = "Online"; prevServerConnected = true; showServerStatus(true);
     // 3) Authenticate
     setStep("auth", "running"); if (progress) progress.textContent = "Authenticating…";
     const login = await window.posAPI.testLogin();
     if (!login.success) {
       if (isCapacitorRuntime()) { setStep("auth", "pending"); setOverallBadge("Cashier Login Required", "info"); if (progress) progress.textContent = "Cashier login required"; await showCashierLogin("Sign in securely with ERP."); return; }
+      // Only a refused key may send the terminal to settings. A restart, update or
+      // timeout must not make a cashier re-enter a working key.
+      if (!login.rejected) { setStep("auth", "warning"); await startWithoutServer(progress, serverStatus); return; }
       setStep("auth", "failed"); setOverallBadge("Action Required", "err"); if (progress) progress.textContent = "Authentication failed"; showSettingsMessage("Authentication failed. The API key or secret is invalid."); showLoginResult("Authentication failed — check API Key/Secret."); showSettingsStep("connection"); showScreen("settings"); return;
     }
     authenticatedUser = login.loggedUser ?? ""; setStep("auth", "complete"); setLoggedUser(authenticatedUser); showLoginResult(`Logged in as ${authenticatedUser}`);
@@ -3784,7 +3791,7 @@ async function continueFromConnectionStep(button: HTMLButtonElement): Promise<vo
       updatePosHeader();
     }
     const login = await window.posAPI.testLogin();
-    if (!login.success) { showSettingsMessage("Could not sign in to ERP with this URL and API Key/Secret. Check them and try again."); return; }
+    if (!login.success) { showSettingsMessage(login.rejected ? "Could not sign in to ERP with this URL and API Key/Secret. Check them and try again." : "ERP is not available right now, so the key was not checked. Try again shortly."); return; }
     showLoginResult(`Connected as ${login.loggedUser ?? ""}`);
     await populatePosProfileDropdown();
     showSettingsStep("terminal");
@@ -4769,7 +4776,7 @@ function initializeRenderer(): void {
 
     try {
       const result = await window.posAPI.testLogin();
-      showLoginResult(result.success && result.loggedUser ? `Logged User: ${result.loggedUser}` : "Login Failed");
+      showLoginResult(result.success && result.loggedUser ? `Logged User: ${result.loggedUser}` : result.rejected ? "Login Failed" : "ERP is not available right now. Try again shortly.");
       if (result.success) {
         await populatePosProfileDropdown();
       }
