@@ -30,6 +30,8 @@ type Tone = "" | "success" | "warn" | "danger" | "info";
 const root = document.querySelector<HTMLElement>("#app")!;
 const fetcher = globalThis.fetch.bind(globalThis);
 const configKey = "aimatic-hr-config-v1";
+/** Production ERP for Aimatic HR; first launch connects here without asking for a URL. */
+const DEFAULT_ERP_URL = "https://szl.aimatic.tech";
 const previewMode = new URLSearchParams(location.search).get("uiPreview") === "1";
 const previewScreen = (new URLSearchParams(location.search).get("screen") || "home") as PreviewScreen;
 const previewTheme = new URLSearchParams(location.search).get("theme") || "";
@@ -239,7 +241,7 @@ function setup(error = "", address = "") {
     <div class="stack-sm"><p class="t-label">Employee & manager workspace</p><h1 class="t-display">Aimatic HR</h1><p class="t-meta">Connect to your ERP, then sign in with your own account. Attendance, leave and pay stay on the server.</p></div>
     ${error ? `<div class="banner danger">${esc(error)}</div>` : ""}
     <form id="setup" class="stack">
-      ${field("ERP URL", `<input id="url" type="url" required placeholder="https://erp.example.com" autocomplete="url" value="${esc(address || "https://test.aurah.dev")}">`)}
+      ${field("ERP URL", `<input id="url" type="url" required placeholder="${esc(DEFAULT_ERP_URL)}" autocomplete="url" value="${esc(address || DEFAULT_ERP_URL)}">`)}
       ${btn("Continue", { kind: "primary", block: true, attrs: 'type="submit"' })}
     </form>
     <p class="t-meta">v${esc(__APP_VERSION__)} · Public OAuth · No API secret</p>
@@ -1031,13 +1033,22 @@ async function start() {
     return;
   }
   const raw = localStorage.getItem(configKey);
-  if (!raw) return setup();
+  if (!raw) {
+    try {
+      loading = "Connecting to ERP…";
+      root.innerHTML = `${toastHtml()}<section class="setup"><div class="setup-card"><p class="t-label">Aimatic HR</p><h1 class="t-display">Connecting…</h1><p class="t-meta">${esc(DEFAULT_ERP_URL)}</p></div></section>`;
+      await configure(DEFAULT_ERP_URL);
+      return signIn();
+    } catch (error) {
+      return setup(error instanceof Error ? error.message : "Unable to connect to ERP", DEFAULT_ERP_URL);
+    }
+  }
   try {
     await configure((JSON.parse(raw) as OAuthPublicClientConfig).baseUrl);
     if (!await credentials!.getAccessToken()) return signIn();
     await loadContext();
   } catch (error) {
-    setup(error instanceof Error ? error.message : "Unable to start");
+    setup(error instanceof Error ? error.message : "Unable to start", DEFAULT_ERP_URL);
   }
 }
 
