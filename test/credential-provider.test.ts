@@ -22,3 +22,18 @@ test("rejected refresh clears credentials and never falls back",async()=>{
   assert.equal(await provider.refreshAccessToken(),null);
   assert.equal(await storage.get("pos.oauth.tokens.v1"),null);
 });
+
+test("loginWithPassword stores Frappe-wrapped OAuth tokens", async () => {
+  const storage = new MemorySecureStorage();
+  const provider = new OAuthPkceCredentialProvider(config, storage, { authorize: async () => "" }, async (url, init) => {
+    assert.match(String(url), /aimatichr\.hr_mobile\.api\.login_with_password$/);
+    assert.match(String(init?.body), /username=emp%40example.com/);
+    return new Response(JSON.stringify({
+      message: { access_token: "hr-access", refresh_token: "hr-refresh", expires_in: 3600, token_type: "Bearer", scope: "hr-mobile" }
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+  }, () => 1000);
+  assert.equal(await provider.loginWithPassword("emp@example.com", "secret"), "hr-access");
+  const stored = JSON.parse((await storage.get("pos.oauth.tokens.v1"))!);
+  assert.equal(stored.accessToken, "hr-access");
+  assert.equal(stored.refreshToken, "hr-refresh");
+});

@@ -81,6 +81,31 @@ export class OAuthPkceCredentialProvider implements CredentialProvider {
     }
   }
 
+  /** HR in-app sign-in: username/password → owned guest API → same stored OAuth tokens. */
+  async loginWithPassword(username: string, password: string): Promise<string> {
+    const config = await this.config();
+    if (!config.baseUrl) throw new Error("Connect to your ERP server before signing in.");
+    const user = username.trim();
+    if (!user || !password) throw new Error("Enter your ERP email and password.");
+    const response = await this.fetchImpl(new URL("/api/method/aimatichr.hr_mobile.api.login_with_password", config.baseUrl), {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", ...await this.getRequestHeaders() },
+      body: new URLSearchParams({ username: user, password })
+    });
+    const raw = await response.json().catch(() => ({})) as Record<string, unknown>;
+    const body = (raw.message && typeof raw.message === "object" ? raw.message : raw) as Record<string, unknown>;
+    if (!response.ok) {
+      const detail = typeof body.message === "string" ? body.message
+        : typeof body.error_description === "string" ? body.error_description
+        : typeof raw.message === "string" ? raw.message
+        : "Sign in failed.";
+      throw new Error(normalizeErpDisplayText(detail));
+    }
+    const tokens = tokenSetFromResponse(body, this.now());
+    await this.save(tokens);
+    return tokens.accessToken;
+  }
+
   async refreshAccessToken(): Promise<string | null> {
     if (this.refreshPromise) return this.refreshPromise;
     this.refreshPromise = this.refresh().finally(() => { this.refreshPromise = null; });

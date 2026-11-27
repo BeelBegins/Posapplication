@@ -264,13 +264,23 @@ function signIn() {
   stopCamera();
   root.innerHTML = `${toastHtml()}<section class="setup"><div class="setup-card">
     <div class="mark">${brandMark()}</div>
-    <div class="stack-sm"><p class="t-label">Aimatic HR</p><h1 class="t-display">Sign in</h1><p class="t-meta">Use your ERP account. Authorized managers can select employees for attendance.</p></div>
+    <div class="stack-sm"><p class="t-label">Aimatic HR</p><h1 class="t-display">Sign in</h1><p class="t-meta">Enter your own ERP email and password. Authorized managers can still select employees for attendance.</p></div>
     ${message ? `<div class="banner danger">${esc(message)}</div>` : ""}
-    ${btn(`${icon("log-in", 18)} Sign in with ERP`, { id: "login", kind: "primary", block: true })}
+    <form id="login-form" class="stack">
+      ${field("Email", `<input id="username" type="email" required autocomplete="username" placeholder="you@example.com">`)}
+      ${field("Password", `<input id="password" type="password" required autocomplete="current-password" placeholder="ERP password">`)}
+      ${btn("Sign in", { kind: "primary", block: true, attrs: 'type="submit"' })}
+    </form>
     ${btn("Change ERP server", { id: "change-server", kind: "secondary", block: true })}
   </div></section>`;
-  document.querySelector<HTMLButtonElement>("#login")!.onclick = async () => {
-    try { await credentials!.login(); await loadContext(); }
+  document.querySelector<HTMLFormElement>("#login-form")!.onsubmit = async (event) => {
+    event.preventDefault();
+    const username = document.querySelector<HTMLInputElement>("#username")!.value;
+    const password = document.querySelector<HTMLInputElement>("#password")!.value;
+    const button = document.querySelector<HTMLButtonElement>('#login-form button[type="submit"]')!;
+    button.disabled = true;
+    button.textContent = "Signing in…";
+    try { await credentials!.loginWithPassword(username, password); await loadContext(); }
     catch (error) { message = error instanceof Error ? error.message : "Sign in failed"; signIn(); }
   };
   document.querySelector<HTMLButtonElement>("#change-server")!.onclick = () => { localStorage.removeItem(configKey); config = null; setup(); };
