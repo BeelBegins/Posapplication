@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { asRecord, textValue, sameIdentity, unwrapFrappePayload, formatResponseError } from "../../src/core/http";
+import { asRecord, textValue, sameIdentity, unwrapFrappePayload, formatResponseError, frappeMessageFromBody } from "../../src/core/http";
 
 test("asRecord accepts plain objects and rejects arrays/primitives/null", () => {
   assert.deepEqual(asRecord({ a: 1 }), { a: 1 });
@@ -34,4 +34,15 @@ test("formatResponseError prefers a server-supplied message over the raw body", 
 test("formatResponseError falls back to raw body text for a non-JSON response", () => {
   const message = formatResponseError(500, "Internal Server Error", "upstream timeout");
   assert.equal(message, "HTTP 500: upstream timeout");
+});
+
+test("frappeMessageFromBody reads Frappe _server_messages used by login failures", () => {
+  const body = {
+    exc_type: "AuthenticationError",
+    _server_messages: JSON.stringify([
+      JSON.stringify({ message: "Invalid credentials", raise_exception: 1 }),
+    ]),
+  };
+  assert.equal(frappeMessageFromBody(body, "Sign in failed."), "Invalid credentials");
+  assert.equal(frappeMessageFromBody({}, "Sign in failed."), "Sign in failed.");
 });

@@ -26,44 +26,38 @@ export function unwrapFrappePayload(value: unknown): Record<string, unknown> {
   return asRecord(first.message) ?? first;
 }
 
+/** Prefer Frappe `_server_messages` / `message` over raw exception text. */
+export function frappeMessageFromBody(body: Record<string, unknown>, fallback = "Request failed."): string {
+  const messages: string[] = [];
+  if (typeof body.message === "string") messages.push(body.message);
+  if (typeof body._server_messages === "string") {
+    try {
+      const entries = JSON.parse(body._server_messages) as unknown[];
+      for (const entry of entries) {
+        const value = typeof entry === "string" ? JSON.parse(entry) as Record<string, unknown> : entry as Record<string, unknown>;
+        if (typeof value?.message === "string") messages.push(value.message);
+      }
+    } catch {
+      messages.push(body._server_messages);
+    }
+  }
+  for (const key of ["exception", "exc_type", "exc"] as const) {
+    if (typeof body[key] === "string") messages.push(body[key] as string);
+  }
+  return normalizeErpDisplayText(messages.find(Boolean) || fallback);
+}
+
 // Builds an error message from an already-read body — use when the response body has been consumed elsewhere.
 export function formatResponseError(status: number, statusText: string, rawBody: string): string {
   let body: Record<string, unknown> = {};
   try { body = JSON.parse(rawBody) as Record<string, unknown>; } catch { /* non-JSON response */ }
-  const messages: string[] = [];
-  if (typeof body.message === "string") messages.push(body.message);
-  if (typeof body._server_messages === "string") {
-    try {
-      const entries = JSON.parse(body._server_messages) as unknown[];
-      for (const entry of entries) {
-        const value = typeof entry === "string" ? JSON.parse(entry) as Record<string, unknown> : entry as Record<string, unknown>;
-        if (typeof value?.message === "string") messages.push(value.message);
-      }
-    } catch { messages.push(body._server_messages); }
-  }
-  for (const key of ["exception", "exc_type", "exc"] as const) if (typeof body[key] === "string") messages.push(body[key] as string);
-  const message = messages.find(Boolean) || rawBody || `HTTP ${status}: ${statusText}`;
-  return normalizeErpDisplayText(`HTTP ${status}: ${message}`);
+  const detail = frappeMessageFromBody(body, rawBody || `HTTP ${status}: ${statusText}`);
+  return detail.startsWith("HTTP ") ? detail : normalizeErpDisplayText(`HTTP ${status}: ${detail}`);
 }
 
 export async function getResponseError(response: Response): Promise<string> {
   const rawBody = await response.text();
-  let body: Record<string, unknown> = {};
-  try { body = JSON.parse(rawBody) as Record<string, unknown>; } catch { /* non-JSON response */ }
-  const messages: string[] = [];
-  if (typeof body.message === "string") messages.push(body.message);
-  if (typeof body._server_messages === "string") {
-    try {
-      const entries = JSON.parse(body._server_messages) as unknown[];
-      for (const entry of entries) {
-        const value = typeof entry === "string" ? JSON.parse(entry) as Record<string, unknown> : entry as Record<string, unknown>;
-        if (typeof value?.message === "string") messages.push(value.message);
-      }
-    } catch { messages.push(body._server_messages); }
-  }
-  for (const key of ["exception", "exc_type", "exc"] as const) if (typeof body[key] === "string") messages.push(body[key] as string);
-  const message = messages.find(Boolean) || rawBody || `HTTP ${response.status}: ${response.statusText}`;
-  return normalizeErpDisplayText(`HTTP ${response.status}: ${message}`);
+  return formatResponseError(response.status, response.statusText, rawBody);
 }
 
 // ----- Functions bound to PosCoreDeps (need deps.fetch and/or deps.db) -----

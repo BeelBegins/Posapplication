@@ -68,6 +68,18 @@ export function livenessPrompt(challenge: string): string {
 
 export const FACE_CONSENT_VERSION = "aimatichr-face-consent-v2";
 
+/** True when `current` is strictly older than a non-empty `minimum` semver (optional leading v). */
+export function isAppBelowMinimum(current: string, minimum: string): boolean {
+  const parse = (value: string) => (/^v?\d+(?:\.\d+)*$/i.test(value.trim()) ? value.trim().replace(/^v/i, "").split(".").map((part) => Number.parseInt(part, 10) || 0) : null);
+  const a = parse(current);
+  const b = parse(minimum);
+  if (!a || !b || !minimum.trim()) return false;
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    if ((a[i] || 0) !== (b[i] || 0)) return (a[i] || 0) < (b[i] || 0);
+  }
+  return false;
+}
+
 export const ENROLL_CAPTURE_PROMPTS = [
   "Look straight at the camera — center your face in the oval",
   "Turn slightly left, then return to centre",

@@ -1,7 +1,10 @@
 import type { CredentialProvider } from "../api/client";
 import { normalizeErpDisplayText } from "../core/display-branding";
+import { asRecord, frappeMessageFromBody } from "../core/http";
 import type { SecureStorage } from "./secure-storage";
 import { buildAuthorizationUrl, createPkceRequest, parseAuthorizationCallback, tokenSetFromResponse, type OAuthTokenSet } from "./oauth-pkce";
+
+declare const __APP_VERSION__: string | undefined;
 
 export interface OAuthPublicClientConfig {
   baseUrl: string;
@@ -43,11 +46,15 @@ export class OAuthPkceCredentialProvider implements CredentialProvider {
 
   async getRequestHeaders(): Promise<Record<string, string>> {
     const config = await this.config();
-    if (!config.hardwareId || !config.deviceToken) return {};
-    return {
-      "X-Aimatic-Device-ID": config.hardwareId,
-      "X-Aimatic-Device-Token": config.deviceToken
-    };
+    const headers: Record<string, string> = {};
+    if (typeof __APP_VERSION__ === "string" && __APP_VERSION__) {
+      headers["X-Aimatic-App-Version"] = __APP_VERSION__;
+    }
+    if (config.hardwareId && config.deviceToken) {
+      headers["X-Aimatic-Device-ID"] = config.hardwareId;
+      headers["X-Aimatic-Device-Token"] = config.deviceToken;
+    }
+    return headers;
   }
 
   async getAccessToken(): Promise<string | null> {
@@ -92,14 +99,13 @@ export class OAuthPkceCredentialProvider implements CredentialProvider {
       headers: { "Content-Type": "application/x-www-form-urlencoded", ...await this.getRequestHeaders() },
       body: new URLSearchParams({ username: user, password })
     });
-    const raw = await response.json().catch(() => ({})) as Record<string, unknown>;
-    const body = (raw.message && typeof raw.message === "object" ? raw.message : raw) as Record<string, unknown>;
+    const raw = asRecord(await response.json().catch(() => ({}))) || {};
+    const body = asRecord(raw.message) || raw;
     if (!response.ok) {
-      const detail = typeof body.message === "string" ? body.message
-        : typeof body.error_description === "string" ? body.error_description
-        : typeof raw.message === "string" ? raw.message
-        : "Sign in failed.";
-      throw new Error(normalizeErpDisplayText(detail));
+      const detail = typeof body.error_description === "string" && body.error_description.trim()
+        ? body.error_description
+        : frappeMessageFromBody(raw, "Sign in failed.");
+      throw new Error(normalizeErpDisplayText(detail.trim() || "Sign in failed."));
     }
     const tokens = tokenSetFromResponse(body, this.now());
     await this.save(tokens);

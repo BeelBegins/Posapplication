@@ -1,4 +1,5 @@
 import { App } from "@capacitor/app";
+import { Capacitor } from "@capacitor/core";
 import { Geolocation } from "@capacitor/geolocation";
 import { createHrApi } from "../../api/hr";
 import { createApiClient } from "../../api/client";
@@ -16,6 +17,7 @@ import {
   canSubmitEnrollment,
   enrollFaceRequest,
   enrollmentPromptForIndex,
+  isAppBelowMinimum,
   leaveRequest,
 } from "./domain";
 
@@ -43,6 +45,7 @@ let context: Row = {};
 let screen: Screen = "home";
 let message = "";
 let tone: Tone = "";
+let signInError = "";
 let loading = "";
 let leaveRows: Row[] = [];
 let balances: Row = {};
@@ -56,7 +59,9 @@ let attendanceTarget = "";
 let attendanceQuery = "";
 let attendanceBusy = false;
 let cameraAttempted = false;
-let evidenceImage = "";
+const evidenceCache: Record<string, string> = {};
+let evidenceOpen = "";
+let evidenceLoading = "";
 let options: Row = {};
 let directory: Row[] = [];
 let facePolicy: Row = {};
@@ -226,7 +231,15 @@ async function ensureBackHandler(): Promise<void> {
 
 async function configure(baseUrl: string) {
   const url = baseUrl.trim().replace(/\/+$/, "");
-  const pub = await payload(await fetcher(`${url}/api/method/aimatichr.hr_mobile.api.get_public_config`, { method: "POST" }));
+  const pub = await payload(await fetcher(`${url}/api/method/aimatichr.hr_mobile.api.get_public_config`, {
+    method: "POST",
+    headers: { "X-Aimatic-App-Version": __APP_VERSION__ },
+  }));
+  const minAppVersion = text(pub, "min_app_version");
+  // Soft notice only — never block connect/sign-in when a newer build exists.
+  if (isAppBelowMinimum(__APP_VERSION__, minAppVersion)) {
+    setToast(`A newer Aimatic HR (v${minAppVersion.replace(/^v/i, "")}) is available. You can keep using v${__APP_VERSION__}.`, "warn");
+  }
   config = { baseUrl: url, clientId: text(pub, "oauth_client_id"), redirectUri: text(pub, "redirect_uri"), scope: text(pub, "scope") };
   if (!config.clientId || !config.redirectUri) throw new Error("HR OAuth is not configured on this site.");
   localStorage.setItem(configKey, JSON.stringify(config));
@@ -267,7 +280,7 @@ function signIn() {
   root.innerHTML = `${toastHtml()}<section class="setup"><div class="setup-card">
     <div class="mark">${brandMark()}</div>
     <div class="stack-sm"><p class="t-label">Aimatic HR</p><h1 class="t-display">Sign in</h1><p class="t-meta">Enter your own ERP email and password. Authorized managers can still select employees for attendance.</p></div>
-    ${message ? `<div class="banner danger">${esc(message)}</div>` : ""}
+    ${signInError ? `<div class="banner danger" role="alert">${esc(signInError)}</div>` : ""}
     <form id="login-form" class="stack">
       ${field("Email", `<input id="username" type="email" required autocomplete="username" placeholder="you@example.com">`)}
       ${field("Password", `<input id="password" type="password" required autocomplete="current-password" placeholder="ERP password">`)}
@@ -282,10 +295,17 @@ function signIn() {
     const button = document.querySelector<HTMLButtonElement>('#login-form button[type="submit"]')!;
     button.disabled = true;
     button.textContent = "Signing in…";
-    try { await credentials!.loginWithPassword(username, password); await loadContext(); }
-    catch (error) { message = error instanceof Error ? error.message : "Sign in failed"; signIn(); }
+    try {
+      signInError = "";
+      await credentials!.loginWithPassword(username, password);
+      await loadContext();
+    } catch (error) {
+      signInError = (error instanceof Error ? error.message : "").trim() || "Sign in failed.";
+      setToast(signInError, "danger");
+      signIn();
+    }
   };
-  document.querySelector<HTMLButtonElement>("#change-server")!.onclick = () => { localStorage.removeItem(configKey); config = null; setup(); };
+  document.querySelector<HTMLButtonElement>("#change-server")!.onclick = () => { localStorage.removeItem(configKey); config = null; signInError = ""; setup(); };
 }
 
 function seedPreview(): void {
@@ -362,6 +382,7 @@ async function refresh() {
       facePolicy = (results[index + 1] && typeof results[index + 1] === "object" ? results[index + 1] as Row : facePolicy);
     }
     if (!loading) render(screen);
+    if (canMarkOthers()) void prefetchEvidenceThumbs();
   } catch (error) {
     setToast(error instanceof Error ? error.message : "Could not refresh HR data", "danger");
     render(screen);
@@ -423,14 +444,38 @@ function attendance() {
   </section>`;
 }
 
+function checkinDeviceLabel(): string {
+  const platform = Capacitor.isNativePlatform() ? Capacitor.getPlatform() : "web";
+  const label = platform === "android" ? "Android" : platform === "ios" ? "iOS" : "Web";
+  return `Aimatic HR ${label} ${__APP_VERSION__}`.trim();
+}
+
+function evidenceThumb(checkin: string): string {
+  const cached = evidenceCache[checkin];
+  if (cached) {
+    return `<button type="button" class="evidence-thumb-btn" data-evidence="${esc(checkin)}" aria-label="Open check-in photo"><img class="evidence-thumb" alt="" src="${cached}"></button>`;
+  }
+  if (evidenceLoading === checkin) {
+    return `<span class="evidence-thumb evidence-thumb--loading" aria-hidden="true"></span>`;
+  }
+  return `<button type="button" class="evidence-thumb-btn evidence-thumb-btn--empty" data-evidence="${esc(checkin)}" aria-label="Load check-in photo">${icon("camera", 18)}</button>`;
+}
+
+function evidenceLightbox(): string {
+  if (!evidenceOpen || !evidenceCache[evidenceOpen]) return "";
+  return `<div class="evidence-overlay" role="dialog" aria-modal="true" aria-label="Check-in photo"><div class="evidence-panel"><img class="evidence-full" alt="Attendance evidence" src="${evidenceCache[evidenceOpen]}">${btn("Close", { id: "close-evidence", kind: "secondary", block: true })}</div></div>`;
+}
+
 function teamAttendance() {
   const rows = teamCheckins.map((row) => {
+    const checkin = text(row, "name");
     const lat = text(row, "latitude"), lng = text(row, "longitude");
     const maps = lat && lng ? `<a class="t-meta" href="https://maps.google.com/?q=${encodeURIComponent(lat)},${encodeURIComponent(lng)}" target="_blank" rel="noopener">${esc(lat)}, ${esc(lng)}</a>` : `<span class="t-meta">Location unavailable</span>`;
-    const photoButton = text(row, "marked_by") ? btn("View photo", { kind: "secondary", attrs: `data-evidence="${esc(text(row, "name"))}"` }) : "";
-    return `<article class="list-row"><div class="grow"><strong>${esc(text(row, "employee_name") || text(row, "employee"))} · ${esc(text(row, "log_type"))}</strong><span class="t-meta">${esc(text(row, "time"))} · marked by ${esc(text(row, "marked_by") || "employee/device")}</span>${maps}</div>${photoButton}</article>`;
+    const device = text(row, "device_id") || "Unknown device";
+    const photo = text(row, "marked_by") ? evidenceThumb(checkin) : `<span class="evidence-thumb evidence-thumb--empty" aria-hidden="true"></span>`;
+    return `<article class="list-row">${photo}<div class="grow"><strong>${esc(text(row, "employee_name") || text(row, "employee"))} · ${esc(text(row, "log_type"))}</strong><span class="t-meta">${esc(text(row, "time"))} · ${esc(device)}</span><span class="t-meta">Marked by ${esc(text(row, "marked_by") || "employee/device")}</span>${maps}</div></article>`;
   }).join("");
-  return `<section class="stack"><article class="card stack"><p class="t-label">Team attendance</p><h2 class="t-title">Last 7 days</h2><p class="t-meta">Private images are visible to authorized managers for 7 days and then deleted.</p>${btn(`${icon("refresh", 16)} Refresh`, { id: "refresh-team", kind: "secondary", block: true })}</article>${rows ? `<div class="list">${rows}</div>` : emptyState(icon("users", 28), "No recent team check-ins", "Check-ins from your authorized employees will appear here.")}${evidenceImage ? `<article class="card"><img class="preview" alt="Attendance evidence" src="${evidenceImage}">${btn("Close image", { id: "close-evidence", kind: "secondary", block: true })}</article>` : ""}</section>`;
+  return `<section class="stack"><article class="card stack"><p class="t-label">Team attendance</p><h2 class="t-title">Last 7 days</h2><p class="t-meta">Private images are visible to authorized managers for 7 days and then deleted. Tap a photo to open it.</p>${btn(`${icon("refresh", 16)} Refresh`, { id: "refresh-team", kind: "secondary", block: true })}</article>${rows ? `<div class="list">${rows}</div>` : emptyState(icon("users", 28), "No recent team check-ins", "Check-ins from your authorized employees will appear here.")}${evidenceLightbox()}</section>`;
 }
 
 function leave() {
@@ -682,8 +727,11 @@ function bind() {
     if (label instanceof HTMLLabelElement) label.textContent = employee ? `Selected: ${text(employee, "employee_name") || attendanceTarget}` : "Choose an employee";
   });
   document.querySelector<HTMLButtonElement>("#open-attendance-camera")?.addEventListener("click", () => void openAttendanceCamera().catch(() => undefined));
-  document.querySelectorAll<HTMLButtonElement>("[data-evidence]").forEach((button) => button.onclick = () => void loadEvidence(button.dataset.evidence || ""));
-  document.querySelector<HTMLButtonElement>("#close-evidence")?.addEventListener("click", () => { evidenceImage = ""; render("team"); });
+  document.querySelectorAll<HTMLButtonElement>("[data-evidence]").forEach((button) => button.onclick = () => void openEvidence(button.dataset.evidence || ""));
+  document.querySelector<HTMLButtonElement>("#close-evidence")?.addEventListener("click", () => { evidenceOpen = ""; render("team"); });
+  document.querySelector(".evidence-overlay")?.addEventListener("click", (event) => {
+    if (event.target === event.currentTarget) { evidenceOpen = ""; render("team"); }
+  });
   document.querySelector<HTMLFormElement>("#leave")?.addEventListener("submit", (event) => void submitLeave(event));
   document.querySelector<HTMLFormElement>("#correction")?.addEventListener("submit", (event) => void submitCorrection(event));
   document.querySelector<HTMLFormElement>("#enroll-search")?.addEventListener("submit", (event) => void searchDirectory(event));
@@ -744,7 +792,9 @@ function bind() {
     context = {};
     attendanceBusy = false;
     cameraAttempted = false;
-    evidenceImage = "";
+    evidenceOpen = "";
+    evidenceLoading = "";
+    for (const key of Object.keys(evidenceCache)) delete evidenceCache[key];
     enrollEmployee = "";
     enrollCaptures = [];
     enrollConsent = false;
@@ -920,6 +970,7 @@ async function submitLog(logType: "IN" | "OUT") {
       ...attendanceRequest({ logType, latitude: location.latitude, longitude: location.longitude, challenge, image }),
       employee,
       accuracy: location.accuracy,
+      device_id: checkinDeviceLabel(),
     };
     const saved = await payload(await api.submitAttendance(body));
     stopCamera(); previewUrl = ""; cameraAttempted = true;
@@ -958,10 +1009,48 @@ function openAttendanceCamera(): Promise<void> {
   return attendanceCameraPromise;
 }
 
-async function loadEvidence(checkin: string) {
-  if (!api || !checkin) return;
-  try { evidenceImage = text(await payload(await api.getAttendanceEvidence(checkin)), "image"); render("team"); }
-  catch (error) { setToast(error instanceof Error ? error.message : "Image unavailable", "danger"); render("team"); }
+async function fetchEvidenceImage(checkin: string): Promise<string> {
+  if (evidenceCache[checkin]) return evidenceCache[checkin];
+  if (!api) throw new Error("Not signed in");
+  const image = text(await payload(await api.getAttendanceEvidence(checkin)), "image");
+  if (!image) throw new Error("Image unavailable");
+  evidenceCache[checkin] = image;
+  return image;
+}
+
+async function prefetchEvidenceThumbs() {
+  if (!api || previewMode) return;
+  const pending = teamCheckins
+    .filter((row) => text(row, "marked_by") && text(row, "name") && !evidenceCache[text(row, "name")])
+    .map((row) => text(row, "name"))
+    .slice(0, 24);
+  const queue = [...pending];
+  const workers = Array.from({ length: Math.min(4, queue.length) }, async () => {
+    while (queue.length) {
+      const checkin = queue.shift();
+      if (!checkin) return;
+      try { await fetchEvidenceImage(checkin); }
+      catch { /* leave placeholder; tap retries */ }
+      if (screen === "team") render("team");
+    }
+  });
+  await Promise.all(workers);
+}
+
+async function openEvidence(checkin: string) {
+  if (!checkin) return;
+  if (evidenceCache[checkin]) { evidenceOpen = checkin; render("team"); return; }
+  evidenceLoading = checkin;
+  render("team");
+  try {
+    await fetchEvidenceImage(checkin);
+    evidenceOpen = checkin;
+  } catch (error) {
+    setToast(error instanceof Error ? error.message : "Image unavailable", "danger");
+  } finally {
+    evidenceLoading = "";
+    render("team");
+  }
 }
 
 async function submitLeave(event: Event) {
@@ -1023,7 +1112,8 @@ async function start() {
     }
     if (previewScreen === "signin") {
       message = "";
-      config = { baseUrl: "https://siezal.aimatic.tech", clientId: "preview", redirectUri: "aimatic-hr://oauth", scope: "all" };
+      signInError = "";
+      config = { baseUrl: "https://szl.aimatic.tech", clientId: "preview", redirectUri: "aimatic-hr://oauth", scope: "all" };
       signIn();
       markUiReady();
       return;

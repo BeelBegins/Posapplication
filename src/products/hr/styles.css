@@ -217,6 +217,28 @@ html[data-theme="dark"] .qa-btn .icon{color:#04241e}
 }
 .thumb-wrap .btn-icon{position:absolute;right:4px;bottom:4px;width:var(--touch);height:var(--touch);background:rgba(255,255,255,.95);color:var(--navy-900);box-shadow:var(--elev-1)}
 
+.evidence-thumb-btn,.evidence-thumb{
+  flex:0 0 56px;width:56px;height:56px;border-radius:14px;overflow:hidden;
+}
+.evidence-thumb-btn{
+  display:grid;place-items:center;padding:0;border:1px solid var(--border);
+  background:var(--surface-2);color:var(--text-muted);box-shadow:var(--elev-1);
+}
+.evidence-thumb-btn--empty{border-style:dashed}
+.evidence-thumb{display:block;object-fit:cover;background:#0b1620;border:1px solid var(--border)}
+.evidence-thumb--loading{background:linear-gradient(90deg,var(--surface-2),var(--border),var(--surface-2));background-size:200% 100%;animation:shimmer 1.2s linear infinite;border:1px solid var(--border)}
+.evidence-thumb--empty{border:1px dashed var(--border);background:var(--surface-2)}
+.evidence-overlay{
+  position:fixed;inset:0;z-index:50;display:grid;place-items:center;
+  padding:max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom));
+  background:rgba(8,18,28,.72);overflow:auto;
+}
+.evidence-panel{
+  width:max-content;max-width:min(100%, 420px);display:grid;gap:12px;justify-items:stretch;
+  padding:12px;border-radius:var(--radius-lg);background:var(--surface);box-shadow:var(--elev-2);
+}
+.evidence-full{display:block;width:auto;height:auto;max-width:100%;border-radius:var(--radius-md);background:#0b1620}
+
 .consent{width:100%;display:flex;gap:12px;align-items:flex-start;text-align:left;min-height:var(--touch);padding:14px;border:1px solid var(--border);border-radius:var(--radius-md);background:var(--surface);box-shadow:var(--elev-1)}
 .consent .box{flex:0 0 24px;width:24px;height:24px;margin-top:2px;border:2px solid var(--neutral-600);border-radius:7px;display:grid;place-items:center}
 .consent[aria-pressed="true"] .box{background:var(--primary);border-color:var(--primary);color:var(--on-primary)}

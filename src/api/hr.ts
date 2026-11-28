@@ -1,9 +1,14 @@
 import type { ApiClient } from "./client";
 
+declare const __APP_VERSION__: string;
+
 export function createHrApi(client: ApiClient) {
   const post = (name: string, body: Record<string, unknown> = {}) => client.callMethod(`aimatichr.hr_mobile.api.${name}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "X-Aimatic-App-Version": typeof __APP_VERSION__ === "string" ? __APP_VERSION__ : "",
+    },
     body: JSON.stringify(body),
   });
   return {

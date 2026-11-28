@@ -9,6 +9,7 @@ import {
   canSubmitEnrollment,
   enrollFaceRequest,
   enrollmentPromptForIndex,
+  isAppBelowMinimum,
   leaveRequest,
 } from "../src/products/hr/domain";
 
@@ -19,6 +20,13 @@ const evidence = {
   challenge: "a".repeat(32),
   image: "data:image/jpeg;base64,abc",
 };
+
+test("app version floor compares semver for forced updates", () => {
+  assert.equal(isAppBelowMinimum("3.0.61", "3.0.62"), true);
+  assert.equal(isAppBelowMinimum("3.0.62", "3.0.62"), false);
+  assert.equal(isAppBelowMinimum("3.0.63", "v3.0.62"), false);
+  assert.equal(isAppBelowMinimum("3.0.61", ""), false);
+});
 
 test("attendance submission omits employee, time, and verification claims", () => {
   const body = attendanceRequest(evidence, { note: "ignored-safe" });
